@@ -9,8 +9,10 @@ import Observation
 // and standalone runners against the real sources.
 
 /// One rendered row of the hierarchical Agents list. Group rows fold; an
-/// Agent row is the leaf. `depth` drives indentation: 0 = Host, 1 =
-/// session, 2 = workspace, 3 = tab, 4 = Agent.
+/// Agent row is the leaf. `depth` drives indentation. Single-child chains
+/// collapse, so a row's depth no longer names its level: a merged chain
+/// renders at the chain head's depth and its Agents one level deeper, and
+/// a tab holding exactly one Agent merges into that Agent's row.
 enum AgentTreeRow: Equatable, Identifiable, Sendable {
     case group(
         id: String,
@@ -19,18 +21,27 @@ enum AgentTreeRow: Equatable, Identifiable, Sendable {
         count: Int,
         aggregateState: AgentStatus,
         isFolded: Bool)
-    case agent(ConsoleAgent, depth: Int)
+    /// `tabLabel` names the single-agent tab this row also represents
+    /// (a tab group merged into its Agent's row); nil on a plain leaf.
+    case agent(ConsoleAgent, depth: Int, tabLabel: String? = nil)
 
     var id: String {
         switch self {
         case .group(let id, _, _, _, _, _): id
-        case .agent(let agent, _): "agent:\(agent.hostID.uuidString)/\(agent.agent.paneID)"
+        case .agent(let agent, _, _):
+            "agent:\(agent.hostID.uuidString)/\(agent.agent.paneID)"
         }
     }
 
     /// The Agent for leaf rows; nil on group rows.
     var agent: ConsoleAgent? {
-        if case .agent(let agent, _) = self { return agent }
+        if case .agent(let agent, _, _) = self { return agent }
+        return nil
+    }
+
+    /// The single-agent tab label a leaf row carries after the tab merge.
+    var tabLabel: String? {
+        if case .agent(_, _, let tabLabel) = self { return tabLabel }
         return nil
     }
 }
@@ -68,12 +79,12 @@ enum AgentTree {
     }
 
     /// The Host a group id belongs to; nil for ids this build did not mint.
-    /// Host ids are the `h/<host>` prefix of every descendant group id, so
-    /// one lookup serves any depth.
+    /// Only a depth-0 group id ("h/<host>") names a Host — deeper ids
+    /// ("h/<host>/s/…", "/w/…", "/t/…") share the prefix, so a bare
+    /// prefix read would misresolve every level to the host section.
+    /// The merge keeps the chain head's id, so a merged depth-0 row is
+    /// still the bare Host id.
     static func hostID(ofGroupID groupID: String) -> Host.ID? {
-        // Only a depth-0 group id ("h/<host>") names a Host. Deeper ids
-        // ("h/<host>/s/…", "/w/…", "/t/…") share the prefix, so a bare
-        // prefix read would misresolve every level to the host section.
         guard groupID.hasPrefix("h/") else { return nil }
         let encoded = groupID.dropFirst(2)
         guard !encoded.contains("/") else { return nil }
@@ -117,8 +128,25 @@ enum AgentTree {
 
     /// Emits one group row and recurses into its children. A group whose
     /// whole subtree is one single-child chain (one session with one
-    /// workspace with one tab) collapses into one "a · b · c" row that
-    /// keeps the chain head's id, so folding targets the merged row.
+    /// workspace with one tab) collapses into one "a · b · c" row at the
+    /// chain head's depth. The merged row keeps the chain head's id, so
+    /// its fold survives the chain later gaining a sibling (the row
+    /// un-merges but keeps its id), and a depth-0 head still names its
+    /// Host for the section header.
+    ///
+    /// A tab holding exactly one Agent merges the other way: the chain
+    /// stops above it and the Agent's row absorbs the tab row (keeping
+    /// the tab's label when it adds information), because a foldable
+    /// group over a single visible leaf would render two rows where one
+    /// says everything. Folding is meaningless there — the merged row
+    /// renders no chevron, and a stale fold id for that tab re-engages
+    /// only once the tab holds two Agents again.
+    ///
+    /// Two label-only drops keep merged rows readable: a label this
+    /// build synthesized (`Other` for a missing workspace/tab label)
+    /// names nothing the row below doesn't, and herdr's automatic tab
+    /// label (the position) is plumbing the Agent card already hides
+    /// (`ConsoleAgent.showsTabLabel`).
     private static func emitGroup(
         id: String,
         label: String,
@@ -128,7 +156,7 @@ enum AgentTree {
         foldedIDs: Set<String>,
         rows: inout [AgentTreeRow]
     ) {
-        var id = id, label = label, members = members, level = level
+        var label = label, members = members, level = level
         // Children of a level-L group are clustered by keys[L]; level 3
         // (tab) has agents directly, no further grouping.
         let keys: [(ConsoleAgent) -> String] = [sessionKey, workspaceKey, tabKey]
@@ -137,8 +165,12 @@ enum AgentTree {
         while level < 3 {
             let children = clusters(members, key: keys[level], label: keys[level])
             guard children.count == 1, let only = children.first else { break }
-            label += " · " + only.label
-            id += "/" + markers[level] + "/" + encode(only.key)
+            // A single-Agent tab is absorbed by its Agent's row below,
+            // never by this group's label.
+            if level == 2, only.agents.count == 1 { break }
+            if showsMergedComponent(only, level: level) {
+                label += " · " + only.label
+            }
             members = only.agents
             level += 1
         }
@@ -153,6 +185,13 @@ enum AgentTree {
             return
         }
         for child in clusters(members, key: keys[level], label: keys[level]) {
+            // A single-Agent tab group merges into its Agent's row.
+            if level == 2, child.agents.count == 1, let only = child.agents.first {
+                rows.append(.agent(
+                    only, depth: depth + 1,
+                    tabLabel: only.showsTabLabel ? child.label : nil))
+                continue
+            }
             emitGroup(
                 id: id + "/" + markers[level] + "/" + encode(child.key),
                 label: child.label, members: child.agents,
@@ -160,6 +199,24 @@ enum AgentTree {
                 foldedIDs: foldedIDs, rows: &rows)
         }
     }
+
+    /// Whether a single-child cluster's label joins the merged row's label.
+    /// `Other` is this build's placeholder for a label the snapshot did
+    /// not carry, and an automatic tab label (herdr names unnamed tabs by
+    /// position) is not a name the user chose — neither earns a " · "
+    /// component. Everything else does, including herdr's "default"
+    /// session label, which distinguishes real sessions.
+    private static func showsMergedComponent(
+        _ cluster: (key: String, label: String, agents: [ConsoleAgent]),
+        level: Int
+    ) -> Bool {
+        if cluster.label == otherLabel { return false }
+        if level == 2, !cluster.agents.contains(where: \.showsTabLabel) {
+            return false
+        }
+        return true
+    }
+
     /// One clustering level: agents keyed by `key`, labeled from the
     /// cluster's first element (every member shares the key by
     /// construction), sorted alphabetically by label with the unique key

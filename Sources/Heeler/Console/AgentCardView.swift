@@ -9,6 +9,10 @@ struct AgentCardView: View {
     let agent: ConsoleAgent
     var layout: AgentRowLayout = .heelerDefault
     var isPinned: Bool = false
+    /// A leading secondary span ("Label — ") before Row 1, for contexts
+    /// where a group label was folded into the Agent's own row (tree
+    /// mode's single-Agent tab). Empty by default.
+    var headlinePrefix: String = ""
 
     private var presentation: AgentCardPresentation {
         AgentCardPresentation(agent: agent, layout: layout)
@@ -19,6 +23,12 @@ struct AgentCardView: View {
             // Centered, not baseline-aligned: the status dot is smaller
             // than Row 1's type, so baseline alignment drops it below Row 1.
             HStack(alignment: .center) {
+                if !headlinePrefix.isEmpty {
+                    Text(verbatim: headlinePrefix)
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
                 AgentRowText(tokens: presentation.rows.first ?? [])
                     .font(.headline)
                     .lineLimit(1)
