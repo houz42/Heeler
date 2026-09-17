@@ -20,6 +20,10 @@ Entries reference the issue that motivated them.
 
 ### Fixed
 
+- Chat now reads correctly in Dark Mode: user-turn and blocked-question
+  accent washes lift their opacity against dark backgrounds, and the
+  detail-level control keeps a visible edge over the status bar.
+
 - Show the directory browser on the first New Workspace tap. (PR #305)
 - Viewing a Done Agent marks it seen on its Host and refreshes Console and
   Live Activity status, including other Agents in the same Tab. (#314)

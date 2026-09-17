@@ -119,6 +119,11 @@ struct DetailLevelSwitcher: View {
                 .font(.subheadline)
                 .frame(width: 36, height: 36)
                 .background(.ultraThinMaterial, in: Circle())
+                // Dark mode: a translucent material chip over the bar's own
+                // material background reads as nothing — one hairline stroke
+                // (quaternary fill, appearance-adaptive) keeps the control's
+                // edge legible; light mode keeps the stroke as a subtle rim.
+                .overlay(Circle().strokeBorder(.fill.quaternary, lineWidth: 0.5))
                 .shadow(radius: 2, y: 1)
                 .contentShape(Rectangle())
         }
