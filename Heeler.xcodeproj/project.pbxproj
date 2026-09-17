@@ -372,6 +372,7 @@
 		CAEA10BC9AF3498E5FD73478 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 915C9462A4A8AA91C0B91498 /* PrivacyInfo.xcprivacy */; };
 		CBAEF7D1E91053F0B15E2F31 /* PairingCeremonyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F0763484EE05424146492C1 /* PairingCeremonyTests.swift */; };
 		CCEBF66BA9AFE64EDD371A78 /* AttachUserMessageIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85BEE99E7BEFA0D0D985162C /* AttachUserMessageIndex.swift */; };
+		CE23CFBF3FBC6AF9F7CE2975 /* omp-agent-management.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = 7FA05424A61C04BC03C60794 /* omp-agent-management.jsonl */; };
 		CFAA6CEE9088E0F35A100FFB /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = 2F7667EF54A4B61557148F89 /* MarkdownUI */; };
 		D08663BD250210835FE7ED49 /* PhotosPickerImageSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A3BD235B5209892137FCAF9 /* PhotosPickerImageSelection.swift */; };
 		D20C025851965986547FAAB5 /* ClosePaneStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D46328CE795C513FE11AD04 /* ClosePaneStore.swift */; };
@@ -720,6 +721,7 @@
 		7D8C7ED93EA20FF003EB8ACE /* InputShortcutStripPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputShortcutStripPresentationTests.swift; sourceTree = "<group>"; };
 		7E303FCB86A19CCBBF79E15A /* AgentActivityLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentActivityLink.swift; sourceTree = "<group>"; };
 		7EA83366C03C1D15B1DE8D1E /* TerminalOrphanSurfaceLayers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalOrphanSurfaceLayers.swift; sourceTree = "<group>"; };
+		7FA05424A61C04BC03C60794 /* omp-agent-management.jsonl */ = {isa = PBXFileReference; path = "omp-agent-management.jsonl"; sourceTree = "<group>"; };
 		7FC1C5701C464ADBBAE0525D /* HostOnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostOnboardingView.swift; sourceTree = "<group>"; };
 		7FCA00B5F2A05A599D74FCCE /* DeviceKeyStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceKeyStoreTests.swift; sourceTree = "<group>"; };
 		80C3966A26050D88C26229E9 /* TerminalSurfaceOrphanLayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalSurfaceOrphanLayerTests.swift; sourceTree = "<group>"; };
@@ -1590,6 +1592,7 @@
 		BE776F60EB4284F284D33C37 /* Transcripts */ = {
 			isa = PBXGroup;
 			children = (
+				7FA05424A61C04BC03C60794 /* omp-agent-management.jsonl */,
 				9F64BC9EDCEE15DB90F1EA9F /* omp-large-session.jsonl */,
 			);
 			path = Transcripts;
@@ -1873,6 +1876,7 @@
 			files = (
 				F179667CF0A3DAD2F3F796E6 /* live-activity-content-v1.json in Resources */,
 				21EA3C700022C6362774EF1A /* notification-payload-v1.json in Resources */,
+				CE23CFBF3FBC6AF9F7CE2975 /* omp-agent-management.jsonl in Resources */,
 				58826FB63EE828F3E91C9432 /* omp-large-session.jsonl in Resources */,
 				DFB9F3DD64996FFAF4E519EC /* pairing-code-v1.json in Resources */,
 				9F495C6368D1C8754903D457 /* sidebar-layout-v1.json in Resources */,
