@@ -135,6 +135,7 @@ struct DetailLevelSwitcher: View {
                         changeLevel(candidate)
                         expanded = false
                     } label: {
+                        let selected = candidate == level
                         HStack(spacing: 8) {
                             Image(systemName: Self.icons[candidate]!)
                                 .frame(width: 18)
@@ -147,24 +148,17 @@ struct DetailLevelSwitcher: View {
                             }
                             Spacer()
                         }
-                        .padding(.horizontal, 8)
+                        // Selection reads as accent-colored icon + label —
+                        // no background rectangle to fight the popover card's
+                        // system-drawn corner radius.
+                        .foregroundStyle(selected ? Color.accentColor : Color.primary)
+                        .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(
-                            candidate == level
-                                ? Color.accentColor.opacity(0.15) : Color.clear,
-                            // Concentric corners: inner radius = card radius
-                            // minus the inset, so the tint never pokes past
-                            // the card's rounded corners.
-                            in: RoundedRectangle(cornerRadius: 8))
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(4)
-            // The card clips its own rounded shape — the selected row's tint
-            // can never overlap the frame.
-            .clipShape(RoundedRectangle(cornerRadius: 12))
             .presentationCompactAdaptation(.popover)
         }
     }
