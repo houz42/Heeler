@@ -35,8 +35,6 @@ struct ChatScreen: View {
     let paneID: String
     let agentName: String
     let state: ChatAgentState
-    /// Host / workspace badge slot.
-    let badge: String?
     let content: ChatContent
     let changeLevel: (DetailLevel, String) -> Void
     /// True while the window holds older pages the user has not loaded.
@@ -46,29 +44,37 @@ struct ChatScreen: View {
     /// Pages older history when the user scrolls to the top. nil keeps
     /// the transcript static (previews, unavailable panes).
     var loadOlder: (() async -> Void)? = nil
+    /// Extra chrome pinned in the status strip before the level switcher
+    /// (the surface toggle lives here). Nil = no slot.
+    var stripAccessory: AnyView? = nil
+    /// host:session · workspace · tab, shown in the nav bar's title slot
+    /// beside the back button. Nil leaves the bar titleless.
+    var breadcrumb: String? = nil
 
     @State private var level: DetailLevel
     init(
         paneID: String,
         agentName: String,
         state: ChatAgentState,
-        badge: String? = nil,
         content: ChatContent,
         initialLevel: DetailLevel,
         changeLevel: @escaping (DetailLevel, String) -> Void,
         hasOlder: Bool = false,
         isLoadingOlder: Bool = false,
-        loadOlder: (@Sendable () async -> Void)? = nil
+        loadOlder: (@Sendable () async -> Void)? = nil,
+        stripAccessory: AnyView? = nil,
+        breadcrumb: String? = nil
     ) {
         self.paneID = paneID
         self.agentName = agentName
         self.state = state
-        self.badge = badge
         self.content = content
         self.changeLevel = changeLevel
         self.hasOlder = hasOlder
         self.isLoadingOlder = isLoadingOlder
         self.loadOlder = loadOlder
+        self.stripAccessory = stripAccessory
+        self.breadcrumb = breadcrumb
         self._level = State(initialValue: initialLevel)
     }
 
@@ -90,11 +96,12 @@ struct ChatScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             ChatStatusStrip(
-                agentName: agentName, state: state, badge: badge, level: level
-            ) { newLevel in
-                level = newLevel
-                changeLevel(newLevel, paneID)
-            }
+                agentName: agentName, state: state, level: level,
+                changeLevel: { newLevel in
+                    level = newLevel
+                    changeLevel(newLevel, paneID)
+                },
+                accessory: stripAccessory)
             Divider()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
@@ -114,6 +121,8 @@ struct ChatScreen: View {
                     router: openRouter,
                     fetch: fetch ?? { _ in throw CocoaError(.fileNoSuchFile) }))
         }
+        .navigationTitle(breadcrumb ?? "")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     /// The zero-height row above the transcript: presence reports "the user

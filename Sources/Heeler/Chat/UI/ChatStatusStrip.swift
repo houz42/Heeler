@@ -19,9 +19,11 @@ internal enum ChatAgentState: String, Sendable {
 struct ChatStatusStrip: View {
     let agentName: String
     let state: ChatAgentState
-    let badge: String?
     let level: DetailLevel
     let changeLevel: (DetailLevel) -> Void
+    /// Extra chrome pinned at the strip's trailing edge, before the level
+    /// switcher (the surface picker lives here). Nil = no slot.
+    var accessory: AnyView? = nil
 
 
     private static let stateLabels: [ChatAgentState: String] = [
@@ -47,16 +49,11 @@ struct ChatStatusStrip: View {
             .truncationMode(.tail)
             .accessibilityElement(children: .combine)
 
-            if let badge {
-                Text(badge)
-                    .font(.caption2.weight(.medium))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(.fill.tertiary, in: Capsule())
-                    .lineLimit(1)
-            }
-
             Spacer(minLength: 4)
+
+            if let accessory {
+                accessory
+            }
 
             DetailLevelSwitcher(level: level, changeLevel: changeLevel)
         }

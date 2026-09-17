@@ -88,11 +88,34 @@ struct ChatBlockText: View {
     }
 
     var body: some View {
-        Text(text)
-            .font(style.font)
-            .foregroundStyle(style.color)
-            .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: alignment)
+        Group {
+            if style == .user {
+                // User turns: a tinted bubble pinned to the trailing edge,
+                // so the conversation reads as turns, not a document.
+                HStack {
+                    Spacer(minLength: 48)
+                    markdownText
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+                }
+            } else {
+                markdownText
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: alignment)
+    }
+
+    /// Renders inline markdown (bold, code, links); falls back to plain
+    /// text when the content isn't valid markdown (never fails visually).
+    private var markdownText: Text {
+        if let attributed = try? AttributedString(
+            markdown: text,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
+        {
+            return Text(attributed)
+        }
+        return Text(text)
     }
 
     private var alignment: Alignment {
@@ -284,29 +307,59 @@ struct ChatLinkText: View {
     }
 
     var body: some View {
-        Text(attributed)
-            .font(style.font)
-            .foregroundStyle(style.color)
-            .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: alignment)
-            .environment(
-                \.openURL,
-                OpenURLAction { url in
-                    guard let router else { return .discarded }
-                    router.open(ChatLinkTarget(linkURL: url))
-                    return .handled
-                })
+        Group {
+            if style == .user {
+                // User turns: a tinted bubble pinned to the trailing edge,
+                // matching ChatBlockText's chat-turn look.
+                HStack {
+                    Spacer(minLength: 48)
+                    linkedText
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+                }
+            } else {
+                linkedText
+            }
+        }
+        .font(style.font)
+        .foregroundStyle(style.color)
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: alignment)
+        .environment(
+            \.openURL,
+            OpenURLAction { url in
+                guard let router else { return .discarded }
+                router.open(ChatLinkTarget(linkURL: url))
+                return .handled
+            })
     }
 
-    /// The row's text with detected targets linked. Pure function of the
-    /// text, so it is testable without a view.
+    private var linkedText: Text {
+        Text(attributed)
+    }
+
+    /// The row's text with markdown rendered and detected targets linked.
+    /// Detection runs on the raw text; ranges are mapped onto the rendered
+    /// markdown string — when markdown rendering strips syntax characters
+    /// the map can miss, and that link silently stays plain text (never a
+    /// visual failure).
     static func attributedText(
         _ text: String
     ) -> AttributedString {
-        var attributed = AttributedString(text)
-        for link in ChatLinkDetector.detect(in: text) {
-            guard let range = Range(link.range, in: attributed) else { continue }
-            attributed[range].link = link.target.linkURL
+        var attributed = (try? AttributedString(
+            markdown: text,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(text)
+        // Detect on the RENDERED text: markdown parsing strips syntax
+        // characters, so raw-text ranges would map to wrong spans. Links
+        // written as markdown [text](url) already carry .link from the
+        // parser; this pass catches bare URLs and absolute paths.
+        let rendered = String(attributed.characters)
+        for link in ChatLinkDetector.detect(in: rendered) {
+            if let range = Range(link.range, in: attributed) {
+                attributed[range].link = link.target.linkURL
+            }
         }
         return attributed
     }

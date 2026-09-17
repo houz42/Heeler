@@ -179,23 +179,20 @@ struct AgentDetailView: View {
         }
     }
 
-    /// The minimal surface switcher: one compact menu, Chat above Terminal,
-    /// matching the Presentation menu pattern the Console list already uses.
+    /// One icon, one tap: on the chat surface it switches to the terminal,
+    /// on the terminal surface it switches back to chat. The icon names the
+    /// destination, not the current surface.
     private var surfacePicker: some View {
-        Menu {
-            Picker("Surface", selection: Binding(
-                get: { surface ?? .terminal },
-                set: { surface = $0 })) {
-                Text("Chat").tag(AgentDetailSurface.chat)
-                Text("Terminal").tag(AgentDetailSurface.terminal)
-            }
+        Button {
+            surface = (surface == .chat) ? .terminal : .chat
         } label: {
-            Label(
-                "Surface",
-                systemImage: surface == .chat
-                    ? "bubble.left.and.bubble.right" : "terminal")
+            Image(
+                systemName: surface == .chat
+                    ? "terminal" : "bubble.left.and.bubble.right")
         }
+        .labelStyle(.iconOnly)
         .hoverEffect(.highlight)
+        .accessibilityLabel(surface == .chat ? "Show Terminal" : "Show Chat")
     }
 
     /// The graceful empty state for an agent whose chat surface has no
@@ -213,6 +210,18 @@ struct AgentDetailView: View {
 
     /// Builds (once per agent identity) and starts the chat store, then
     /// renders the chat surface.
+    /// The chat surface's nav-bar breadcrumb: host:session · workspace · tab,
+    /// riding the back button's row instead of its own strip of vertical space.
+    private var chatBreadcrumb: String {
+        var parts: [String] = [agent.hostName]
+        if !agent.hostSessionName.isEmpty {
+            parts[0] += ":\(agent.hostSessionName)"
+        }
+        if let workspace = agent.workspaceLabel { parts.append(workspace) }
+        if let tab = agent.tabLabel { parts.append(tab) }
+        return parts.joined(separator: " · ")
+    }
+
     @ViewBuilder
     private var chatSurface: some View {
         if let chat {
@@ -220,7 +229,7 @@ struct AgentDetailView: View {
                 paneID: agent.agent.paneID,
                 agentName: agent.agent.displayName,
                 state: chatAgentState,
-                badge: agent.workspaceContext,
+
                 content: chat.content,
                 initialLevel: chatLevels.level(paneID: agent.agent.paneID),
                 changeLevel: { [chatLevels] level, paneID in
@@ -228,7 +237,9 @@ struct AgentDetailView: View {
                 },
                 hasOlder: chat.hasOlder,
                 isLoadingOlder: chat.isLoadingOlder,
-                loadOlder: { [weak chat] in await chat?.loadOlder() })
+                loadOlder: { [weak chat] in await chat?.loadOlder() },
+                stripAccessory: AnyView(surfacePicker),
+                breadcrumb: chatBreadcrumb)
         } else {
             ChatUnavailablePlaceholder()
         }
@@ -250,15 +261,9 @@ struct AgentDetailView: View {
                 }
                 .id(openTerminal.destination)
             } else if surface == .chat {
+                // The surface toggle rides inside the chat's status strip
+                // (accessory slot) — never an overlay over the content.
                 chatSurface
-                    // The surface picker rides the chat's status strip level;
-                    // the terminal keeps its own toolbar, so only Chat shows
-                    // the switcher. Kept in one place both surfaces share.
-                    .overlay(alignment: .topTrailing) {
-                        surfacePicker
-                            .padding(.top, 8)
-                            .padding(.trailing, 12)
-                    }
             } else {
                 AgentTerminalView(
                     agent: agent,
