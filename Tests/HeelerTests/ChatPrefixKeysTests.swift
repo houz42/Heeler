@@ -1,4 +1,6 @@
 import Foundation
+import SwiftUI
+import UIKit
 import Testing
 
 @testable import Heeler
@@ -12,6 +14,11 @@ import Testing
 // way UITextView clamps selectedRange. The suggestion retrigger itself is
 // the store's existing contract (ChatComposerRouterTests covers
 // `updateSuggestions`); here only the draft the bar feeds it.
+//
+// The layout sections cover the two device regressions: the bar docked as
+// an inputAccessoryView must report exactly one key-row height (a hosted
+// SwiftUI bar under-reports and the keyboard clipped it), and the text
+// view must hug measured text instead of ballooning to the safe-area cap.
 
 private func makeDependencies() -> ComposerRouterStore.Dependencies {
     ComposerRouterStore.Dependencies(
@@ -102,5 +109,98 @@ struct ChatPrefixKeysTests {
         let insert = chatDraftByInserting("@", into: "hi john", selection: 3)
         router.updateSuggestions(forDraft: insert.draft)
         #expect(!router.hasActiveSuggestions)
+    }
+
+    // -- accessory bar layout (device regression: keyboard clipped it) --
+
+    @MainActor
+    @Test func theBarDeclaresExactlyOneKeyRowOfHeight() {
+        // The keyboard docks the accessory at the height its constraints
+        // declare. A hosted SwiftUI bar's intrinsic sizing under-reported
+        // here and the keys were clipped behind the keyboard's top edge.
+        let bar = ChatPrefixKeyBarView()
+        bar.layoutIfNeeded()
+        #expect(bar.systemLayoutSizeFitting(
+            UIView.layoutFittingCompressedSize).height == 44)
+    }
+
+    @MainActor
+    @Test func theBarIsTheTextViewsInputAccessorySoItDocksWithTheKeyboard() {
+        let textView = ChatInputUITextView()
+        #expect(textView.inputAccessoryView === textView.prefixBar)
+        #expect(textView.prefixBar.onInsert != nil)
+    }
+
+    @MainActor
+    @Test func theBarTapsInsertAtTheCursorThroughTheTextSystem() {
+        let textView = ChatInputUITextView()
+        let inserted = Recorder<String>()
+        textView.onPrefixInsert = { newText, _ in inserted.append(newText) }
+
+        // Drive the bar's action directly, the way a touch does.
+        textView.text = "hi john"
+        textView.selectedRange = NSRange(location: 3, length: 0)
+        textView.insertPrefix(.mention)
+
+        #expect(textView.text == "hi @john")
+        #expect(textView.selectedRange.location == 4)
+        #expect(inserted.all == ["hi @john"])
+    }
+
+    @MainActor
+    @Test func theBarsInsertIsWiredAtInitSoADockTapAlwaysWorks() {
+        // The bar's button action is installed in the text view's init,
+        // before any SwiftUI layout pass — a keyboard that docks early
+        // can never observe an unwired bar.
+        let textView = ChatInputUITextView()
+        #expect(textView.prefixBar.onInsert != nil)
+    }
+
+    // -- field sizing (device regression: frame ballooned) --
+
+    @MainActor
+    @Test func theFieldHugsOneLineInsteadOfBallooning() {
+        // The clamp contract: one short line claims the 36 pt floor (the
+        // same floor the Composer's editor uses), never the whole
+        // safe-area inset a scroll-enabled text view would otherwise
+        // stretch to.
+        let textView = ChatInputUITextView()
+        textView.applyChatInputConfiguration()
+        textView.text = "one short line"
+        let size = ChatInputTextView.measuredSize(for: textView, width: 300)
+        let lineHeight = textView.font?.lineHeight ?? 20
+        #expect(size.height == 36)
+        #expect(size.height < lineHeight * 5)
+        #expect(!textView.isScrollEnabled)
+    }
+
+    @MainActor
+    @Test func theFieldGrowsToTheFiveLineCapThenScrolls() {
+        let textView = ChatInputUITextView()
+        textView.applyChatInputConfiguration()
+        let longLine = String(repeating: "word ", count: 40)
+        textView.text = longLine
+        let size = ChatInputTextView.measuredSize(for: textView, width: 300)
+        let lineHeight = textView.font?.lineHeight ?? 20
+        #expect(size.height == lineHeight * 5)
+        #expect(textView.isScrollEnabled)
+    }
+}
+
+/// Thread-safe capture for closures that cross isolation boundaries.
+private final class Recorder<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [Value] = []
+
+    var all: [Value] {
+        lock.lock()
+        defer { lock.unlock() }
+        return items
+    }
+
+    func append(_ item: Value) {
+        lock.lock()
+        defer { lock.unlock() }
+        items.append(item)
     }
 }
