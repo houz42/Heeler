@@ -106,35 +106,59 @@ enum AgentTree {
         }
 
         for host in hostClusters.sorted(by: { ($0.label, $0.key) < ($1.label, $1.key) }) {
-            let hostID = "h/" + encode(host.key)
-            appendGroup(hostID, host.label, 0, host.agents, foldedIDs, &rows)
-            guard !foldedIDs.contains(hostID) else { continue }
-
-            for session in clusters(host.agents, key: sessionKey, label: sessionKey) {
-                let sessionID = hostID + "/s/" + encode(session.key)
-                appendGroup(sessionID, session.label, 1, session.agents, foldedIDs, &rows)
-                guard !foldedIDs.contains(sessionID) else { continue }
-
-                for workspace in clusters(
-                    session.agents, key: workspaceKey, label: workspaceKey)
-                {
-                    let workspaceID = sessionID + "/w/" + encode(workspace.key)
-                    appendGroup(
-                        workspaceID, workspace.label, 2, workspace.agents, foldedIDs, &rows)
-                    guard !foldedIDs.contains(workspaceID) else { continue }
-
-                    for tab in clusters(workspace.agents, key: tabKey, label: tabKey) {
-                        let tabID = workspaceID + "/t/" + encode(tab.key)
-                        appendGroup(tabID, tab.label, 3, tab.agents, foldedIDs, &rows)
-                        guard !foldedIDs.contains(tabID) else { continue }
-                        for agent in tab.agents {
-                            rows.append(.agent(agent, depth: 4))
-                        }
-                    }
-                }
-            }
+            emitGroup(
+                id: "h/" + encode(host.key),
+                label: host.label, members: host.agents,
+                depth: 0, level: 0,
+                foldedIDs: foldedIDs, rows: &rows)
         }
         return rows
+    }
+
+    /// Emits one group row and recurses into its children. A group whose
+    /// whole subtree is one single-child chain (one session with one
+    /// workspace with one tab) collapses into one "a · b · c" row that
+    /// keeps the chain head's id, so folding targets the merged row.
+    private static func emitGroup(
+        id: String,
+        label: String,
+        members: [ConsoleAgent],
+        depth: Int,
+        level: Int,  // 0 = host, 1 = session, 2 = workspace, 3 = tab
+        foldedIDs: Set<String>,
+        rows: inout [AgentTreeRow]
+    ) {
+        var id = id, label = label, members = members, level = level
+        // Children of a level-L group are clustered by keys[L]; level 3
+        // (tab) has agents directly, no further grouping.
+        let keys: [(ConsoleAgent) -> String] = [sessionKey, workspaceKey, tabKey]
+        let markers = ["s", "w", "t"]
+
+        while level < 3 {
+            let children = clusters(members, key: keys[level], label: keys[level])
+            guard children.count == 1, let only = children.first else { break }
+            label += " · " + only.label
+            id += "/" + markers[level] + "/" + encode(only.key)
+            members = only.agents
+            level += 1
+        }
+
+        appendGroup(id, label, depth, members, foldedIDs, &rows)
+        guard !foldedIDs.contains(id) else { return }
+
+        if level >= 3 {
+            for agent in members {
+                rows.append(.agent(agent, depth: depth + 1))
+            }
+            return
+        }
+        for child in clusters(members, key: keys[level], label: keys[level]) {
+            emitGroup(
+                id: id + "/" + markers[level] + "/" + encode(child.key),
+                label: child.label, members: child.agents,
+                depth: depth + 1, level: level + 1,
+                foldedIDs: foldedIDs, rows: &rows)
+        }
     }
     /// One clustering level: agents keyed by `key`, labeled from the
     /// cluster's first element (every member shares the key by
