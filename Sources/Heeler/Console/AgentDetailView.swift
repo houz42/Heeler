@@ -378,9 +378,9 @@ struct AgentDetailView: View {
             if surface == nil { surface = initial }
         }
         .task(id: agent.id) {
-            // The chat store follows the selected agent identity: a switch
-            // rebuilds it (and drops the previous transcript window), the
-            // same way attach is replaced on a switch.
+            // The router serves the chat surface's input frame only — the
+            // terminal surface's composer types into the agent's own TUI,
+            // where / already opens the agent's native menu.
             if AgentDetailSurface.initial(agent: agent) == .chat {
                 let store = ChatStore(
                     hostID: agent.hostID,
