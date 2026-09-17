@@ -216,6 +216,18 @@ protocol Transport: Sendable {
     /// as `listSkills`.
     func readSkillFile(atPath path: String) async throws -> String
 
+    /// Reads one whole transcript file (the initial load). `path` is an
+    /// absolute POSIX path on the Host. Transports without a Host-side
+    /// readable filesystem throw by default.
+    func readTranscriptFile(atPath path: String) async throws -> Data
+
+    /// Reads up to `length` bytes of a transcript file starting at `offset`
+    /// (append-poll and loadOlder paging). Empty `Data` means the offset is
+    /// at or past EOF. Same transport caveat as `readTranscriptFile`.
+    func readTranscriptFileChunk(
+        atPath path: String, offset: UInt64, length: Int
+    ) async throws -> Data
+
     /// Whether the underlying connection to the Host is still alive. The
     /// reconnect machinery (#18) decides "re-subscribe on this connection or
     /// re-establish it" from this flag.
@@ -249,6 +261,18 @@ extension Transport {
     func readSkillFile(atPath path: String) async throws -> String {
         throw TransportError.channelFailed(
             detail: "This transport cannot read skill files.")
+    }
+
+    func readTranscriptFile(atPath path: String) async throws -> Data {
+        throw TransportError.channelFailed(
+            detail: "This transport cannot read transcript files.")
+    }
+
+    func readTranscriptFileChunk(
+        atPath path: String, offset: UInt64, length: Int
+    ) async throws -> Data {
+        throw TransportError.channelFailed(
+            detail: "This transport cannot read transcript file chunks.")
     }
 
     /// Non-SSH test doubles and alternative transports can state that SFTP is

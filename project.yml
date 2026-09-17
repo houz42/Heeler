@@ -11,8 +11,7 @@ settings:
     # Swift 6 language mode implies complete strict concurrency checking.
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
-    # Fork: DEVELOPMENT_TEAM intentionally unset (upstream pins their team id here).
-    # Automatic signing resolves the sole team on the personal account.
+    DEVELOPMENT_TEAM: AX4Z34XFC2
     CODE_SIGN_STYLE: Automatic
 
 packages:

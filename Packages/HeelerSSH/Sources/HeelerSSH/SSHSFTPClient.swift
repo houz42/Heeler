@@ -58,6 +58,25 @@ public final class SSHSFTPClient: Sendable {
             timeout: timeout)
     }
 
+    /// Reads up to `length` bytes from one remote file starting at `offset`
+    /// without exposing a native read handle. Reading at or past EOF
+    /// returns empty `Data`; a missing file surfaces as a path-free
+    /// `SSHError.sftpFailure` (the SFTP no-such-file status), matching the
+    /// file-operation error style.
+    public func readFileChunk(
+        at path: String,
+        offset: UInt64,
+        length: Int,
+        timeout: Duration
+    ) async throws -> Data {
+        try await driver.readSFTPFileRange(
+            id: id,
+            path: path,
+            offset: offset,
+            length: length,
+            timeout: timeout)
+    }
+
     /// Lists the directories directly inside one remote directory without
     /// exposing a native directory handle. A missing directory surfaces as
     /// a path-free `SSHError.sftpFailure`.
