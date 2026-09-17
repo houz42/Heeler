@@ -200,7 +200,7 @@ struct ChatScreen: View {
     @State private var inputPresented = false
     @State private var draft = ""
     @State private var isSending = false
-    @FocusState private var inputFocused: Bool
+    @State private var inputFocused = false
 
     private var inputOverlay: some View {
         VStack {
@@ -256,13 +256,13 @@ struct ChatScreen: View {
                             .contentShape(Rectangle())
                     }
                     .accessibilityLabel("Close input")
-                    TextField("Message — / # @ ! for commands", text: $draft, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .focused($inputFocused)
-                        .onChange(of: draft) { _, new in
-                            router.updateSuggestions(forDraft: new)
-                        }
-                        .onSubmit { sendDraft() }
+                    ChatInputTextView(
+                        text: draft,
+                        placeholder: "Message — / # @ ! for commands",
+                        onEdit: { newText, _ in
+                            draft = newText
+                        },
+                        isFocused: $inputFocused)
                     Button {
                         sendDraft()
                     } label: {
@@ -277,6 +277,13 @@ struct ChatScreen: View {
             }
             .background(.bar)
             .overlay(alignment: .top) { Divider() }
+            // Suggestion parity with the old TextField wiring: the
+            // suggestion row's accepts rewrite the draft outside the text
+            // view, so the suggestion pass also needs to run on
+            // SwiftUI-side draft changes.
+            .onChange(of: draft) { _, new in
+                router.updateSuggestions(forDraft: new)
+            }
         }
     }
 
