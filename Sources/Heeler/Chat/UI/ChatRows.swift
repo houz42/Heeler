@@ -111,9 +111,15 @@ struct ChatBlockText: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// Renders inline markdown (bold, code, links); falls back to plain
-    /// text when the content isn't valid markdown (never fails visually).
+    /// Renders inline markdown (bold, code, links) for conversational
+    /// styles; falls back to plain text when the content isn't valid
+    /// markdown (never fails visually). Output and thinking styles are
+    /// terminal-ish payloads, not prose — markdown parsing mangles their
+    /// leading `- ` lines and collapses their newlines, so they stay plain.
     private var markdownText: Text {
+        guard style == .user || style == .assistant else {
+            return Text(text)
+        }
         if let attributed = try? AttributedString(
             markdown: text,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
@@ -233,9 +239,14 @@ struct ChatCollapsibleRow<Content: View>: View {
                     }
                     Spacer(minLength: 0)
                     Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                        .imageScale(.small)
+                        .font(.footnote.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
+                // The whole row is the tap target: without an explicit
+                // content shape a .plain button only registers taps on its
+                // glyphs, and the spacer gap + small chevron made collapse
+                // nearly unhittable.
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(expanded ? "Collapse" : "Expand") \(title)")
@@ -354,10 +365,23 @@ struct ChatLinkText: View {
     static func attributedText(
         _ text: String
     ) -> AttributedString {
-        var attributed = (try? AttributedString(
-            markdown: text,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(text)
+        Self.attributedText(text, style: .assistant)
+    }
+
+    /// Markdown applies to conversational styles only (user/assistant);
+    /// output and thinking stay verbatim — see ChatBlockText.markdownText.
+    static func attributedText(
+        _ text: String, style: ChatBlockText.Style
+    ) -> AttributedString {
+        var attributed: AttributedString
+        if style == .user || style == .assistant {
+            attributed = (try? AttributedString(
+                markdown: text,
+                options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+                ?? AttributedString(text)
+        } else {
+            attributed = AttributedString(text)
+        }
         // Detect on the RENDERED text: markdown parsing strips syntax
         // characters, so raw-text ranges would map to wrong spans. Links
         // written as markdown [text](url) already carry .link from the
@@ -372,7 +396,7 @@ struct ChatLinkText: View {
     }
 
     private var attributed: AttributedString {
-        Self.attributedText(text)
+        Self.attributedText(text, style: style)
     }
 
     private var alignment: Alignment {
