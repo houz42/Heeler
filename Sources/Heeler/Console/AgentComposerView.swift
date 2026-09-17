@@ -914,6 +914,11 @@ struct AgentToolsKeyboard: View {
     let height: CGFloat
     let quickKeysEnabled: Bool
     let sendQuickKey: (AgentQuickKey) -> Void
+    /// Macro slots for the Agent pad's Macros page (KeyboardChords). Nil
+    /// keeps the original layout byte-identical.
+    var macroContext: MacroKeyboardContext? = nil
+    /// Raw-bytes seam for herdr prefix chords on the Agent key row's swipe.
+    var sendChord: ((Data) -> Void)? = nil
     @State private var selectedTab: TerminalKeysTab = .controls
 
     private var tabs: [TerminalKeysTab] {
@@ -934,7 +939,9 @@ struct AgentToolsKeyboard: View {
                         AgentControlKeyboard(
                             isEnabled: quickKeysEnabled,
                             keyboardControl: keyboardControl,
-                            send: sendQuickKey)
+                            send: sendQuickKey,
+                            macros: macroContext,
+                            sendChord: sendChord)
                     }
                 case .skills:
                     if let skills = context.skills {

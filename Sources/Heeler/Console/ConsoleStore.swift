@@ -355,6 +355,27 @@ final class ConsoleStore {
         }
     }
 
+    /// The composer bash mode's scratch-shell read (`pane.read`) over the
+    /// Host's live Console connection, mirroring `readSkillFile`.
+    func readPaneOutput(
+        _ paneID: String, lines: Int, on hostID: Host.ID
+    ) async throws -> PaneReadResult {
+        try await projection(for: hostID).session.withTransport { transport in
+            try await transport.readPane(
+                PaneReadParams(paneID: paneID, source: .recent, lines: lines))
+        }
+    }
+
+    /// The composer bash mode's scratch-shell delivery (`pane.send_input`).
+    /// The caller appends the Enter keystroke itself when it wants one —
+    /// this sends the literal text.
+    func sendPaneInput(_ paneID: String, text: String, on hostID: Host.ID) async throws {
+        try await projection(for: hostID).session.withTransport { transport in
+            try await transport.sendPaneInput(
+                PaneSendInputParams(paneID: paneID, text: text))
+        }
+    }
+
     /// Sessions/Hosts blending (Phase 5): the local herdr sessions visible
     /// on a Host's machine, read over its live Console connection. A
     /// connected Host that fails the probe reports the error; an
