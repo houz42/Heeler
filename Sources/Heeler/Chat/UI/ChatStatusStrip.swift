@@ -152,19 +152,16 @@ struct DetailLevelSwitcher: View {
                         .background(
                             candidate == level
                                 ? Color.accentColor.opacity(0.15) : Color.clear,
-                            // Concentric corners: inner radius = card radius
-                            // minus the inset, so the tint never pokes past
-                            // the card's rounded corners.
-                            in: RoundedRectangle(cornerRadius: 8))
+                            // Small radius + deep inset: the tint's corners
+                            // stay inside the card's straight edges no matter
+                            // what radius the system draws the popover with.
+                            in: RoundedRectangle(cornerRadius: 6))
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(4)
-            // The card clips its own rounded shape — the selected row's tint
-            // can never overlap the frame.
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .padding(8)
             .presentationCompactAdaptation(.popover)
         }
     }
