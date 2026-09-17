@@ -533,7 +533,10 @@ struct ConsoleView: View {
                     .listRowInsets(Self.treeRowInsets)
                 }
             case .agent(let agent, let depth, let tabLabel):
-                agentRow(agent, mergedTabLabel: tabLabel, leadingIndent: CGFloat(depth) * Self.treeIndentStep)
+                agentRow(
+                    agent, mergedTabLabel: tabLabel,
+                    leadingIndent: CGFloat(depth) * Self.treeIndentStep
+                        + Self.treeChevronGutter)
                     .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
                     .listRowInsets(Self.treeRowInsets)
             }
@@ -545,6 +548,11 @@ struct ConsoleView: View {
     /// `depth`-scaled paddings align group and Agent rows.
     fileprivate static let treeRowInsets = EdgeInsets(top: 2, leading: 12, bottom: 2, trailing: 12)
     fileprivate static let treeIndentStep: CGFloat = 14
+    /// A group row's label sits one chevron gutter (12-wide chevron + 8
+    /// spacing) right of its row edge. Agent rows skip the chevron, so
+    /// without this offset a depth-N agent would land LEFT of its
+    /// depth-(N-1) group's label and read as unindented.
+    private static let treeChevronGutter: CGFloat = 20
 
     /// The tree rows over the same filtered Agents the flat/grouped lists
     /// show — `hostSections` owns the per-Host connection state and the

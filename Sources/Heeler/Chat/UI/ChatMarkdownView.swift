@@ -156,10 +156,12 @@ struct ChatCodeBlock: View {
 }
 
 /// One chat table: header row with a filled background, zebra striping,
-/// thin row separators, and horizontal scroll so wide tables pan instead
-/// of squeezing cells unreadably. Striping + row separators read better
-/// on a phone than column borders: columns are implied by cell spacing,
-/// and extra vertical rules would compete with the row separators.
+/// and thin row separators. The table fits the proposed chat width and
+/// its cells wrap — a horizontal ScrollView would hand it infinite
+/// width and unfold every row onto one line, which reads worse on a
+/// phone than wrapped cells. Striping + row separators read better on a
+/// phone than column borders: columns are implied by cell spacing, and
+/// extra vertical rules would compete with the row separators.
 ///
 /// Row backgrounds and borders are MarkdownUI environment styles applied
 /// to the table's own laid-out content; the header's semibold weight
@@ -168,21 +170,19 @@ struct ChatTableBlock<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        ScrollView(.horizontal) {
-            content()
-                .markdownTableBackgroundStyle(
-                    .alternatingRows(
-                        Color.primary.opacity(0.045),
-                        Color.clear,
-                        header: Color.primary.opacity(0.10))
-                )
-                .markdownTableBorderStyle(
-                    TableBorderStyle(
-                        .insideHorizontalBorders,
-                        color: Color.primary.opacity(0.10),
-                        width: 0.5))
-        }
-        .padding(.bottom, 8)
+        content()
+            .markdownTableBackgroundStyle(
+                .alternatingRows(
+                    Color.primary.opacity(0.045),
+                    Color.clear,
+                    header: Color.primary.opacity(0.10))
+            )
+            .markdownTableBorderStyle(
+                TableBorderStyle(
+                    .insideHorizontalBorders,
+                    color: Color.primary.opacity(0.10),
+                    width: 0.5))
+            .padding(.bottom, 8)
     }
 }
 
