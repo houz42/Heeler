@@ -1,5 +1,7 @@
 import Foundation
 import MarkdownUI
+import Splash
+import SwiftUI
 import Testing
 
 @testable import Heeler
@@ -158,6 +160,81 @@ struct ChatMarkdownTextTests {
     }
 }
 
+@Suite("Chat Code Highlighter")
+@MainActor
+struct ChatCodeHighlighterTests {
+    private func foregroundColors(
+        _ attributed: AttributedString
+    ) -> [(text: String, color: UIColor)] {
+        var runs: [(String, UIColor)] = []
+        for run in attributed.runs {
+            guard let color = run.uiKit.foregroundColor else { continue }
+            runs.append((String(attributed[run.range].characters), color))
+        }
+        return runs
+    }
+
+    private func colorOf(
+        _ token: String, in code: String, palette: ChatCodeHighlighter.Palette
+    ) throws -> UIColor? {
+        let attributed = ChatCodeHighlighter.attributed(
+            code, palette: palette, font: SplashFontChat())
+        let runs = foregroundColors(attributed)
+        return runs.first { $0.0.contains(token) }?.1
+    }
+
+    @Test func swiftKeywordColorDiffersFromIdentifier() throws {
+        let code = "let x = 1\nmyIdentifierValue = 2"
+        let keyword = try colorOf(
+            "let", in: code, palette: ChatCodeHighlighter.light)
+        let identifier = try colorOf(
+            "myIdentifierValue", in: code, palette: ChatCodeHighlighter.light)
+        let k = try #require(keyword)
+        let i = try #require(identifier)
+        #expect(k != i, "keyword and identifier must not share a color")
+    }
+
+    @Test func swiftStringAndCommentColored() throws {
+        let code = "let name = \"hello\" // trailing"
+        let str = try colorOf(
+            "hello", in: code, palette: ChatCodeHighlighter.light)
+        let comment = try colorOf(
+            "trailing", in: code, palette: ChatCodeHighlighter.light)
+        let plain = try colorOf(
+            "name", in: code, palette: ChatCodeHighlighter.light)
+        #expect(str != plain)
+        #expect(comment != plain)
+        #expect(str != comment)
+    }
+
+    @Test func darkPaletteDiffersFromLight() throws {
+        let code = "let x = \"hello\""
+        let lightKeyword = try colorOf(
+            "let", in: code, palette: ChatCodeHighlighter.light)
+        let darkKeyword = try colorOf(
+            "let", in: code, palette: ChatCodeHighlighter.dark)
+        #expect(lightKeyword != darkKeyword)
+    }
+
+    @Test func unknownLanguageRendersPlainly() {
+        #expect(!ChatCodeHighlighter.highlightsSwift(language: "python"))
+        #expect(!ChatCodeHighlighter.highlightsSwift(language: "bash"))
+        #expect(!ChatCodeHighlighter.highlightsSwift(language: "not-a-lang"))
+    }
+
+    @Test func noLanguageRendersPlainly() {
+        #expect(!ChatCodeHighlighter.highlightsSwift(language: nil))
+        #expect(!ChatCodeHighlighter.highlightsSwift(language: ""))
+        #expect(!ChatCodeHighlighter.highlightsSwift(language: "   "))
+    }
+
+    @Test func swiftLanguageVariantsHighlight() {
+        #expect(ChatCodeHighlighter.highlightsSwift(language: "swift"))
+        #expect(ChatCodeHighlighter.highlightsSwift(language: "Swift"))
+        #expect(ChatCodeHighlighter.highlightsSwift(language: "swift repl"))
+    }
+}
+
 @Suite("Chat Markdown Construction")
 struct ChatMarkdownConstructionTests {
     // MARK: fixtures render (construction parses via cmark)
@@ -258,4 +335,15 @@ struct ChatMarkdownConstructionTests {
         // accidental O(n²) in the rewrite, not 50ms of parsing.
         #expect(elapsed < 2.0, "construction took \(elapsed)s")
     }
+}
+
+/// Test-side twin of the app's chat code font: system monospaced at
+/// subheadline size, preloaded into a Splash font.
+@MainActor
+private func SplashFontChat() -> Splash.Font {
+    let size = UIFont.preferredFont(forTextStyle: .subheadline).pointSize
+    var font = Splash.Font(size: Double(size))
+    font.resource = .preloaded(
+        UIFont.monospacedSystemFont(ofSize: size, weight: .regular))
+    return font
 }

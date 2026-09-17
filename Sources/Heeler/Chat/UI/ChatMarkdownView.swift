@@ -1,4 +1,5 @@
 @preconcurrency import MarkdownUI
+import Splash
 import SwiftUI
 
 // SPDX-License-Identifier: Apache-2.0
@@ -50,20 +51,95 @@ enum ChatMarkdownTheme {
         }
         .codeBlock { configuration in
             // Code blocks render from the raw content (no inline markup
-            // exists inside them), styled like the chat's output blocks.
-            ScrollView(.horizontal) {
-                Text(configuration.content)
-                    .font(.system(.subheadline, design: .monospaced))
-                    .lineSpacing(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.leading, 12)
-                    .padding(.trailing, 12)
-                    .padding(.vertical, 8)
-            }
-            .background(Color.primary.opacity(0.06))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .padding(.bottom, 8)
+            // exists inside them). Swift blocks get semantic coloring via
+            // Splash; any other language (or none) renders plainly.
+            ChatCodeBlock(
+                content: configuration.content,
+                language: configuration.language)
         }
+}
+
+/// One chat code block: horizontal-scrollable, subtle background with a
+/// border, and a language badge for the fence's info string. Swift code
+/// carries per-token semantic colors (Splash), everything else plain
+/// monospace.
+struct ChatCodeBlock: View {
+    let content: String
+    let language: String?
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            VStack(alignment: .leading, spacing: 0) {
+                if let highlighted {
+                    Text(highlighted)
+                        .lineSpacing(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text(content)
+                        .font(.system(.subheadline, design: .monospaced))
+                        .lineSpacing(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.leading, 12)
+            .padding(.trailing, 12)
+            .padding(.vertical, 8)
+        }
+        .background(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.primary.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(Color.primary.opacity(0.08)))
+        }
+        .overlay(alignment: .topTrailing) { badge }
+        .padding(.bottom, 8)
+    }
+
+    /// Splash-attributed Swift code for the active color scheme, or `nil`
+    /// when this block is not Swift.
+    private var highlighted: AttributedString? {
+        guard
+            ChatCodeHighlighter.highlightsSwift(language: language)
+        else { return nil }
+        return ChatCodeHighlighter.attributed(
+            content,
+            palette: colorScheme == .dark
+                ? ChatCodeHighlighter.dark : ChatCodeHighlighter.light,
+            font: SplashFont.chat)
+    }
+
+    /// The fence's language tag, shown when present. Not a separate
+    /// line — a small corner badge over the block background.
+    @ViewBuilder private var badge: some View {
+        if let language, !language.isEmpty {
+            Text(language)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 5))
+                .padding(6)
+        }
+    }
+}
+
+/// The chat code font as a Splash `Font` — preloaded so Splash doesn't
+/// fall back to Menlo: the system monospaced face at subheadline size,
+/// matching every other code span in chat. Splash has no
+/// `init(preloaded:)`, but `resource` is public, so the preloaded font is
+/// assigned onto a default system-font value.
+private enum SplashFont {
+    @MainActor
+    static var chat: Splash.Font {
+        let size = UIFont.preferredFont(forTextStyle: .subheadline).pointSize
+        var font = Splash.Font(size: Double(size))
+        font.resource = .preloaded(
+            UIFont.monospacedSystemFont(ofSize: size, weight: .regular))
+        return font
+    }
 }
 
 /// Renders chat text as rich markdown. Link routing is applied by the

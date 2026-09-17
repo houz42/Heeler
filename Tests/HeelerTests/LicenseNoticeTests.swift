@@ -23,6 +23,7 @@ struct LicenseNoticeInventoryTests {
         "MSDisplayLink",
         "NetworkImage",
         "OpenSSL",
+        "Splash",
         "cmark-gfm",
         "libghostty-spm",
         "libssh2",

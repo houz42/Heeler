@@ -6,6 +6,7 @@
       "markdownui": ["MarkdownUI"],
       "msdisplaylink": ["MSDisplayLink"],
       "networkimage": ["NetworkImage"],
+      "splash": ["Splash"],
       "swift-cmark": ["cmark-gfm"]
     },
     "heelerSSHBinaryTargets": {
@@ -14,8 +15,9 @@
     },
     "projectPackages": {
       "GhosttyTerminal": ["libghostty-spm", "Ghostty", "GhosttyTheme"],
+      "MarkdownUI": ["MarkdownUI"],
       "HeelerSSH": ["libssh2", "libssh2-bcrypt_pbkdf", "libssh2-cipher-chachapoly", "OpenSSL"],
-      "MarkdownUI": ["MarkdownUI"]
+      "Splash": ["Splash"]
     },
     "bundledFontFamilies": {
       "IBMPlexMono": ["IBMPlexMono"],
@@ -94,6 +96,14 @@
       "source": "Packages/HeelerSSH/Artifacts (tag openssl-3.6.3)",
       "spdx": "Apache-2.0",
       "notice": "OpenSSL-Apache-2.0.txt"
+    },
+    {
+      "id": "Splash",
+      "displayName": "Splash",
+      "version": "0.16.0",
+      "source": "https://github.com/JohnSundell/Splash",
+      "spdx": "MIT",
+      "notice": "Splash-MIT.txt"
     },
     {
       "id": "libghostty-spm",
