@@ -71,8 +71,12 @@ enum AgentTree {
     /// Host ids are the `h/<host>` prefix of every descendant group id, so
     /// one lookup serves any depth.
     static func hostID(ofGroupID groupID: String) -> Host.ID? {
+        // Only a depth-0 group id ("h/<host>") names a Host. Deeper ids
+        // ("h/<host>/s/…", "/w/…", "/t/…") share the prefix, so a bare
+        // prefix read would misresolve every level to the host section.
         guard groupID.hasPrefix("h/") else { return nil }
-        let encoded = groupID.dropFirst(2).prefix { $0 != "/" }
+        let encoded = groupID.dropFirst(2)
+        guard !encoded.contains("/") else { return nil }
         guard let decoded = String(encoded)
             .removingPercentEncoding, let id = Host.ID(uuidString: decoded)
         else { return nil }

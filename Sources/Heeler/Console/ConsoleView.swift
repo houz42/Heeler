@@ -114,13 +114,14 @@ struct ConsoleView: View {
                                         }
                                     }
                                 } label: {
-                                    Label(
-                                        "Presentation",
-                                        systemImage: switch listPresentation.mode {
-                                        case .flat: "list.bullet"
-                                        case .grouped: "list.bullet.rectangle"
-                                        case .tree: "sidebar.leading"
-                                        })
+                                    // Swift disallows switch expressions in
+                                    // argument position — extract to a let.
+                                    let icon = switch listPresentation.mode {
+                                    case .flat: "list.bullet"
+                                    case .grouped: "list.bullet.rectangle"
+                                    case .tree: "sidebar.leading"
+                                    }
+                                    Label("Presentation", systemImage: icon)
                                 }
                                 .hoverEffect(.highlight)
                                 .accessibilityLabel("Agent list presentation")
@@ -526,8 +527,10 @@ struct ConsoleView: View {
                         toggleTreeGroup(id)
                     }
                 }
-            case .agent(let agent, _):
+            case .agent(let agent, let depth):
                 agentRow(agent)
+                    .padding(.leading, CGFloat(depth) * 16)
+                    .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
             }
         }
     }
