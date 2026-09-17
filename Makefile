@@ -8,7 +8,7 @@ PROJECT := Heeler.xcodeproj
 SCHEME  := Heeler
 ARCHIVE := build/Heeler.xcarchive
 DERIVED := build/DerivedData
-APP_ID  := dev.bybee.heeler
+APP_ID  ?= dev.houz42.heeler
 SIM     ?= iPhone 17
 SIM_IPAD ?= iPad Pro 13-inch (M5)
 SIM_DESTINATION ?= platform=iOS Simulator,name=$(SIM)
