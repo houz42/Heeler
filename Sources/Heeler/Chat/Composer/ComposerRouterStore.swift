@@ -99,7 +99,10 @@ final class ComposerRouterStore {
         let tagFilter: @MainActor (_ filter: TagFilter) -> Void
         /// `/level` feedback so the visible surface can re-read the level.
         let levelDidChange: @MainActor (_ level: DetailLevel) -> Void
-        /// Suggestion providers.
+        /// The agent's own slash commands, from the provider registry.
+        /// Defaults to omp's verified table; the wiring owner passes the
+        /// target agent's kind (see `makeChatDependencies`).
+        let agentCommands: @MainActor () -> [AgentSlashCommand]
         let workspaces: @MainActor () -> [String]
         let statuses: @MainActor () -> [String]
         let agents: @MainActor () -> [String]
@@ -117,6 +120,9 @@ final class ComposerRouterStore {
                 _ resolved: ComposerResolvedAgent, _ message: String
             ) async throws -> Void,
             bashIO: ComposerBashIO,
+            agentCommands: @escaping @MainActor () -> [AgentSlashCommand] = {
+                AgentCommandRegistry.provider(forKind: "omp").slashCommands()
+            },
             follow: @escaping @MainActor (_ agent: String) -> Void = { _ in },
             tagFilter: @escaping @MainActor (_ filter: TagFilter) -> Void = { _ in },
             levelDidChange: @escaping @MainActor (_ level: DetailLevel) -> Void = { _ in },
@@ -135,6 +141,7 @@ final class ComposerRouterStore {
             self.paneID = paneID
             self.levelStore = levelStore
             self.resolveAgent = resolveAgent
+            self.agentCommands = agentCommands
             self.deliverMention = deliverMention
             self.bashIO = bashIO
             self.follow = follow
@@ -344,7 +351,8 @@ final class ComposerRouterStore {
         switch token {
         case .slash(let tokenText):
             return ComposerRouter.slashSuggestions(
-                matching: String(tokenText.dropFirst()))
+                matching: String(tokenText.dropFirst()),
+                agentCommands: dependencies.agentCommands())
         case .tag(let query):
             let filter = ComposerRouter.tagFilter(for: query)
             return ComposerRouter.tagSuggestions(
@@ -524,9 +532,11 @@ extension ComposerRouterStore {
     static func makeChatDependencies(
         console: ConsoleStore,
         agent: ConsoleAgent,
-        bashIO: ComposerBashIO
+        bashIO: ComposerBashIO,
+        agentKind: String = "omp"
     ) -> Dependencies {
         let hostID = agent.hostID
+        let commandProvider = AgentCommandRegistry.provider(forKind: agentKind)
         return Dependencies(
             hostID: hostID,
             paneID: agent.agent.paneID,
@@ -540,6 +550,7 @@ extension ComposerRouterStore {
                     on: resolved.hostID)
             },
             bashIO: bashIO,
+            agentCommands: { commandProvider.slashCommands() },
             workspaces: {
                 var seen = Set<String>()
                 return console.agents
@@ -576,6 +587,6 @@ extension ComposerRouterStore {
     /// agent's display name, then the tab label.
     @MainActor
     static func suggestionName(_ agent: ConsoleAgent) -> String? {
-        agent.paneLabel ?? agent.agent.displayName ?? agent.tabLabel
+        agent.paneLabel ?? agent.agent.name ?? agent.tabLabel
     }
 }

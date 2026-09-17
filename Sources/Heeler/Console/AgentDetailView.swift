@@ -408,7 +408,8 @@ struct AgentDetailView: View {
                             readPaneText: { hostID, paneID in
                                 try await console.readPaneOutput(
                                     paneID, lines: 200, on: hostID).text
-                            })))
+                            }),
+                        agentKind: agent.agent.kind))
                 await store.start(
                     agentSession: agent.agent.agentSession,
                     statusUpdates: console.agentStatusUpdates(for: agent.id))

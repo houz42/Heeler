@@ -365,8 +365,12 @@ struct ChatComposerRouterTokenTests {
 
 @Suite("ComposerRouter.suggestions")
 struct ChatComposerRouterSuggestionTests {
+    /// The omp table, as the store injects it for an omp-kind agent.
+    private let ompCommands = OmpCommandProvider().slashCommands()
+
     @Test func slashListsLocalsFirst() {
-        let suggestions = ComposerRouter.slashSuggestions(matching: "")
+        let suggestions = ComposerRouter.slashSuggestions(
+            matching: "", agentCommands: ompCommands)
         #expect(!suggestions.isEmpty)
         #expect(suggestions.first?.title == ComposerLocalCommand.level.name)
         #expect(
@@ -375,25 +379,29 @@ struct ChatComposerRouterSuggestionTests {
     }
 
     @Test func slashMatchesPrefixCaseInsensitively() {
-        let suggestions = ComposerRouter.slashSuggestions(matching: "LE")
+        let suggestions = ComposerRouter.slashSuggestions(
+            matching: "LE", agentCommands: ompCommands)
         #expect(suggestions.map(\.title) == [ComposerLocalCommand.level.name])
-        let omp = ComposerRouter.slashSuggestions(matching: "COMP")
+        let omp = ComposerRouter.slashSuggestions(
+            matching: "COMP", agentCommands: ompCommands)
         #expect(omp.map(\.title) == ["compact"])
     }
 
-
     @Test func slashSuggestsOmpBuiltinsWithInsertion() {
-        let suggestions = ComposerRouter.slashSuggestions(matching: "compact")
+        let suggestions = ComposerRouter.slashSuggestions(
+            matching: "compact", agentCommands: ompCommands)
         #expect(suggestions == [
             ComposerSuggestion(
                 id: "omp:compact", title: "compact",
                 detail: "Manually compact the session context",
-                insertion: "/compact ", kind: .slash)
+                insertion: "/compact ", kind: .slash,
+                usage: "[soft|remote|snapcompact] [focus]")
         ])
     }
 
     @Test func slashIsCapped() {
-        #expect(ComposerRouter.slashSuggestions(matching: "").count
+        #expect(ComposerRouter.slashSuggestions(
+            matching: "", agentCommands: ompCommands).count
             <= ComposerRouter.maximumSuggestions)
     }
 
