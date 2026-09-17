@@ -259,6 +259,134 @@ struct ChatUITests {
         #expect(textAtL2.map(\.id) == textAtL3.map(\.id))
     }
 
+    // MARK: todo / subagent (task) visibility — folded into levels, no new
+    // buttons. Evidence from real omp sessions: `todo` and `task` are
+    // ordinary toolCall + toolResult records; only the visibility level
+    // differs (ChatFiltering.visibilityLevel).
+
+    private func todoCall() -> ToolCall {
+        // Verbatim id + arguments from a real session record
+        // (todo:0#5024a45c…, op "done", task "SFTP transport slice").
+        ToolCall(
+            id: "todo:0#5024a45c7c24404db0179f21b19ca365", name: "todo",
+            arguments: .object([
+                "op": .string("done"),
+                "i": .string("Transport slice and wiring done"),
+                "task": .string("SFTP transport slice"),
+            ]))
+    }
+
+    private func taskCall() -> ToolCall {
+        // Verbatim from the fixture's real `task` call (op-scoped spawn
+        // whose result reports the spawned agents).
+        ToolCall(
+            id: "chatcmpl-tool-26a54d122aa141b8868476c33250ab67", name: "task",
+            arguments: .object([
+                "i": .string("Comparing four open-source herdr iOS clients internals"),
+            ]))
+    }
+
+    private func agentManagementTurn() -> ChatMessage {
+        ChatMessage(
+            id: UUID(uuidString: "AAAAAAAA-0000-0000-0000-000000000002")!,
+            role: .assistant,
+            blocks: [
+                .toolCall(todoCall()),
+                .toolCall(taskCall()),
+                .text("Dispatched the work."),
+            ],
+            timestamp: Date(timeIntervalSince1970: 200))
+    }
+
+    private func agentManagementResults() -> [ToolResult] {
+        [
+            ToolResult(
+                toolCallId: "todo:0#5024a45c7c24404db0179f21b19ca365",
+                toolName: "todo", isError: false,
+                content: "Remaining items (2):\n  - Wire slices, compile-verify [in_progress] (Integration)"),
+            ToolResult(
+                toolCallId: "chatcmpl-tool-26a54d122aa141b8868476c33250ab67",
+                toolName: "task", isError: false,
+                content: "Spawned 4 background agents using scout."),
+        ]
+    }
+
+    @Test func todoAndTaskRowsHideBelowTheirLevels() {
+        // L0/L1: neither the todo checklist nor the subagent spawn shows —
+        // only the assistant text. A todo row is NOT visible at L1 even
+        // though ordinary tool names are.
+        for level in [DetailLevel.l0, .l1] {
+            let rows = ChatFiltering.visibleRows(
+                messages: [agentManagementTurn()],
+                toolResults: agentManagementResults(), level: level)
+            let toolRows = rows.filter {
+                if case .toolCall = $0 { return true } else { return false }
+            }
+            #expect(toolRows.isEmpty)
+        }
+    }
+
+    @Test func l2AddsTodoChecklistWithRenderedResult() {
+        let rows = ChatFiltering.visibleRows(
+            messages: [agentManagementTurn()],
+            toolResults: agentManagementResults(), level: .l2)
+
+        let toolRows = rows.filter {
+            if case .toolCall = $0 { return true } else { return false }
+        }
+        // Only the todo call: `task` stays hidden until L3.
+        #expect(toolRows.count == 1)
+        guard case .toolCall(_, _, let call, let result)? = toolRows.first else {
+            Issue.record("L2 must surface the todo call row")
+            return
+        }
+        #expect(call.name == "todo")
+        // The todo result (the rendered checklist) pairs in at L2.
+        #expect(result?.content.hasPrefix("Remaining items") == true)
+    }
+
+    @Test func l3AddsSubagentSpawnRow() {
+        let rows = ChatFiltering.visibleRows(
+            messages: [agentManagementTurn()],
+            toolResults: agentManagementResults(), level: .l3)
+
+        let names = rows.compactMap { row -> String? in
+            guard case .toolCall(_, _, let call, _) = row else { return nil }
+            return call.name
+        }
+        #expect(names.sorted() == ["task", "todo"])
+    }
+
+    @Test func todoAndTaskLevelsPreserveMonotonicNesting() {
+        // With todo+task rows present, levels still only add rows.
+        let messages = [agentManagementTurn()]
+        let results = agentManagementResults()
+        var previous = Set<String>()
+        for level in DetailLevel.allCases {
+            let rows = ChatFiltering.visibleRows(
+                messages: messages, toolResults: results, level: level)
+            #expect(Set(rows.map(\.id)).isSuperset(of: previous))
+            previous = Set(rows.map(\.id))
+        }
+    }
+
+    @Test func taskOrphanResultStaysHiddenUntilL3() {
+        // A `task` result whose call is outside the visible window: the
+        // orphan gate is name-aware, so it does not surface at L2 like an
+        // ordinary-tool orphan would.
+        let orphan = ToolResult(
+            toolCallId: "chatcmpl-tool-orphaned", toolName: "task",
+            isError: false, content: "Spawned 2 background agents.")
+        for level in DetailLevel.allCases {
+            let rows = ChatFiltering.visibleRows(
+                messages: [], toolResults: [orphan], level: level)
+            let orphans = rows.filter {
+                if case .orphanResult = $0 { return true } else { return false }
+            }
+            #expect(orphans.count == (level >= .l3 ? 1 : 0))
+        }
+    }
+
     // MARK: per-pane level persistence
 
     @Test func detailLevelPersistsPerPaneInNamespacedSuite() {

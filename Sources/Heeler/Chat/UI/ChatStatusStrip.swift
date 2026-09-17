@@ -101,8 +101,8 @@ struct DetailLevelSwitcher: View {
     private static let hints: [DetailLevel: String] = [
         .l0: "Assistant text only",
         .l1: "Tool names",
-        .l2: "Tool results & diffs",
-        .l3: "Thinking blocks",
+        .l2: "Results, diffs & todo lists",
+        .l3: "Thinking & subagents",
     ]
 
     /// The system Menu can't tint a selection or shrink its rows, so the

@@ -13,6 +13,13 @@ import Foundation
 // `model_change`, `thinking_level_change`, and whatever omp adds later) is
 // skipped by an allowlist, never a denylist.
 //
+// The `custom` records are deliberate noise for this parser: a census of
+// real live sessions shows `tool_execution_start` fires for EVERY tool
+// invocation (bash/read/… as well as `task` subagent spawns) — it is
+// per-tool timing metadata, not a subagent marker — so subagent spawns and
+// todo checklists surface through their ordinary toolCall + toolResult
+// records and need no parsing of `custom` at all. Visibility of those rows
+// is a `ChatFiltering` concern (`visibilityLevel(toolName:)`).
 // A message record nests its payload under `message`, keyed by `role`:
 //   - user / assistant → a `content` array of blocks, walked in order:
 //       {type:"text", text}          → ChatBlock.text

@@ -84,14 +84,18 @@ struct ChatMessage: Sendable, Equatable, Identifiable {
 }
 
 /// Chat transcript verbosity. L0 (default) is assistant text turns only;
-/// each level adds the previous one's chrome.
+/// each level adds the previous one's chrome. Tool calls are name-gated
+/// (`ChatFiltering.visibilityLevel`): ordinary tools enter at L1, `todo`
+/// checklists at L2 (they render as results), `task` (subagent spawn)
+/// blocks at L3 (agent internals, alongside thinking).
 enum DetailLevel: Int, Sendable, CaseIterable {
     /// Assistant text turns only — zero thinking/toolcall/diff chrome.
     case l0 = 0
     /// Adds toolcall names, one line, collapsed.
     case l1
-    /// Adds tool results (collapsed, tap to expand) and diffs.
+    /// Adds tool results (collapsed, tap to expand), diffs, and `todo`
+    /// checklist rows.
     case l2
-    /// Adds thinking blocks, collapsed.
+    /// Adds thinking blocks and `task` (subagent spawn) rows, collapsed.
     case l3
 }
