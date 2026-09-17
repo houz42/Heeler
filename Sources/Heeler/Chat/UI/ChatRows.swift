@@ -90,20 +90,25 @@ struct ChatBlockText: View {
     var body: some View {
         Group {
             if style == .user {
-                // User turns: a tinted bubble pinned to the trailing edge,
-                // so the conversation reads as turns, not a document.
-                HStack {
-                    Spacer(minLength: 48)
+                // User turns: full-width row with a tinted leading rail —
+                // turns read as turns without surrendering text width.
+                HStack(alignment: .top, spacing: 8) {
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(.tint)
+                        .frame(width: 3)
                     markdownText
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
                 }
+                .padding(.vertical, 4)
+                .padding(.trailing, 4)
+                .background(.tint.opacity(0.07))
             } else {
                 markdownText
             }
         }
-        .frame(maxWidth: .infinity, alignment: alignment)
+        .font(style.font)
+        .foregroundStyle(style.color)
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// Renders inline markdown (bold, code, links); falls back to plain
@@ -309,15 +314,17 @@ struct ChatLinkText: View {
     var body: some View {
         Group {
             if style == .user {
-                // User turns: a tinted bubble pinned to the trailing edge,
-                // matching ChatBlockText's chat-turn look.
-                HStack {
-                    Spacer(minLength: 48)
+                // User turns: full-width row with a tinted leading rail —
+                // matches ChatBlockText's user-turn look.
+                HStack(alignment: .top, spacing: 8) {
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(.tint)
+                        .frame(width: 3)
                     linkedText
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
                 }
+                .padding(.vertical, 4)
+                .padding(.trailing, 4)
+                .background(.tint.opacity(0.07))
             } else {
                 linkedText
             }

@@ -24,6 +24,9 @@ struct AgentDetailView: View {
     /// The chat surface's live-data store, one per (host, pane). Created
     /// alongside attach: both surfaces stay mounted-capable across switches.
     @State private var chat: ChatStore?
+    /// The chat input's submit router (/ # @ ! routing). Built with the
+    /// same per-agent task as the chat store.
+    @State private var chatRouter: ComposerRouterStore?
     /// Which surface the detail shows. Set on first appearance from the
     /// agent's session shape; the picker is the only other writer.
     @State private var surface: AgentDetailSurface?
@@ -217,8 +220,8 @@ struct AgentDetailView: View {
         if !agent.hostSessionName.isEmpty {
             parts[0] += ":\(agent.hostSessionName)"
         }
+        // The tab label is the title's job; repeating it here would double it.
         if let workspace = agent.workspaceLabel { parts.append(workspace) }
-        if let tab = agent.tabLabel { parts.append(tab) }
         return parts.joined(separator: " · ")
     }
 
@@ -227,7 +230,7 @@ struct AgentDetailView: View {
         if let chat {
             ChatScreen(
                 paneID: agent.agent.paneID,
-                agentName: agent.agent.displayName,
+                agentName: agent.tabLabel ?? agent.agent.displayName,
                 state: chatAgentState,
 
                 content: chat.content,
@@ -239,7 +242,13 @@ struct AgentDetailView: View {
                 isLoadingOlder: chat.isLoadingOlder,
                 loadOlder: { [weak chat] in await chat?.loadOlder() },
                 stripAccessory: AnyView(surfacePicker),
-                breadcrumb: chatBreadcrumb)
+                breadcrumb: chatBreadcrumb,
+                router: chatRouter,
+                deliver: { text in
+                    try await console.promptAgent(
+                        AgentPromptParams(target: agent.agent.paneID, text: text),
+                        on: agent.hostID)
+                })
         } else {
             ChatUnavailablePlaceholder()
         }
@@ -310,11 +319,34 @@ struct AgentDetailView: View {
                     paneID: agent.agent.paneID,
                     reader: .console(console, hostID: agent.hostID))
                 chat = store
+                // The chat input's router: / # @ ! classification + plain
+                // delivery through agent.prompt. The scratch-shell pane for
+                // ! is created lazily on first use by the store.
+                chatRouter = ComposerRouterStore(
+                    dependencies: ComposerRouterStore.makeChatDependencies(
+                        console: console, agent: agent,
+                        bashIO: ComposerBashIO(
+                            createScratchPane: { hostID in
+                                try await console.createShellTerminal(
+                                    ShellTerminalCreationRequest(
+                                        workspaceID: agent.agent.workspaceID,
+                                        cwd: agent.agent.cwd),
+                                    on: hostID).paneID
+                            },
+                            sendText: { hostID, paneID, text in
+                                try await console.sendPaneInput(
+                                    paneID, text: text, on: hostID)
+                            },
+                            readPaneText: { hostID, paneID in
+                                try await console.readPaneOutput(
+                                    paneID, lines: 200, on: hostID).text
+                            })))
                 await store.start(
                     agentSession: agent.agent.agentSession,
                     statusUpdates: console.agentStatusUpdates(for: agent.id))
             } else {
                 chat = nil
+                chatRouter = nil
             }
         }
 

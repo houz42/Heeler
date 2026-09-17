@@ -50,6 +50,12 @@ struct ChatScreen: View {
     /// host:session · workspace · tab, shown in the nav bar's title slot
     /// beside the back button. Nil leaves the bar titleless.
     var breadcrumb: String? = nil
+    /// The composer's submit router (Phase 2); enables the floating input
+    /// button. Nil = read-only chat (previews, unwired hosts).
+    var router: ComposerRouterStore? = nil
+    /// Delivers plain text to the agent (`agent.prompt` equivalent). Called
+    /// only when the router returns `.passthrough`.
+    var deliver: ((String) async throws -> Void)? = nil
 
     @State private var level: DetailLevel
     init(
@@ -63,7 +69,9 @@ struct ChatScreen: View {
         isLoadingOlder: Bool = false,
         loadOlder: (@Sendable () async -> Void)? = nil,
         stripAccessory: AnyView? = nil,
-        breadcrumb: String? = nil
+        breadcrumb: String? = nil,
+        router: ComposerRouterStore? = nil,
+        deliver: ((String) async throws -> Void)? = nil
     ) {
         self.paneID = paneID
         self.agentName = agentName
@@ -75,6 +83,8 @@ struct ChatScreen: View {
         self.loadOlder = loadOlder
         self.stripAccessory = stripAccessory
         self.breadcrumb = breadcrumb
+        self.router = router
+        self.deliver = deliver
         self._level = State(initialValue: initialLevel)
     }
 
@@ -95,14 +105,6 @@ struct ChatScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ChatStatusStrip(
-                agentName: agentName, state: state, level: level,
-                changeLevel: { newLevel in
-                    level = newLevel
-                    changeLevel(newLevel, paneID)
-                },
-                accessory: stripAccessory)
-            Divider()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     topSentinel
@@ -121,8 +123,55 @@ struct ChatScreen: View {
                     router: openRouter,
                     fetch: fetch ?? { _ in throw CocoaError(.fileNoSuchFile) }))
         }
+        // The floating input affordance only exists when a router is wired.
+        .overlay { if router != nil && deliver != nil { inputOverlay } }
+        .safeAreaInset(edge: .bottom) { inputFrame }
         .navigationTitle(breadcrumb ?? "")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            // The whole header lives on the back button's row: state dot +
+            // title at principal, level switcher + surface toggle trailing.
+            // No second strip row — the chat owns the vertical space.
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(stateColor)
+                        .frame(width: 8, height: 8)
+                        .accessibilityLabel(Text(state.rawValue))
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(agentName)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                        if let breadcrumb {
+                            Text(breadcrumb)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                HStack(spacing: 4) {
+                    DetailLevelSwitcher(level: level) { newLevel in
+                        level = newLevel
+                        changeLevel(newLevel, paneID)
+                    }
+                    if let stripAccessory {
+                        stripAccessory
+                    }
+                }
+            }
+        }
+    }
+
+    private var stateColor: Color {
+        switch state {
+        case .idle: .secondary
+        case .running: .green
+        case .blocked: .orange
+        case .offline: .red
+        }
     }
 
     /// The zero-height row above the transcript: presence reports "the user
@@ -174,5 +223,107 @@ struct ChatScreen: View {
             pending: content.pending,
             level: level
         )
+    }
+
+    // MARK: - Floating input
+
+    /// The lower-right input affordance: one floating button that opens the
+    /// input frame (and the keyboard). Nothing lives on the chat's vertical
+    /// axis until the user asks for it.
+    @State private var inputPresented = false
+    @State private var draft = ""
+    @State private var isSending = false
+    @FocusState private var inputFocused: Bool
+
+    private var inputOverlay: some View {
+        VStack {
+            Spacer()
+            HStack {
+                Spacer()
+                Button {
+                    inputPresented = true
+                    inputFocused = true
+                } label: {
+                    Image(systemName: "text.cursor")
+                        .font(.title3)
+                        .frame(width: 52, height: 52)
+                }
+                .buttonStyle(.borderedProminent)
+                .clipShape(Circle())
+                .shadow(radius: 3, y: 2)
+                .accessibilityLabel("Message the agent")
+                .padding()
+            }
+        }
+    }
+
+    /// The input frame: a bottom bar with the draft field. The router owns
+    /// prefix classification, suggestions, and delivery of non-plain
+    /// commands; plain text flows to `deliver`.
+    @ViewBuilder
+    private var inputFrame: some View {
+        if inputPresented, let router {
+            VStack(spacing: 0) {
+                if router.hasActiveSuggestions {
+                    ComposerSuggestionRow(
+                        router: router, draft: draft,
+                        applyDraft: { draft = $0 })
+                }
+                if let error = router.routingError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.top, 6)
+                }
+                HStack(spacing: 8) {
+                    TextField("Message — / # @ ! for commands", text: $draft, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .focused($inputFocused)
+                        .onChange(of: draft) { _, new in
+                            router.updateSuggestions(forDraft: new)
+                        }
+                        .onSubmit { sendDraft() }
+                    Button {
+                        sendDraft()
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.title2)
+                    }
+                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSending)
+                    .accessibilityLabel("Send")
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+            }
+            .background(.bar)
+            .overlay(alignment: .top) { Divider() }
+        }
+    }
+
+    private func sendDraft() {
+        let text = draft
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            !isSending, let router
+        else { return }
+        isSending = true
+        Task {
+            defer { isSending = false }
+            let outcome = await router.submit(text)
+            switch outcome {
+            case .handled:
+                draft = ""
+            case .rejected:
+                break  // draft stays for editing; routingError explains
+            case .passthrough:
+                do {
+                    try await deliver?(text)
+                    draft = ""
+                } catch {
+                    // Delivery failed: keep the draft for retry.
+                }
+            }
+        }
     }
 }
