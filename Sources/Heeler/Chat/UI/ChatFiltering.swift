@@ -37,9 +37,12 @@ internal enum ChatRow: Sendable, Equatable, Identifiable {
     case text(messageID: UUID, blockIndex: Int, role: ChatRole, text: String)
     /// An assistant `ChatBlock.thinking` payload — L3+, collapsed by default.
     case thinking(messageID: UUID, blockIndex: Int, text: String)
-    /// An assistant `ChatBlock.toolCall` — L1+. `result` is the
-    /// `toolCallId`-paired result attached at L2+; nil at L1 and for
-    /// still-running calls at L2+ (spinner state).
+    /// An assistant `ChatBlock.toolCall` — at the tool's visibility level:
+    /// L1 for ordinary tools; todo checklists ride L2 (they are rendered
+    /// results), subagent (`task`) spawns ride L3 (they are agent
+    /// internals, alongside thinking). `result` is the `toolCallId`-paired
+    /// result attached at L2+; nil at L1 and for still-running calls at L2+
+    /// (spinner state).
     case toolCall(messageID: UUID, blockIndex: Int, call: ToolCall, result: ToolResult?)
     /// A result whose tool call is outside the visible message window
     /// (window-boundary orphan), so it has no row to pair into — L2+.
@@ -127,7 +130,7 @@ internal enum ChatFiltering {
                         rows.append(.text(messageID: message.id, blockIndex: index, role: .assistant, text: text))
                     case .thinking(let text) where level >= .l3:
                         rows.append(.thinking(messageID: message.id, blockIndex: index, text: text))
-                    case .toolCall(let call) where level >= .l1:
+                    case .toolCall(let call) where level >= Self.visibilityLevel(for: call):
                         // The result only pairs in at L2; L1 is the
                         // name-only line.
                         let result = level >= .l2 ? resultsByCall[call.id] : nil
@@ -153,15 +156,46 @@ internal enum ChatFiltering {
         }
 
         // Window-boundary orphans: results whose call is not among the
-        // visible messages. L2+, after the transcript so they never
-        // interleave into a turn they don't belong to.
-        if level >= .l2 {
-            for result in toolResults where !visibleCallIDs.contains(result.toolCallId) {
-                rows.append(.orphanResult(result))
-            }
+        // visible messages, after the transcript so they never interleave
+        // into a turn they don't belong to. Floored at L2 (a result body
+        // is result chrome like any other) AND the call's name-based level —
+        // a `task` result never surfaces before its call's level would.
+        for result in toolResults
+        where !visibleCallIDs.contains(result.toolCallId)
+            && level >= .l2
+            && level >= Self.visibilityLevel(toolName: result.toolName) {
+            rows.append(.orphanResult(result))
         }
 
         rows.append(contentsOf: pending.map(ChatRow.pending))
         return rows
+    }
+
+    /// The detail level at which a tool call becomes visible. Ordinary tools
+    /// are L1 (names) as before; `todo` checklists and `task` (subagent
+    /// spawn) blocks are agent self-management — folded into the existing
+    /// levels instead of new toggle buttons. Evidence from real omp
+    /// sessions: both arrive as ordinary toolCall/toolResult records, so no
+    /// parser change is needed — only the visibility mapping differs:
+    ///   - `todo` rides L2 "Results": its result record is the rendered
+    ///     checklist, which is what L2 is for.
+    ///   - `task` rides L3 "Thinking": subagent activity is agent
+    ///     internals, same shelf as the agent's own thinking.
+    /// Level nesting is preserved: L3 ⊇ L2 ⊇ L1 ⊇ L0.
+    static func visibilityLevel(for call: ToolCall) -> DetailLevel {
+        visibilityLevel(toolName: call.name)
+    }
+
+    /// Tool-name form (also gates orphaned results, which carry no call
+    /// object — the call sites floor it at L2 themselves).
+    static func visibilityLevel(toolName: String) -> DetailLevel {
+        switch toolName {
+        case "task":
+            return .l3
+        case "todo":
+            return .l2
+        default:
+            return .l1
+        }
     }
 }

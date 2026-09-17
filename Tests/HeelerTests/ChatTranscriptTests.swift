@@ -187,4 +187,57 @@ import Testing
         let line = #"{"type":"message","message":{"role":"newInAPiUpdate","content":[{"type":"text","text":"x"}]}}"#
         #expect(OmpTranscriptParser.parse(line: line) == nil)
     }
+
+    /// The todo/task call+result records extracted verbatim from real omp
+    /// sessions (Fixtures/Transcripts/omp-agent-management.jsonl): both are
+    /// ordinary toolCall + toolResult records — evidence that no parser
+    /// change is needed for visibility control.
+    @Test func parsesRealTodoAndTaskRecords() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/Transcripts/omp-agent-management.jsonl")
+        let raw = try String(contentsOf: url, encoding: .utf8)
+        let lines = raw.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+        let (messages, results) = OmpTranscriptParser.parse(lines: lines)
+
+        // One assistant turn carrying a `todo` call, one carrying a `task`
+        // call.
+        let calls = messages.flatMap(\.blocks).compactMap { block -> ToolCall? in
+            guard case .toolCall(let call) = block else { return nil }
+            return call
+        }
+        let names = calls.map(\.name).sorted()
+        #expect(names == ["task", "todo", "todo"])
+        // The real `todo` op is init/done — decoded as ordinary arguments.
+        let ops = calls.filter { $0.name == "todo" }.compactMap {
+            $0.arguments["op"]?.stringValue
+        }
+        #expect(ops == ["done", "done"])
+        // Real opaque ids survive verbatim (never parsed).
+        #expect(Set(calls.map(\.id)) == [
+            "todo:0#5024a45c7c24404db0179f21b19ca365",
+            "todo:1#d83d081d95474b46b85f12133ff68d2a",
+            "chatcmpl-tool-26a54d122aa141b8868476c33250ab67",
+        ])
+
+        // Three paired toolResult records: two todo checklists and one
+        // subagent-spawn report.
+        #expect(results.count == 3)
+        let resultNames = Set(results.map(\.toolName))
+        #expect(resultNames == ["task", "todo"])
+        // The todo result body IS the rendered checklist.
+        let checklist = results.first { $0.toolName == "todo" }
+        #expect(checklist?.content.hasPrefix("Remaining items") == true)
+        #expect(checklist?.content.contains("[X] Parser slice (Chat/Transcript)") == true)
+        // The task result reports spawned agents.
+        let spawn = results.first { $0.toolName == "task" }
+        #expect(spawn?.content.hasPrefix("Spawned 4 background agents using scout.") == true)
+    }
+
+    @Test func toolExecutionStartCustomRecordIsSkipped() {
+        // Verbatim `custom` record from a real session: `tool_execution_start`
+        // fires for EVERY tool (not just subagent spawns), so it stays noise.
+        let line = #"{"type":"custom","customType":"tool_execution_start","data":{"toolCallId":"read_0_598377ff","toolName":"read","startedAt":"2026-09-17T14:29:53.291Z","args":{"path":"/Users/jhou/src"},"intent":"Listing current directory"},"id":"fb7b2429","parentId":"16ecd14c","timestamp":"2026-09-17T14:29:53.291Z"}"#
+        #expect(OmpTranscriptParser.parse(line: line) == nil)
+    }
 }
