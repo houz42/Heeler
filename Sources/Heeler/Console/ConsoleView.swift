@@ -531,6 +531,7 @@ struct ConsoleView: View {
                 agentRow(agent)
                     .padding(.leading, CGFloat(depth) * 16)
                     .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
+                    .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
             }
         }
     }
