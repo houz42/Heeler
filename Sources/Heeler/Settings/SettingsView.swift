@@ -26,6 +26,17 @@ enum SettingsAboutDestination: String, Equatable, CaseIterable, Sendable {
         }
     }
 }
+/// Uses the same identity/metatype/destination convention as About routes.
+enum SettingsHeaderLayoutDestination: String, Sendable {
+    case header = "settings.headerLayout"
+
+    var destinationTypeName: String { String(reflecting: HeaderLayoutSettingsView.self) }
+
+    @MainActor
+    func destinationView(console: ConsoleStore, store: HeaderLayoutSettingsStore) -> HeaderLayoutSettingsView {
+        HeaderLayoutSettingsView(console: console, store: store)
+    }
+}
 
 /// Uses the same identity/metatype/destination convention as About routes.
 enum SettingsAgentListDestination: String, Sendable {
@@ -53,6 +64,7 @@ struct SettingsView: View {
     let hosts: [Host]
 
     static let agentListDestination = SettingsAgentListDestination.fields
+    static let headerLayoutDestination = SettingsHeaderLayoutDestination.header
     @Environment(\.dismiss) private var dismiss
 
     static let repositoryURL = URL(string: "https://github.com/ZingerLittleBee/Heeler")
@@ -118,6 +130,13 @@ struct SettingsView: View {
                         Label("Agent List Fields", systemImage: "list.bullet.rectangle")
                     }
                     .accessibilityIdentifier(Self.agentListDestination.rawValue)
+                    NavigationLink {
+                        Self.headerLayoutDestination.destinationView(
+                            console: console, store: HeaderLayoutSettingsStore.shared)
+                    } label: {
+                        Label("In-Agent Header", systemImage: "rectangle.topthird.inset.filled")
+                    }
+                    .accessibilityIdentifier(Self.headerLayoutDestination.rawValue)
                     NavigationLink {
                         NotificationSettingsView(
                             pushRegistration: pushRegistration,
