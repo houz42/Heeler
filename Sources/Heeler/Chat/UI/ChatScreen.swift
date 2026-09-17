@@ -338,10 +338,6 @@ struct ChatScreen: View {
                             draft = newText
                         },
                         isFocused: $inputFocused)
-                    // A UIViewRepresentable has no intrinsic content size
-                    // here; without a cap it claims the whole screen. Grows
-                    // to ~6 lines, then the UITextView scrolls internally.
-                    .frame(minHeight: 36, maxHeight: 120)
                     Button {
                         sendDraft()
                     } label: {
