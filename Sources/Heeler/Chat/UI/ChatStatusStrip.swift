@@ -147,18 +147,24 @@ struct DetailLevelSwitcher: View {
                             }
                             Spacer()
                         }
-                        .padding(.horizontal, 10)
+                        .padding(.horizontal, 8)
                         .padding(.vertical, 6)
                         .background(
                             candidate == level
                                 ? Color.accentColor.opacity(0.15) : Color.clear,
+                            // Concentric corners: inner radius = card radius
+                            // minus the inset, so the tint never pokes past
+                            // the card's rounded corners.
                             in: RoundedRectangle(cornerRadius: 8))
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(6)
+            .padding(4)
+            // The card clips its own rounded shape — the selected row's tint
+            // can never overlap the frame.
+            .clipShape(RoundedRectangle(cornerRadius: 12))
             .presentationCompactAdaptation(.popover)
         }
     }
