@@ -75,6 +75,26 @@ final class ChatPrefixKeyBarView: UIView {
 
     private static let barHeight: CGFloat = 44
 
+    /// The keyboard's accessory hosting sizes the bar by frame/intrinsic
+    /// size, not by constraints: the bar is created with frame .zero and
+    /// autoresizing .flexibleWidth, so without this it docks at zero
+    /// height — invisible behind the keys even though its constraints
+    /// would measure 44pt. (A `systemLayoutSizeFitting` test passes
+    /// either way; the keyboard does not call it.)
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: UIView.noIntrinsicMetric, height: Self.barHeight)
+    }
+
+    /// The keyboard's accessory hosting frames the bar, it does not run
+    /// a constraint-solving size pass: created with frame .zero and
+    /// autoresizing-based layout, a zero frame docks at zero height —
+    /// invisible behind the keys even though `systemLayoutSizeFitting`
+    /// (which DOES solve constraints) would measure 44pt. Start at the
+    /// declared height; .flexibleWidth keeps width following the screen.
+    convenience init() {
+        self.init(frame: CGRect(x: 0, y: 0, width: 0, height: Self.barHeight))
+    }
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         install()
@@ -137,7 +157,9 @@ final class ChatPrefixKeyBarView: UIView {
             hairline.trailingAnchor.constraint(equalTo: trailingAnchor),
             hairline.bottomAnchor.constraint(equalTo: bottomAnchor),
             hairline.heightAnchor.constraint(equalToConstant: separatorHeight),
-            heightAnchor.constraint(equalToConstant: Self.barHeight),
+            // No self heightAnchor: with autoresizing layout that would
+            // fight the autoresizing-derived height constraint. Frame +
+            // intrinsicContentSize carry the 44pt.
         ])
     }
 }

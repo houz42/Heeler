@@ -240,28 +240,17 @@ enum ComposerRouter {
         return first == "#" ? .tag(query: rest) : .mention(query: rest)
     }
 
-    /// `/` suggestions: client-local commands first (they outrank the
-    /// agent's own), then the agent's commands from its provider, matched
-    /// by name prefix only — a command is completed by its name, and
-    /// matching its description would drown two-letter queries in
-    /// unrelated rows. An empty query lists them all, capped.
+    /// `/` suggestions: the agent's own commands first — the menu exists
+    /// to complete what the agent understands — then the client-local
+    /// commands, matched by name prefix only — a command is completed by
+    /// its name, and matching its description would drown two-letter
+    /// queries in unrelated rows. An empty query lists them all, capped.
     static func slashSuggestions(
         matching query: String,
         agentCommands: [AgentSlashCommand]
     ) -> [ComposerSuggestion] {
         let needle = query.lowercased()
         var matches: [ComposerSuggestion] = []
-        for command in ComposerLocalCommand.all
-        where needle.isEmpty || command.name.hasPrefix(needle) {
-            matches.append(
-                ComposerSuggestion(
-                    id: "local:" + command.name,
-                    title: command.name,
-                    detail: command.summary,
-                    insertion: "/\(command.name) ",
-                    kind: .local,
-                    usage: command.usage))
-        }
         for command in agentCommands
         where needle.isEmpty || command.name.hasPrefix(needle) {
             matches.append(
@@ -271,6 +260,17 @@ enum ComposerRouter {
                     detail: command.summary,
                     insertion: "/\(command.name) ",
                     kind: .slash,
+                    usage: command.usage))
+        }
+        for command in ComposerLocalCommand.all
+        where needle.isEmpty || command.name.hasPrefix(needle) {
+            matches.append(
+                ComposerSuggestion(
+                    id: "local:" + command.name,
+                    title: command.name,
+                    detail: command.summary,
+                    insertion: "/\(command.name) ",
+                    kind: .local,
                     usage: command.usage))
         }
         return Array(matches.prefix(maximumSuggestions))
