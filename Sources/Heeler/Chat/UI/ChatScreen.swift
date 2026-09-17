@@ -95,21 +95,87 @@ struct ChatScreen: View {
     /// transition the tests can drive.
     @State private var pagingGate = ChatPagingGate()
     @State private var topSentinelVisible = false
+    /// The bottom sentinel's visibility drives the jump control's
+    /// newest-end button.
+    @State private var bottomSentinelVisible = false
 
     @Environment(\.openURL) private var openURL
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    topSentinel
-                    ForEach(rows) { row in
-                        LinkifiedChatRow(row: row, router: openRouter)
-                            .padding(.horizontal, 12)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        topSentinel
+                        ForEach(rows) { row in
+                            LinkifiedChatRow(row: row, router: openRouter)
+                                .padding(.horizontal, 12)
+                        }
+                        bottomSentinel
+                    }
+                    .padding(.vertical, 10)
+                }
+                // A transcript that parsed to zero rows (metadata-only session
+                // file, or a resumed session writing elsewhere) must not render
+                // as a blank screen.
+                .overlay {
+                    if rows.isEmpty {
+                        ContentUnavailableView(
+                            "No Messages Yet",
+                            systemImage: "text.bubble",
+                            description: Text(
+                                "This transcript has no conversation records. The agent may be writing to a different session file."))
                     }
                 }
-                .padding(.vertical, 10)
+                // Chat convention: open on the LATEST message; prepended
+                // older pages keep the visible row anchored (no jump).
+                .defaultScrollAnchor(.bottom)
+                .onChange(of: pagingInputs) { _, _ in
+                    firePagingIfNeeded()
+                }
+                .modifier(
+                    ChatOpenersSurface(
+                        router: openRouter,
+                        fetch: fetch ?? { _ in throw CocoaError(.fileNoSuchFile) }))
+                // The terminal Attach surface's jump chrome, adapted: one
+                // floating pill on the trailing edge, up = oldest loaded,
+                // down = latest. Each appears only when its end is offscreen.
+                .overlay(alignment: .trailing) {
+                    ChatJumpControl(
+                        showsOldest: !topSentinelVisible && !rows.isEmpty,
+                        showsNewest: !bottomSentinelVisible,
+                        onOldest: {
+                            if let first = rows.first {
+                                withAnimation(.snappy) {
+                                    proxy.scrollTo(first.id, anchor: .top)
+                                }
+                            }
+                        },
+                        onNewest: {
+                            if let last = rows.last {
+                                withAnimation(.snappy) {
+                                    proxy.scrollTo(last.id, anchor: .bottom)
+                                }
+                            }
+                        })
+                    .padding(.trailing, 8)
+                }
             }
+            // A transcript that parsed to zero rows (metadata-only session
+            // file, or a resumed session writing elsewhere) must not render
+            // as a blank screen.
+            .overlay {
+                if rows.isEmpty {
+                    ContentUnavailableView(
+                        "No Messages Yet",
+                        systemImage: "text.bubble",
+                        description: Text(
+                            "This transcript has no conversation records. The agent may be writing to a different session file."))
+                }
+            }
+            // Chat convention: open on the LATEST message; prepended
+            // older pages keep the visible row anchored (no jump).
+            .defaultScrollAnchor(.bottom)
             .onChange(of: pagingInputs) { _, _ in
                 firePagingIfNeeded()
             }
@@ -165,6 +231,15 @@ struct ChatScreen: View {
                     .onDisappear { topSentinelVisible = false }
             }
         }
+    }
+
+    /// Zero-height row below the transcript: visibility here means the
+    /// latest message is on screen, which hides the jump pill's down button.
+    private var bottomSentinel: some View {
+        Color.clear
+            .frame(height: 0)
+            .onAppear { bottomSentinelVisible = true }
+            .onDisappear { bottomSentinelVisible = false }
     }
 
     private var pagingInputs: [Bool] {
@@ -314,6 +389,65 @@ struct ChatScreen: View {
                 }
             }
         }
+    }
+}
+
+/// The chat scroll jump pill: the terminal Attach surface's
+/// MessageJumpControlView adapted for the transcript. One floating capsule
+/// on the trailing edge — up goes to the oldest loaded row (the top
+/// sentinel keeps paging older on arrival), down goes to the latest. A
+/// direction renders only while its end is offscreen; nothing shows at rest.
+struct ChatJumpControl: View {
+    let showsOldest: Bool
+    let showsNewest: Bool
+    let onOldest: () -> Void
+    let onNewest: () -> Void
+
+    var body: some View {
+        if showsOldest || showsNewest {
+            VStack(spacing: 0) {
+                if showsOldest {
+                    jumpButton("chevron.up", label: "Oldest message", action: onOldest)
+                }
+                if showsOldest, showsNewest {
+                    Rectangle()
+                        .fill(.primary.opacity(0.14))
+                        .frame(width: 18, height: 1)
+                        .allowsHitTesting(false)
+                }
+                if showsNewest {
+                    jumpButton("chevron.down", label: "Latest message", action: onNewest)
+                }
+            }
+            .background {
+                Capsule()
+                    .fill(.ultraThinMaterial)
+                    .overlay {
+                        Capsule().strokeBorder(.primary.opacity(0.2), lineWidth: 1)
+                    }
+                    .shadow(color: .black.opacity(0.3), radius: 12, y: 4)
+                    .allowsHitTesting(false)
+            }
+            .transition(.scale(scale: 0.85).combined(with: .opacity))
+            .animation(.snappy(duration: 0.22), value: showsOldest || showsNewest)
+            .accessibilityElement(children: .contain)
+        }
+    }
+
+    private func jumpButton(
+        _ systemImage: String, label: String, action: @escaping () -> Void
+    ) -> some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            action()
+        } label: {
+            Image(systemName: systemImage)
+                .font(.system(size: 15, weight: .semibold))
+                .frame(width: 40, height: 40)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 }
 
