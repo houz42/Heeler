@@ -436,7 +436,7 @@ final class AgentComposerStore: ComposerDraftOperations {
         return message.agentWasWorkingAtSend ? .agentBusy : .acknowledged
     }
 
-    private static let missingAttachMessage =
+    private nonisolated static let missingAttachMessage =
         "The message could not be sent. Check the connection and retry."
     private static let unsafeTextMessage =
         "The message contains unsafe terminal control characters."
@@ -576,7 +576,7 @@ final class AgentComposerStore: ComposerDraftOperations {
         return NSRange(location: location, length: clampedLength)
     }
 
-    static func message(for error: any Error) -> String {
+    nonisolated static func message(for error: any Error) -> String {
         switch error {
         case TransportError.sshUnreachable:
             "The Host is not connected. Check the connection and retry."

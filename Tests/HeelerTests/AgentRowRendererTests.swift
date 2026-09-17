@@ -117,6 +117,30 @@ struct AgentRowRendererTests {
         #expect(AgentRowRenderer.render(layout: emptyOverride, agent: agent()).isEmpty)
     }
 
+    /// The session token (Phase 5 Sessions/Hosts blending): `host:session`
+    /// on rows that ask for it; absent (no separator) when the Host points
+    /// at the default session.
+    @Test func sessionTokenRendersOnlyForANamedSession() {
+        let layout = AgentRowLayout(rows: [[.init(.host), .init(.session), .init(.status)]])
+        func row(session: String) -> ConsoleAgent {
+            ConsoleAgent(
+                hostID: UUID(), hostName: "devbox",
+                agent: Agent(AgentInfo(
+                    agentStatus: .working, focused: false, paneID: "p", revision: 1,
+                    tabID: "t", terminalID: "term", workspaceID: "w", agent: "claude")),
+                workspaceLabel: nil, repositoryCheckout: nil, hostSessionName: session)
+        }
+        #expect(AgentRowRenderer.render(layout: layout, agent: row(session: "main")).map { $0.map(\.text).joined() }
+                == ["devbox · main · Working"])
+        #expect(AgentRowRenderer.render(layout: layout, agent: row(session: "main")).flatMap { $0.compactMap(\.token) }
+                == [.host, .session, .status])
+        // Default session: no text, no separator, no empty row.
+        #expect(AgentRowRenderer.render(layout: layout, agent: row(session: "")).map { $0.map(\.text).joined() }
+                == ["devbox · Working"])
+        #expect(AgentRowRenderer.render(layout: layout, agent: row(session: "")).flatMap { $0.compactMap(\.token) }
+                == [.host, .status])
+    }
+
     @Test func heelerOnlyFieldsRenderHostStatusAndDirectory() {
         let withCwd = ConsoleAgent(
             hostID: UUID(), hostName: "Studio Mac",

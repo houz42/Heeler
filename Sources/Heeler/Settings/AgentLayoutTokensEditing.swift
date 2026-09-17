@@ -94,6 +94,8 @@ enum AgentLayoutTokensEditing {
             "Terminal title without the Agent prefix"
         case .host:
             "Host name"
+        case .session:
+            "herdr session this Host points at"
         case .status:
             "Agent Status as text"
         case .directory:

@@ -355,6 +355,16 @@ final class ConsoleStore {
         }
     }
 
+    /// Sessions/Hosts blending (Phase 5): the local herdr sessions visible
+    /// on a Host's machine, read over its live Console connection. A
+    /// connected Host that fails the probe reports the error; an
+    /// unconnected one fails loudly like every other Host-scoped RPC.
+    func listSessions(on hostID: Host.ID) async throws -> [HerdrSession] {
+        try await projection(for: hostID).session.withTransport { transport in
+            try await transport.listSessions()
+        }
+    }
+
     /// Composer's one-shot delivery source. Prompts borrow the Host's current
     /// Console connection rather than dialing a parallel connection or holding
     /// an RPC open for Agent completion.

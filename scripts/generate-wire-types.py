@@ -60,6 +60,7 @@ METHODS = [
     "tab.create",
     "pane.read",
     "pane.close",
+    "pane.send_input",
     "session.snapshot",
     "workspace.create",
     "workspace.rename",

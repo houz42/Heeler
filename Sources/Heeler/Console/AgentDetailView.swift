@@ -225,7 +225,10 @@ struct AgentDetailView: View {
                 initialLevel: chatLevels.level(paneID: agent.agent.paneID),
                 changeLevel: { [chatLevels] level, paneID in
                     chatLevels.setLevel(level, paneID: paneID)
-                })
+                },
+                hasOlder: chat.hasOlder,
+                isLoadingOlder: chat.isLoadingOlder,
+                loadOlder: { [weak chat] in await chat?.loadOlder() })
         } else {
             ChatUnavailablePlaceholder()
         }

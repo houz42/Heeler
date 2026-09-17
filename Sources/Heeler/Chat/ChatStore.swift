@@ -130,6 +130,20 @@ final class ChatStore {
         return content
     }
 
+    /// Merges an older page's raw JSONL lines into the parsed content:
+    /// parse-the-page, prepend to the existing arrays (older history goes
+    /// above what is already rendered). Pure for the same reason as
+    /// `mergePolledLines`.
+    nonisolated static func mergeOlderLines(
+        _ lines: [String], into content: ChatContent
+    ) -> ChatContent {
+        var content = content
+        let (messages, results) = OmpTranscriptParser.parse(lines: lines)
+        content.messages.insert(contentsOf: messages, at: 0)
+        content.toolResults.insert(contentsOf: results, at: 0)
+        return content
+    }
+
     // MARK: State
 
     private(set) var phase: ChatLoadPhase = .idle
@@ -237,7 +251,7 @@ final class ChatStore {
                 return nil
             }
             hasOlder = window.hasOlder
-            content = Self.mergePolledLines(older, into: content)
+            content = Self.mergeOlderLines(older, into: content)
             return older
         } catch {
             // A failed older-page read is transient; the window keeps its

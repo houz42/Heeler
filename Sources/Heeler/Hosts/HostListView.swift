@@ -73,11 +73,16 @@ struct HostListView: View {
     /// `EventsSessionStatus.reconnecting`.
     private let manualReconnectInFlightHostIDs: Set<Host.ID>
     private let retryConnection: (@MainActor @Sendable (Host.ID) async -> Void)?
+    /// Sessions/Hosts blending (Phase 5): offers unclaimed sessions found
+    /// on connected Hosts' machines. nil keeps the list discovery-free
+    /// (previews, Hosts without a Console connection).
+    private let discovery: SessionDiscoveryStore?
     @State private var removal: HostRemovalStore
     @State private var isAddingHost = false
     @State private var isScanningToPair = false
     @State private var manualFallbackRequested = false
     @State private var path: [Host.ID] = []
+    @State private var quickAddError: String?
 
     init(
         store: HostStore,
@@ -86,7 +91,8 @@ struct HostListView: View {
         standingFailures: [Host.ID: TransportError] = [:],
         latencies: [Host.ID: Duration] = [:],
         manualReconnectInFlightHostIDs: Set<Host.ID> = [],
-        retryConnection: (@MainActor @Sendable (Host.ID) async -> Void)? = nil
+        retryConnection: (@MainActor @Sendable (Host.ID) async -> Void)? = nil,
+        discovery: SessionDiscoveryStore? = nil
     ) {
         self.store = store
         self.initialHostID = initialHostID
@@ -95,6 +101,7 @@ struct HostListView: View {
         self.latencies = latencies
         self.manualReconnectInFlightHostIDs = manualReconnectInFlightHostIDs
         self.retryConnection = retryConnection
+        self.discovery = discovery
         _removal = State(initialValue: HostRemovalStore(store: store))
     }
 
@@ -135,6 +142,7 @@ struct HostListView: View {
                             }
                         }
                         .onDelete(perform: removeHosts)
+                        quickAddSection
                     }
                 }
             }
@@ -223,6 +231,23 @@ struct HostListView: View {
             } message: {
                 Text(removal.errorMessage ?? "")
             }
+
+            /// One refresh while the sheet is up: discovery rides the
+            /// already-connected Hosts' live connections, so it runs once
+            /// on appearance rather than polling.
+            .task {
+                await refreshDiscovery()
+            }
+            .alert(
+                "Could Not Add Session",
+                isPresented: Binding(
+                    get: { quickAddError != nil },
+                    set: { if !$0 { quickAddError = nil } })
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(quickAddError ?? "")
+            }
             .task(id: initialHostID) {
                 guard
                     path.isEmpty,
@@ -249,6 +274,59 @@ struct HostListView: View {
     ) -> (@MainActor @Sendable () async -> Void)? {
         guard let retryConnection else { return nil }
         return { await retryConnection(id) }
+    }
+
+    /// Sessions/Hosts blending (Phase 5): unclaimed herdr sessions found on
+    /// a connected Host's machine, offered as one-tap Host entries. Adding
+    /// keeps every connection coordinate and the auth method, changing only
+    /// the session.
+    @ViewBuilder
+    private var quickAddSection: some View {
+        if let discovery {
+            let sections = store.hosts.compactMap { host -> (Host, [SessionDiscovery.Offer])? in
+                guard let offers = discovery.offersByHost[host.id], !offers.isEmpty else {
+                    return nil
+                }
+                return (host, offers)
+            }
+            ForEach(sections, id: \.0.id) { host, offers in
+                Section {
+                    ForEach(offers) { offer in
+                        Button {
+                            addQuickSession(offer, on: host)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("\(host.displayName) · session \(offer.sessionName)")
+                                    .font(.subheadline)
+                                Text(offer.isRunning ? "Running" : "Stopped")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Discovered Sessions")
+                } footer: {
+                    Text("Tap to add a session as its own Host, reusing \(host.displayName)'s connection.")
+                }
+            }
+        }
+    }
+
+    private func refreshDiscovery() async {
+        guard let discovery else { return }
+        for host in store.hosts where connectionStatuses[host.id] == .connected {
+            await discovery.refresh(host: host, catalog: store.hosts)
+        }
+    }
+
+    private func addQuickSession(_ offer: SessionDiscovery.Offer, on host: Host) {
+        guard let discovery else { return }
+        do {
+            try discovery.add(offer, from: host, to: store)
+        } catch {
+            quickAddError = "The session could not be saved as a Host."
+        }
     }
 }
 

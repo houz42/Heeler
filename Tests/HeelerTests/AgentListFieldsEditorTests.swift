@@ -484,7 +484,7 @@ struct AgentListFieldsInlineEditingTests {
         #expect(editor.errorMessage == AgentListFieldsCopy.unreadableCatalogEdit)
         #expect(editor.isEditing == false && editor.drafts.isEmpty)
         #expect(editor.layout(for: hostID) == .consoleDefault)
-        #expect(AgentLayoutTokensEditing.availableHeelerFields(in: editor.layout(for: hostID).rows[2]) == [.host, .status])
+        #expect(AgentLayoutTokensEditing.availableHeelerFields(in: editor.layout(for: hostID).rows[2]) == [.host, .status, .session])
         #expect(defaults.data(forKey: "agent-row-layouts") == Data("not json".utf8))
     }
 

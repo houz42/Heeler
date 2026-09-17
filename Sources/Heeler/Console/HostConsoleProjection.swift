@@ -689,6 +689,7 @@ final class HostConsoleProjection {
                 repositoryCheckout: workspace?.worktree.map(RepositoryCheckout.init),
                 lastOutputSnippet: agentsByPane[agent.paneID]?.lastOutputSnippet,
                 hostUsername: host.username,
+                hostSessionName: host.sessionName,
                 tabLabel: tab?.label,
                 tabPosition: tab.flatMap { tabPositions[$0.tabID] },
                 workspaceTabCount: max(workspace?.tabCount ?? 0, tabCounts[agent.workspaceID] ?? 0),

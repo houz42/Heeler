@@ -695,6 +695,13 @@ actor HeelerSSHTransport: Transport {
             decoding: OkResponse.self)
     }
 
+    func sendPaneInput(_ params: PaneSendInputParams) async throws {
+        _ = try await request(
+            method: "pane.send_input",
+            params: params,
+            decoding: OkResponse.self)
+    }
+
     func createShellTerminal(
         _ creation: ShellTerminalCreationRequest
     ) async throws -> ShellTerminalIdentity {

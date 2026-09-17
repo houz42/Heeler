@@ -45,6 +45,11 @@ protocol Transport: Sendable {
     /// herdr's own spellings, shared with `pane.send_keys` / `pane.send_input`.
     func sendAgentKeys(_ params: AgentSendKeysParams) async throws
 
+    /// Types text (and/or keys) into any Pane (`pane.send_input`) — the
+    /// Composer bash mode's delivery into a scratch shell pane. Unlike
+    /// `agent.prompt` this never appends Enter unless asked.
+    func sendPaneInput(_ params: PaneSendInputParams) async throws
+
     /// Starts a new Agent: the new-agent flow (#12, User Story 8 — dispatch
     /// work from the road). Creates a fresh herdr tab in the chosen workspace,
     /// starts the requested agent in its root pane, and returns the Agent once
@@ -273,6 +278,11 @@ extension Transport {
     ) async throws -> Data {
         throw TransportError.channelFailed(
             detail: "This transport cannot read transcript file chunks.")
+    }
+
+    func sendPaneInput(_ params: PaneSendInputParams) async throws {
+        throw TransportError.channelFailed(
+            detail: "This transport cannot send pane input.")
     }
 
     /// Non-SSH test doubles and alternative transports can state that SFTP is

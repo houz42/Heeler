@@ -57,10 +57,18 @@ struct AgentCardView: View {
     }
 
     private var hostText: some View {
-        Text(verbatim: agent.hostName)
+        Text(verbatim: hostChip)
             .font(.caption)
             .foregroundStyle(.secondary)
             .lineLimit(1)
+    }
+
+    /// The trailing Host chip: `host:session` when the Host points at a
+    /// named herdr session, else the Host name alone.
+    private var hostChip: String {
+        agent.hostSessionName.isEmpty
+            ? agent.hostName
+            : "\(agent.hostName):\(agent.hostSessionName)"
     }
 }
 

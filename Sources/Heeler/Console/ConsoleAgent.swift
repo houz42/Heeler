@@ -13,6 +13,9 @@ struct ConsoleAgent: Identifiable, Sendable, Equatable {
 
     let hostID: Host.ID
     let hostName: String
+    /// Named herdr session this Host points at; empty means the default
+    /// session (and an empty `session` row token).
+    let hostSessionName: String
     /// SSH account name, used only for conservative presentation of standard
     /// macOS/Linux home paths as `~`. The actual remote path stays unchanged.
     let hostUsername: String?
@@ -46,6 +49,7 @@ struct ConsoleAgent: Identifiable, Sendable, Equatable {
         repositoryCheckout: RepositoryCheckout?,
         lastOutputSnippet: String? = nil,
         hostUsername: String? = nil,
+        hostSessionName: String = "",
         tabLabel: String? = nil,
         tabPosition: Int? = nil,
         workspaceTabCount: Int = 0,
@@ -54,6 +58,7 @@ struct ConsoleAgent: Identifiable, Sendable, Equatable {
     ) {
         self.hostID = hostID
         self.hostName = hostName
+        self.hostSessionName = hostSessionName
         self.hostUsername = hostUsername
         self.agent = agent
         self.workspaceLabel = workspaceLabel

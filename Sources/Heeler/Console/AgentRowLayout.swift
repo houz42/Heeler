@@ -1,8 +1,8 @@
 import Foundation
 
 /// Field names. herdr sidebar.json builtins and `$custom` plugin keys, plus
-/// Heeler-only names (`host`, `status`, `directory`) that exist in the app
-/// layout, not as authored plugin fields.
+/// Heeler-only names (`host`, `status`, `session`, `directory`) that exist in
+/// the app layout, not as authored plugin fields.
 ///
 /// `state_icon` still parses so herdr snapshots and older saved layouts keep
 /// decoding, but Console layouts drop it (`normalizedForConsole`) and the
@@ -10,7 +10,7 @@ import Foundation
 enum AgentRowToken: RawRepresentable, Codable, Hashable, Sendable {
     case stateIcon, stateText, workspace, tab, pane, agent
     case terminalTitle, terminalTitleStripped
-    case host, status, directory
+    case host, status, session, directory
     case custom(String)
 
     /// herdr fields the Field Editor offers. Excludes `state_icon`.
@@ -20,7 +20,7 @@ enum AgentRowToken: RawRepresentable, Codable, Hashable, Sendable {
     ]
 
     static let heelerBuiltins: [Self] = [
-        .host, .status, .directory,
+        .host, .status, .session, .directory,
     ]
 
     static let builtins: [Self] = herdrBuiltins + heelerBuiltins
@@ -37,6 +37,7 @@ enum AgentRowToken: RawRepresentable, Codable, Hashable, Sendable {
         case "terminal_title_stripped": self = .terminalTitleStripped
         case "host": self = .host
         case "status": self = .status
+        case "session": self = .session
         case "directory": self = .directory
         default:
             guard rawValue.first == "$" else { return nil }
@@ -61,6 +62,7 @@ enum AgentRowToken: RawRepresentable, Codable, Hashable, Sendable {
         case .terminalTitleStripped: "terminal_title_stripped"
         case .host: "host"
         case .status: "status"
+        case .session: "session"
         case .directory: "directory"
         case .custom(let name): "$\(name)"
         }

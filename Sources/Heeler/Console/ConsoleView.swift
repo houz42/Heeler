@@ -163,7 +163,11 @@ struct ConsoleView: View {
                 standingFailures: console.hostStandingFailures,
                 latencies: console.hostLatencies,
                 manualReconnectInFlightHostIDs: manualReconnectInFlightHostIDs,
-                retryConnection: { await reconnectHost($0) })
+                retryConnection: { await reconnectHost($0) },
+                // One discovery store per sheet presentation, probing over
+                // the Console's live connections.
+                discovery: SessionDiscoveryStore(
+                    listSessions: { hostID in try await console.listSessions(on: hostID) }))
             .modifier(ConsoleSheetPresentationModifier(
                 presentation: ConsoleSheetPresentation(
                     horizontalSizeClass: horizontalSizeClass)))

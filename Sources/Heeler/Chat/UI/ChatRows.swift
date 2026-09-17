@@ -259,3 +259,125 @@ struct ChatPendingRow: View {
         .background(.orange.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
     }
 }
+
+// MARK: - Linkified chat text (openers)
+
+/// The linkified form of `ChatBlockText`: same typography and selection,
+/// with `ChatLinkDetector`'s targets applied as tappable links routed
+/// through `OpenRouterCore`. Rows keep their exact layout — this wrapper
+/// only swaps the inner `Text` for an attributed one; when no links are
+/// detected the attributed string carries no links and rendering is
+/// unchanged.
+struct ChatLinkText: View {
+    let text: String
+    let style: ChatBlockText.Style
+    let router: OpenRouterCore?
+
+    @Environment(\.openURL) private var openURL
+
+    init(
+        _ text: String, style: ChatBlockText.Style, router: OpenRouterCore?
+    ) {
+        self.text = text
+        self.style = style
+        self.router = router
+    }
+
+    var body: some View {
+        Text(attributed)
+            .font(style.font)
+            .foregroundStyle(style.color)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: alignment)
+            .environment(
+                \.openURL,
+                OpenURLAction { url in
+                    guard let router else { return .discarded }
+                    router.open(ChatLinkTarget(linkURL: url))
+                    return .handled
+                })
+    }
+
+    /// The row's text with detected targets linked. Pure function of the
+    /// text, so it is testable without a view.
+    static func attributedText(
+        _ text: String
+    ) -> AttributedString {
+        var attributed = AttributedString(text)
+        for link in ChatLinkDetector.detect(in: text) {
+            guard let range = Range(link.range, in: attributed) else { continue }
+            attributed[range].link = link.target.linkURL
+        }
+        return attributed
+    }
+
+    private var attributed: AttributedString {
+        Self.attributedText(text)
+    }
+
+    private var alignment: Alignment {
+        style == .user ? .trailing : .leading
+    }
+}
+
+/// A plain `ChatRowView` with its text/thinking rows linkified. The one
+/// wrap ChatScreen applies — every row kind keeps its exact shape, only
+/// the inner text views swap to `ChatLinkText` for the rows that carry
+/// prose (user/assistant text, thinking bodies). Tool-call and result
+/// bodies are terminal-ish output; their file paths are better served by
+/// the share flow than tap-accidents mid-terminal — they stay plain v1.
+struct LinkifiedChatRow: View {
+    let row: ChatRow
+    let router: OpenRouterCore
+
+    init(row: ChatRow, router: OpenRouterCore) {
+        self.row = row
+        self.router = router
+    }
+
+    var body: some View {
+        switch row {
+        case .text(_, _, let role, let text):
+            ChatLinkText(text, style: textStyle(role), router: router)
+        case .thinking(_, _, let text):
+            ChatCollapsibleRow(
+                title: "Thinking", icon: "brain.head.profile",
+                initiallyExpanded: false, isSubtle: true
+            ) {
+                ChatLinkText(text, style: .thinking, router: router)
+            }
+        default:
+            ChatRowView(row: row)
+        }
+    }
+
+    private func textStyle(_ role: ChatRole) -> ChatBlockText.Style {
+        switch role {
+        case .user: .user
+        case .assistant: .assistant
+        case .toolResult, .bashExecution: .output
+        }
+    }
+}
+
+/// The pane-level modifier that binds an `OpenRouterCore` and presents
+/// whatever it holds. One modifier so the ChatScreen wrap stays one call.
+struct ChatOpenersSurface: ViewModifier {
+    @ObservedObject var router: OpenRouterCore
+    /// The silent remote-file fetch (Transport.readTranscriptFile in
+    /// production; in-memory closures in tests).
+    var fetch: RemoteFileFetcher
+
+    func body(content: Content) -> some View {
+        content
+            .modifier(OpenersPresenter(router: router))
+            .onChange(of: router.defaultBrowserCandidate) { _, url in
+                guard let url else { return }
+                router.clearDefaultBrowserCandidate()
+                openURL(url)
+            }
+            .task { router.fetch = fetch }
+    }
+
+    @Environment(\.openURL) private var openURL
+}
