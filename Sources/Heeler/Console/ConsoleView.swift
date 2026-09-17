@@ -533,8 +533,7 @@ struct ConsoleView: View {
                     .listRowInsets(Self.treeRowInsets)
                 }
             case .agent(let agent, let depth, let tabLabel):
-                agentRow(agent, mergedTabLabel: tabLabel)
-                    .padding(.leading, CGFloat(depth) * Self.treeIndentStep)
+                agentRow(agent, mergedTabLabel: tabLabel, leadingIndent: CGFloat(depth) * Self.treeIndentStep)
                     .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
                     .listRowInsets(Self.treeRowInsets)
             }
@@ -585,7 +584,8 @@ struct ConsoleView: View {
     /// Row 1 does), so the label never repeats.
     private func agentRow(
         _ agent: ConsoleAgent,
-        mergedTabLabel: String? = nil
+        mergedTabLabel: String? = nil,
+        leadingIndent: CGFloat = 0
     ) -> some View {
         let layout = console.rowLayout(for: agent.hostID)
         let prefix = AgentRowRenderer.unrenderedTabLabel(
@@ -598,6 +598,9 @@ struct ConsoleView: View {
                 isPinned: console.pins.isPinned(
                     hostID: agent.hostID, paneID: agent.agent.paneID),
                 headlinePrefix: prefix)
+            // Indentation rides INSIDE the link label: padding on the
+            // NavigationLink itself is dropped by List row layout.
+            .padding(.leading, leadingIndent)
         }
         .hoverEffect(.highlight)
         .contextMenu {
