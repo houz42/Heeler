@@ -66,7 +66,9 @@ struct ComposerSuggestion: Identifiable, Equatable, Sendable {
     let insertion: String
     let kind: Kind
 
-    /// The mode prefix this row's kind belongs to, for the row's glyph.
+    /// The command's usage signature (e.g. `[show|reset [account|active]]`),
+    /// shown on the row's second line when the provider carries one.
+    var usage: String? = nil
     var prefixCharacter: Character {
         switch kind {
         case .slash, .local: "/"
@@ -239,11 +241,14 @@ enum ComposerRouter {
     }
 
     /// `/` suggestions: client-local commands first (they outrank the
-    /// agent's own), then omp's built-ins, matched by name prefix only —
-    /// a command is completed by its name, and matching its description
-    /// would drown two-letter queries in unrelated rows. An empty query
-    /// lists them all.
-    static func slashSuggestions(matching query: String) -> [ComposerSuggestion] {
+    /// agent's own), then the agent's commands from its provider, matched
+    /// by name prefix only — a command is completed by its name, and
+    /// matching its description would drown two-letter queries in
+    /// unrelated rows. An empty query lists them all, capped.
+    static func slashSuggestions(
+        matching query: String,
+        agentCommands: [AgentSlashCommand]
+    ) -> [ComposerSuggestion] {
         let needle = query.lowercased()
         var matches: [ComposerSuggestion] = []
         for command in ComposerLocalCommand.all
@@ -254,17 +259,19 @@ enum ComposerRouter {
                     title: command.name,
                     detail: command.summary,
                     insertion: "/\(command.name) ",
-                    kind: .local))
+                    kind: .local,
+                    usage: command.usage))
         }
-        for (name, summary) in ompBuiltinCommands
-        where needle.isEmpty || name.hasPrefix(needle) {
+        for command in agentCommands
+        where needle.isEmpty || command.name.hasPrefix(needle) {
             matches.append(
                 ComposerSuggestion(
-                    id: "omp:" + name,
-                    title: name,
-                    detail: summary,
-                    insertion: "/\(name) ",
-                    kind: .slash))
+                    id: "omp:" + command.name,
+                    title: command.name,
+                    detail: command.summary,
+                    insertion: "/\(command.name) ",
+                    kind: .slash,
+                    usage: command.usage))
         }
         return Array(matches.prefix(maximumSuggestions))
     }
@@ -329,46 +336,4 @@ enum ComposerRouter {
                 .prefix(maximumSuggestions))
     }
 
-    /// omp's built-in slash commands, verified against the 18.2.1 binary's
-    /// command registry. Suggestions only — delivery is always the raw
-    /// text through `agent.prompt`, so an agent that lacks a command (or a
-    /// different agent kind entirely) answers honestly on its own.
-    static let ompBuiltinCommands: [(name: String, summary: String?)] = [
-        ("agents", "Open the agents hub (per-agent model, prewalk, and advisor)"),
-        ("btw", "Ask a side question, or browse this session's BTW history"),
-        ("cleanse", "Detect and fix project diagnostics with weighted parallel subagents"),
-        ("clear", "Clear the conversation context in place, keeping the session"),
-        ("collab", "Share this session live via a relay"),
-        ("compact", "Manually compact the session context"),
-        ("context", "Show estimated context usage breakdown"),
-        ("copy", "Pick text or code from the conversation to copy"),
-        ("debug", "Open debug tools selector"),
-        ("delete", "Delete the current session and start a new one"),
-        ("elide", "Strip tool results + large blocks (default)"),
-        ("exit", "Exit the application"),
-        ("fork", "Create a new fork from a previous message"),
-        ("fresh", "Reset provider stream state without changing the local transcript"),
-        ("goal", "Toggle goal mode (persistent autonomous objective for this session)"),
-        ("handoff", "Hand off session context to a new session"),
-        ("help", "Show help message"),
-        ("hub", "Open the live Agent Hub"),
-        ("images", "Strip image blocks"),
-        ("info", "Show session info and stats"),
-        ("jobs", "Show async background jobs status"),
-        ("memory", "Inspect and operate memory maintenance"),
-        ("new", "Start a new session"),
-        ("omfg", "Forge a TTSR rule from a complaint to stop a recurring behavior"),
-        ("pin", "Pin or unpin a session at the top of the resume list"),
-        ("queue", "Queue a message for after the agent yields"),
-        ("rename", "Rename the current session (omit title to generate)"),
-        ("retry", "Retry the last failed agent turn"),
-        ("session", "Session management commands"),
-        ("share", "Share session via an encrypted link (share server or secret gist)"),
-        ("shake", "Drop heavy content from context (tool results, large blocks)"),
-        ("tan", "Run a full background agent on tangential work"),
-        ("thinking", "Drop all thinking blocks"),
-        ("todo", "View or modify the agent's todo list"),
-        ("tree", "Navigate session tree (switch branches)"),
-        ("usage", "Show provider usage and limits"),
-    ]
 }

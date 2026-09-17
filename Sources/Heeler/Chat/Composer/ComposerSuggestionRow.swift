@@ -120,6 +120,13 @@ struct ComposerSuggestionRow: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
+                    if let usage = suggestion.usage {
+                        Text(usage)
+                            .font(.caption2)
+                            .fontDesign(.monospaced)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
