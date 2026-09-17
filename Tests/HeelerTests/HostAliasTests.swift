@@ -9,7 +9,6 @@ import Testing
 /// normalization, and migration of Hosts saved before the field existed.
 @MainActor
 @Suite("Host alias")
-@MainActor
 struct HostAliasTests {
     // MARK: Resolution
 
