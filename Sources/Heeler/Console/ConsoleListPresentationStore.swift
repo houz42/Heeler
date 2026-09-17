@@ -1,20 +1,19 @@
 import Foundation
 import Observation
 
-/// The two Console Agent-list presentations. Flat remains the default so
-/// introducing grouped-list support does not change the existing surface
+/// The three Console Agent-list presentations. Flat remains the default so
+/// introducing newer presentations does not change the existing surface
 /// until the UI explicitly selects it.
 enum ConsoleListPresentationMode: String, CaseIterable, Identifiable, Sendable {
     case flat
     case grouped
-
-    var id: Self { self }
-
+    case tree
     /// Toolbar / picker label for the presentation switcher.
     var title: String {
         switch self {
         case .flat: "All Agents"
         case .grouped: "By Host"
+        case .tree: "Tree"
         }
     }
 }
