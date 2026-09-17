@@ -16,6 +16,8 @@ enum ConsoleListPresentationMode: String, CaseIterable, Identifiable, Sendable {
         case .tree: "Tree"
         }
     }
+
+    var id: String { rawValue }
 }
 
 /// One Host section projected from the Host catalog and the Console's

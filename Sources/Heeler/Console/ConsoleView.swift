@@ -116,11 +116,7 @@ struct ConsoleView: View {
                                 } label: {
                                     Label(
                                         "Presentation",
-                                        systemImage: switch listPresentation.mode {
-                                        case .flat: "list.bullet"
-                                        case .grouped: "list.bullet.rectangle"
-                                        case .tree: "sidebar.leading"
-                                        })
+                                        systemImage: presentationIcon)
                                 }
                                 .hoverEffect(.highlight)
                                 .accessibilityLabel("Agent list presentation")
@@ -636,6 +632,15 @@ struct ConsoleView: View {
         Binding(
             get: { listPresentation.mode },
             set: { listPresentation.select($0) })
+    }
+
+    /// The presentation switcher's toolbar icon: one glyph per mode.
+    private var presentationIcon: String {
+        switch listPresentation.mode {
+        case .flat: "list.bullet"
+        case .grouped: "list.bullet.rectangle"
+        case .tree: "sidebar.leading"
+        }
     }
 
     private func toggleHostSection(_ hostID: Host.ID) {

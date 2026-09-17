@@ -8,6 +8,7 @@ import Testing
 /// The hierarchical Agents list: tree building (grouping, ordering, nil
 /// labels, single-agent groups), fold persistence, and aggregate-state
 /// urgency.
+@MainActor
 @Suite("Agent tree")
 struct AgentTreeTests {
     private func makeDefaults() throws -> (UserDefaults, cleanup: () -> Void) {
@@ -254,7 +255,7 @@ struct AgentTreeTests {
     // MARK: Fold persistence
 
     @Test func foldDefaultsExpandedAndPersistsAcrossLaunches() throws {
-        let (defaults, cleanup) = makeDefaults()
+        let (defaults, cleanup) = try makeDefaults()
         defer { cleanup() }
 
         let store = AgentTreeFoldStore(defaults: defaults)
