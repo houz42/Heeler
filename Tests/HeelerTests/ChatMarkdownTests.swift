@@ -347,3 +347,228 @@ private func SplashFontChat() -> Splash.Font {
         UIFont.monospacedSystemFont(ofSize: size, weight: .regular))
     return font
 }
+
+@Suite("Chat Table Styling")
+@MainActor
+struct ChatTableStylingTests {
+    /// The two-column fixture the phone complaint was about.
+    private let table = """
+        | Stage | Files |
+        | --- | --- |
+        | build | 12 |
+        | test | 34 |
+        """
+
+    @Test func headerCellIsHeavierThanBodyCells() {
+        // The theme contract: row 0 (the header) renders semibold over
+        // the filled header background; body rows render regular.
+        // Distinct weights = a header that reads as a header.
+        #expect(
+            ChatMarkdownTheme.tableCellWeight(forRow: 0)
+                == ChatMarkdownTheme.tableCellWeight(forRow: 0))
+        #expect(
+            ChatMarkdownTheme.tableCellWeight(forRow: 0) != .regular,
+            "header row must not render at the body weight")
+        #expect(
+            ChatMarkdownTheme.tableCellWeight(forRow: 1) == .regular)
+        #expect(
+            ChatMarkdownTheme.tableCellWeight(forRow: 2) == .regular)
+    }
+
+    @Test func tableParsesHeaderIntoRowZero() throws {
+        // The styling hinges on MarkdownUI numbering the header row as
+        // row 0 — verify the parse feeds the seam: header text lands in
+        // the first row, body text in the rows after. The commonmark
+        // renderer re-emits the header line without inner padding, so
+        // the check targets the unpadded pipe form.
+        let content = MarkdownContent(table)
+        let plain = content.renderPlainText()
+        #expect(plain.contains("Stage"))
+        #expect(plain.contains("build"))
+        #expect(plain.contains("test"))
+        // Structure round-trips through the table extension.
+        #expect(content.renderMarkdown().contains("|Stage|Files|"))
+    }
+
+    @Test func themedTableRendersHeaderDistinctFromBody() throws {
+        // Visual proof over the real rendering path: host the themed
+        // table in a window (the same way the app displays it), force a
+        // light window, rasterize the hierarchy, then scan every row of
+        // the table area for background shades. The theme's tiers
+        // (filled header, zebra stripe, plain row) must appear as
+        // distinct horizontal bands with the header the strongest tint.
+        let view = ChatMarkdownView(markdown: table)
+            .frame(width: 380)
+            .background(Color.white)
+        let controller = UIHostingController(rootView: view)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        window.overrideUserInterfaceStyle = .light
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        controller.view.layoutIfNeeded()
+
+        let raster = UIGraphicsImageRenderer(
+            size: controller.view.bounds.size
+        ).image { _ in
+            controller.view.drawHierarchy(
+                in: controller.view.bounds, afterScreenUpdates: true)
+        }
+
+        let bands = try #require(
+            raster.rowBackgroundBands(), "rasterization diagnostics: \(raster.diagnostics())")
+        // The table's tinted bands: the header fill (strongest), the
+        // odd-row zebra stripe (middle). The plain even body row is
+        // white — indistinguishable from the surrounding page, which is
+        // exactly why the header and stripe must carry the distinction.
+        let tinted = bands.filter { $0.shade < 0.99 }
+        #expect(
+            tinted.count >= 2,
+            "expected a header band and a stripe band, saw \(bands.map(\.shade))")
+        // Header fill is stronger than the stripe: the darkest tinted
+        // band is the header, the lighter one the stripe.
+        let shades = tinted.map(\.shade).sorted()
+        #expect(
+            shades[0] < shades[1],
+            "header fill must be stronger than the body stripe, saw \(shades)")
+        // And both are visibly tinted against white.
+        #expect(shades[0] < 0.95)
+        #expect(shades[1] < 0.99)
+        // The stripe must be weaker than the header.
+        #expect(shades[1] > shades[0] + 0.005)
+    }
+}
+
+/// Horizontal shade bands discovered in a rasterized table image: every
+/// maximal run of rows whose sampled background pixels share one shade.
+/// The image is redrawn into a context with a guaranteed RGBA-8888
+/// layout first — ImageRenderer's byte order is not contractual.
+private struct ImageRowBands {
+    /// Distinct bands top-to-bottom, each its average sampled shade
+    /// (0 = darkest, 1 = white) and row count.
+    let bands: [(shade: Double, rows: Int)]
+
+    init?(uiImage: UIImage, sampleX: Int) {
+        guard
+            let cgImage = uiImage.cgImage,
+            let data = cgImage.dataProvider?.data,
+            let bytes = CFDataGetBytePtr(data)
+        else { return nil }
+        let bytesPerRow = cgImage.bytesPerRow
+        let bytesPerPixel = cgImage.bitsPerPixel / 8
+        guard bytesPerPixel >= 3, sampleX >= 0,
+            sampleX * bytesPerPixel + 2 < bytesPerRow,
+            cgImage.height > 1
+        else { return nil }
+
+        let offset = { (y: Int) in y * bytesPerRow + sampleX * bytesPerPixel }
+        let shade = { (y: Int) in
+            let o = offset(y)
+            return (Double(bytes[o]) + Double(bytes[o + 1])
+                + Double(bytes[o + 2])) / (3 * 255)
+        }
+
+        // Rows shade-bucket to 1/255; adjacent rows within 2/255 are the
+        // same band (anti-aliasing tolerance).
+        var collected: [(shade: Double, rows: Int)] = []
+        var currentShade = shade(0)
+        var currentRows = 1
+        for y in 1..<cgImage.height {
+            let rowShade = shade(y)
+            if abs(rowShade - currentShade) < 2.0 / 255 {
+                currentShade = (currentShade * Double(currentRows) + rowShade)
+                    / Double(currentRows + 1)
+                currentRows += 1
+            } else {
+                collected.append((currentShade, currentRows))
+                currentShade = rowShade
+                currentRows = 1
+            }
+        }
+        collected.append((currentShade, currentRows))
+        // Drop hair-thin bands (row separators, text edges).
+        bands = collected.filter { $0.rows >= 4 }
+    }
+}
+
+private extension UIImage {
+    /// The image redrawn into a guaranteed RGBA-8888 (premultiplied,
+    /// last) pixel layout — ImageRenderer's byte order is not
+    /// contractual, so sampling reads this canonical copy instead.
+    var canonicalRGBA: CGImage? {
+        guard let cgImage else { return nil }
+        let width = cgImage.width
+        let height = cgImage.height
+        let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        context?.interpolationQuality = .none
+        context?.draw(
+            cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context?.makeImage()
+    }
+}
+
+private extension UIImage {
+    /// Shade bands sampled inside the table's rendered area: the image
+    /// is redrawn into a canonical RGBA layout, the table's right edge
+    /// located (content-hugging, so its x-extent is unknown), then a
+    /// column near that edge — clear of cell text — is scanned row by
+    /// row.
+    func rowBackgroundBands() -> [(shade: Double, rows: Int)]? {
+        guard let canonical = canonicalRGBA else { return nil }
+        guard let sampleX = Self.rightClearColumn(of: canonical) else {
+            return nil
+        }
+        return ImageRowBands(
+            uiImage: UIImage(cgImage: canonical), sampleX: sampleX)?.bands
+    }
+
+    /// Rasterization diagnostics for the band test's failure messages.
+    func diagnostics() -> String {
+        guard let cgImage else { return "no cgImage" }
+        return "size \(cgImage.width)x\(cgImage.height) "
+            + "bpp \(cgImage.bitsPerPixel) alpha "
+            + "\(cgImage.alphaInfo.rawValue)"
+    }
+
+    /// A column near the table's right edge, inside the fill but clear
+    /// of any cell text. The canonical layout guarantees bytes are RGB.
+    private static func rightClearColumn(
+        of cgImage: CGImage
+    ) -> Int? {
+        guard
+            let data = cgImage.dataProvider?.data,
+            let bytes = CFDataGetBytePtr(data)
+        else { return nil }
+        let bytesPerRow = cgImage.bytesPerRow
+        let bytesPerPixel = cgImage.bitsPerPixel / 8
+        guard bytesPerPixel >= 3 else { return nil }
+
+        let isColored: (_ x: Int, _ y: Int) -> Bool = { x, y in
+            let offset = y * bytesPerRow + x * bytesPerPixel
+            let r = Double(bytes[offset])
+            let g = Double(bytes[offset + 1])
+            let b = Double(bytes[offset + 2])
+            return max(r, g, b) < 250
+        }
+
+        // The table's right edge: the last column holding any non-white
+        // pixel (border, stripe, or glyph), minus a small inset to stay
+        // inside the fill.
+        var rightEdge = 0
+        for x in 0..<cgImage.width {
+            if (0..<cgImage.height).contains(where: { isColored(x, $0) }) {
+                rightEdge = x
+            }
+        }
+        guard rightEdge > 20 else { return nil }
+        return rightEdge - 6
+    }
+}

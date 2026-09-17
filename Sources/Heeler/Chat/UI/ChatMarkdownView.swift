@@ -31,7 +31,7 @@ import SwiftUI
 /// MarkdownUI's module.
 enum ChatMarkdownTheme {
     @MainActor
-    static let chat = Theme.basic
+    static let chat = MarkdownUI.Theme.basic
         .text {
             FontSize(15)
         }
@@ -57,6 +57,35 @@ enum ChatMarkdownTheme {
                 content: configuration.content,
                 language: configuration.language)
         }
+        .table { configuration in
+            ChatTableBlock { configuration.label }
+        }
+        .tableCell { configuration in
+            ChatMarkdownTheme.tableCell(
+                configuration.row, label: configuration.label)
+        }
+}
+
+extension ChatMarkdownTheme {
+    /// The table cell weight contract: the header row (row 0) renders
+    /// semibold over the theme's filled header background; body rows
+    static func tableCellWeight(forRow row: Int) -> SwiftUI.Font.Weight {
+        row == 0 ? .semibold : .regular
+    }
+
+    /// One table cell: chat body size, wrapped, padded; the header row
+    /// carries `tableCellWeight`'s heavier weight.
+    @MainActor
+    static func tableCell(
+        _ row: Int, label: MarkdownUI.TableCellConfiguration.Label
+    ) -> some View {
+        label
+            .fixedSize(horizontal: false, vertical: true)
+            .lineSpacing(2)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .font(SwiftUI.Font.subheadline.weight(tableCellWeight(forRow: row)))
+    }
 }
 
 /// One chat code block: horizontal-scrollable, subtle background with a
@@ -123,6 +152,37 @@ struct ChatCodeBlock: View {
                 .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 5))
                 .padding(6)
         }
+    }
+}
+
+/// One chat table: header row with a filled background, zebra striping,
+/// thin row separators, and horizontal scroll so wide tables pan instead
+/// of squeezing cells unreadably. Striping + row separators read better
+/// on a phone than column borders: columns are implied by cell spacing,
+/// and extra vertical rules would compete with the row separators.
+///
+/// Row backgrounds and borders are MarkdownUI environment styles applied
+/// to the table's own laid-out content; the header's semibold weight
+/// lives in the theme's `tableCell` style (row 0). This view only frames.
+struct ChatTableBlock<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            content()
+                .markdownTableBackgroundStyle(
+                    .alternatingRows(
+                        Color.primary.opacity(0.045),
+                        Color.clear,
+                        header: Color.primary.opacity(0.10))
+                )
+                .markdownTableBorderStyle(
+                    TableBorderStyle(
+                        .insideHorizontalBorders,
+                        color: Color.primary.opacity(0.10),
+                        width: 0.5))
+        }
+        .padding(.bottom, 8)
     }
 }
 
