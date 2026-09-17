@@ -504,21 +504,25 @@ struct ConsoleView: View {
         }
     }
 
-    /// The hierarchical list: Host → session → workspace → tab → Agents.
-    /// `hostSections` supplies per-Host connection/readiness, so an empty
-    /// or disconnected Host stays visible as a foldable header carrying
-    /// its state, exactly like the grouped mode's sections.
+    /// The hierarchical list: Host → session → workspace → tab → Agents,
+    /// with single-child chains collapsed into merged rows. The depth-0
+    /// row — bare Host or merged chain head — renders as the Host section
+    /// header so an empty or disconnected Host keeps its readiness state
+    /// exactly like the grouped mode's sections; the tree fold store owns
+    /// its disclosure state.
     @ViewBuilder
     private var treeAgentListRows: some View {
         ForEach(treeRows) { row in
             switch row {
             case .group(let id, let label, let depth, let count, let aggregate, let isFolded):
-                if let section = hostSection(forTreeGroup: id) {
+                if depth == 0, let section = hostSection(forTreeGroup: id) {
                     ConsoleHostSectionHeaderView(
-                        presentation: ConsoleHostSectionHeaderPresentation(section: section)
+                        presentation: ConsoleHostSectionHeaderPresentation(
+                            section: section, title: label, isCollapsed: isFolded)
                     ) {
                         toggleTreeGroup(id)
                     }
+                    .listRowInsets(Self.treeRowInsets)
                 } else {
                     AgentTreeGroupRowView(
                         id: id, label: label, depth: depth, count: count,
@@ -526,22 +530,28 @@ struct ConsoleView: View {
                     ) {
                         toggleTreeGroup(id)
                     }
+                    .listRowInsets(Self.treeRowInsets)
                 }
-            case .agent(let agent, let depth):
-                agentRow(agent)
-                    .padding(.leading, CGFloat(depth) * 16)
+            case .agent(let agent, let depth, let tabLabel):
+                agentRow(agent, mergedTabLabel: tabLabel)
+                    .padding(.leading, CGFloat(depth) * Self.treeIndentStep)
                     .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
-                    .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+                    .listRowInsets(Self.treeRowInsets)
             }
         }
     }
 
+    /// The tree's compact row chrome: rows sit closer together than the
+    /// flat/grouped lists, and every level shares one leading base so the
+    /// `depth`-scaled paddings align group and Agent rows.
+    fileprivate static let treeRowInsets = EdgeInsets(top: 2, leading: 12, bottom: 2, trailing: 12)
+    fileprivate static let treeIndentStep: CGFloat = 14
+
     /// The tree rows over the same filtered Agents the flat/grouped lists
     /// show — `hostSections` owns the per-Host connection state and the
-    /// search/Host-filter policy, so the tree inherits both. Host order
-    /// follows the catalog (`sections` projects it); everything below a
-    /// Host sorts alphabetically by group label, with `AgentTree` owning
-    /// that policy.
+    /// search/Host-filter policy, so the tree inherits both. Below each
+    /// Host, everything sorts alphabetically by group label, with
+    /// `AgentTree` owning that policy.
     private var treeRows: [AgentTreeRow] {
         AgentTree.rows(
             agents: hostSections.flatMap { $0.agents },
@@ -549,8 +559,11 @@ struct ConsoleView: View {
             emptyHosts: hostSections.map { ($0.hostID, $0.hostDisplayName) })
     }
 
-    /// The catalog section whose Host a tree group id names, when the row
-    /// is a Host-level group.
+    /// The catalog section whose Host a tree group id names. Only the
+    /// caller knows whether the row is Host-level (depth 0); this resolves
+    /// the id's Host component either way, so a merged chain head
+    /// ("h/<host>/s/…") and a bare Host id ("h/<host>") both find their
+    /// section.
     private func hostSection(forTreeGroup groupID: String) -> ConsoleHostSection? {
         guard let id = AgentTree.hostID(ofGroupID: groupID) else { return nil }
         return hostSections.first { $0.hostID == id }
@@ -566,13 +579,25 @@ struct ConsoleView: View {
         }
     }
 
-    private func agentRow(_ agent: ConsoleAgent) -> some View {
-        NavigationLink(value: agent.id) {
+    /// `mergedTabLabel` carries the tab group label a tree row folded
+    /// into this Agent's row. The prefix renders only when the card's
+    /// configured layout does not already show the tab (herdr's default
+    /// Row 1 does), so the label never repeats.
+    private func agentRow(
+        _ agent: ConsoleAgent,
+        mergedTabLabel: String? = nil
+    ) -> some View {
+        let layout = console.rowLayout(for: agent.hostID)
+        let prefix = AgentRowRenderer.unrenderedTabLabel(
+            mergedTabLabel, layout: layout, agent: agent)
+            .map { "\($0) — " } ?? ""
+        return NavigationLink(value: agent.id) {
             AgentCardView(
                 agent: agent,
-                layout: console.rowLayout(for: agent.hostID),
+                layout: layout,
                 isPinned: console.pins.isPinned(
-                    hostID: agent.hostID, paneID: agent.agent.paneID))
+                    hostID: agent.hostID, paneID: agent.agent.paneID),
+                headlinePrefix: prefix)
         }
         .hoverEffect(.highlight)
         .contextMenu {
@@ -967,12 +992,12 @@ private struct AgentTreeGroupRowView: View {
                 .frame(width: 12, alignment: .center)
                 .accessibilityHidden(true)
                 Text(label)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Spacer(minLength: 0)
                 Text("\(count)")
-                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .font(.caption2.monospacedDigit().weight(.semibold))
                     .foregroundStyle(.secondary)
                     .fixedSize()
                 if aggregateState != .unknown {
@@ -983,8 +1008,8 @@ private struct AgentTreeGroupRowView: View {
                 }
             }
             .contentShape(Rectangle())
-            .padding(.leading, CGFloat(depth) * 14)
-            .padding(.vertical, 4)
+            .padding(.leading, CGFloat(depth) * ConsoleView.treeIndentStep)
+            .padding(.vertical, 3)
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .ignore)

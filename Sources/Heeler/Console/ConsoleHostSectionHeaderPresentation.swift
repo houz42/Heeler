@@ -20,22 +20,28 @@ struct ConsoleHostSectionHeaderPresentation: Equatable {
     let accessibilityValue: String
     let accessibilityHint: String
 
-    init(section: ConsoleHostSection) {
-        hostDisplayName = section.hostDisplayName
+    init(
+        section: ConsoleHostSection,
+        title: String? = nil,
+        isCollapsed: Bool? = nil
+    ) {
+        let effectiveCollapsed = isCollapsed ?? section.isCollapsed
+        hostDisplayName = title ?? section.hostDisplayName
         readinessText = Self.readinessText(for: section)
-        isCollapsed = section.isCollapsed
+        self.isCollapsed = effectiveCollapsed
         let projectedStatusItems = section.statusCounts.items
         statusItems = projectedStatusItems
-        showsStatusPills = section.isCollapsed && !projectedStatusItems.isEmpty
+        showsStatusPills = effectiveCollapsed && !projectedStatusItems.isEmpty
         statusText = Self.statusText(items: projectedStatusItems)
-        disclosureSystemImage = section.isCollapsed ? "chevron.right" : "chevron.down"
-        accessibilityValue = section.isCollapsed ? "Collapsed" : "Expanded"
+        disclosureSystemImage =
+            effectiveCollapsed ? "chevron.right" : "chevron.down"
+        accessibilityValue = effectiveCollapsed ? "Collapsed" : "Expanded"
         accessibilityHint =
-            section.isCollapsed
+            effectiveCollapsed
             ? "Expands this Host."
             : "Collapses this Host."
 
-        var labelParts = [section.hostDisplayName, readinessText]
+        var labelParts = [hostDisplayName, readinessText]
         if let statusText {
             labelParts.append(statusText)
         }
