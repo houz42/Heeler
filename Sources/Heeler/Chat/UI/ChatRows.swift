@@ -5,6 +5,18 @@ import SwiftUI
 // Dumb row views: they style whatever `ChatFiltering.visibleRows` emits and
 // hold no level logic. All level decisions were already made upstream.
 
+/// Accent-wash opacities for surfaces painted straight onto the chat's
+/// default background. One alpha does not serve both appearances: 6–7% of
+/// the accent or orange disappears against dark mode's near-black
+/// background, so dark lifts the alpha until the wash reads again (the
+/// values are otherwise the original design's).
+fileprivate enum ChatWash {
+    /// The tinted wash behind a user turn's full-width row.
+    static func turn(isDark: Bool) -> Double { isDark ? 0.16 : 0.07 }
+    /// The orange wash behind the blocked-agent pending card.
+    static func pending(isDark: Bool) -> Double { isDark ? 0.12 : 0.06 }
+}
+
 /// One full-width chat row. Rows are plain (no bubbles, no avatars) — the
 /// text IS the interface.
 struct ChatRowView: View {
@@ -87,6 +99,9 @@ struct ChatBlockText: View {
         self.style = style
     }
 
+    @Environment(\.colorScheme) private var colorScheme
+    private var isDark: Bool { colorScheme == .dark }
+
     var body: some View {
         Group {
             if style == .user {
@@ -100,7 +115,7 @@ struct ChatBlockText: View {
                 }
                 .padding(.vertical, 4)
                 .padding(.trailing, 4)
-                .background(.tint.opacity(0.07))
+                .background(.tint.opacity(ChatWash.turn(isDark: isDark)))
             } else {
                 markdownBody
             }
@@ -262,6 +277,9 @@ struct ChatPendingRow: View {
     let interaction: PendingInteraction
     let choose: (String) -> Void
 
+    @Environment(\.colorScheme) private var colorScheme
+    private var isDark: Bool { colorScheme == .dark }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label("Waiting for your answer", systemImage: "questionmark.circle")
@@ -289,7 +307,9 @@ struct ChatPendingRow: View {
             }
         }
         .padding(12)
-        .background(.orange.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+        .background(
+            .orange.opacity(ChatWash.pending(isDark: isDark)),
+            in: RoundedRectangle(cornerRadius: 10))
     }
 }
 
@@ -307,6 +327,9 @@ struct ChatLinkText: View {
     let style: ChatBlockText.Style
     let router: OpenRouterCore?
 
+    @Environment(\.openURL) private var openURL
+    @Environment(\.colorScheme) private var colorScheme
+    private var isDark: Bool { colorScheme == .dark }
     init(
         _ text: String, style: ChatBlockText.Style, router: OpenRouterCore?
     ) {
@@ -328,7 +351,7 @@ struct ChatLinkText: View {
                 }
                 .padding(.vertical, 4)
                 .padding(.trailing, 4)
-                .background(.tint.opacity(0.07))
+                .background(.tint.opacity(ChatWash.turn(isDark: isDark)))
             } else {
                 linkedBody
             }
@@ -423,4 +446,98 @@ struct ChatOpenersSurface: ViewModifier {
     }
 
     @Environment(\.openURL) private var openURL
+}
+
+// MARK: - Previews (dark + light)
+
+/// One representative of every row kind, at a level that shows them all
+/// (L2 pairs results, L3 adds thinking) — the fixture both appearance
+/// previews render.
+private enum ChatRowPreviewFixture {
+    static var content: ChatContent {
+        let messages: [ChatMessage] = [
+            ChatMessage(role: .user, blocks: [
+                .text("Ship the checkout fix — run the **targeted** tests first."),
+            ]),
+            ChatMessage(role: .assistant, blocks: [
+                .thinking(
+                    "The user wants the fix shipped. Read the failing test first, then run the suite."),
+                .toolCall(ToolCall(
+                    id: "preview-call-1", name: "read",
+                    arguments: .object([
+                        "path": .string("CheckoutView.swift"),
+                    ]))),
+                .text(
+                    "The retry logic drops the cart because `PaymentCoordinator` resets state on the *first* attempt. I'll preserve the cart across retries and re-run `CheckoutFlowTests`."),
+            ]),
+            ChatMessage(role: .assistant, blocks: [
+                .text("All 18 tests pass. Ready to commit when you are."),
+            ]),
+        ]
+        let results = [
+            ToolResult(
+                toolCallId: "preview-call-1", toolName: "read",
+                isError: false,
+                content: "struct CheckoutView: View {\n    var body: some View {\n        Text(\"Checkout\")\n    }\n}"),
+        ]
+        let pending = [
+            PendingInteraction(
+                question: "Run the full CheckoutFlowTests suite before committing?",
+                options: ["Run the tests", "Commit without tests"]),
+        ]
+        return ChatContent(
+            messages: messages, toolResults: results, pending: pending)
+    }
+
+    static var rows: [ChatRow] {
+        ChatFiltering.visibleRows(
+            messages: content.messages, toolResults: content.toolResults,
+            pending: content.pending, level: .l3)
+    }
+}
+
+/// The full row gallery on the chat's own plain background, so a wash or
+/// material that fails to read in one appearance is visible at a glance.
+private struct ChatRowsPreviewSurface: View {
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 12) {
+                ForEach(ChatRowPreviewFixture.rows) { row in
+                    LinkifiedChatRow(row: row, router: OpenRouterCore())
+                        .padding(.horizontal, 12)
+                }
+            }
+            .padding(.vertical, 10)
+        }
+    }
+}
+
+#Preview("Chat rows — dark") {
+    ChatRowsPreviewSurface()
+        .preferredColorScheme(.dark)
+}
+
+#Preview("Chat rows — light") {
+    ChatRowsPreviewSurface()
+        .preferredColorScheme(.light)
+}
+
+/// The strip + switcher (the chat's only chrome) over a `.bar` background,
+/// as the screen presents it.
+#Preview("Chat status strip — dark") {
+    ChatStatusStrip(
+        agentName: "checkout", state: .blocked, level: .l2,
+        changeLevel: { _ in })
+        .padding()
+        .background(.bar)
+        .preferredColorScheme(.dark)
+}
+
+#Preview("Chat status strip — light") {
+    ChatStatusStrip(
+        agentName: "checkout", state: .blocked, level: .l2,
+        changeLevel: { _ in })
+        .padding()
+        .background(.bar)
+        .preferredColorScheme(.light)
 }

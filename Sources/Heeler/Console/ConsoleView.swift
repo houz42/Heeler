@@ -114,14 +114,9 @@ struct ConsoleView: View {
                                         }
                                     }
                                 } label: {
-                                    // Swift disallows switch expressions in
-                                    // argument position — extract to a let.
-                                    let icon = switch listPresentation.mode {
-                                    case .flat: "list.bullet"
-                                    case .grouped: "list.bullet.rectangle"
-                                    case .tree: "sidebar.leading"
-                                    }
-                                    Label("Presentation", systemImage: icon)
+                                    Label(
+                                        "Presentation",
+                                        systemImage: presentationIcon)
                                 }
                                 .hoverEffect(.highlight)
                                 .accessibilityLabel("Agent list presentation")
@@ -640,6 +635,15 @@ struct ConsoleView: View {
         Binding(
             get: { listPresentation.mode },
             set: { listPresentation.select($0) })
+    }
+
+    /// The presentation switcher's toolbar icon: one glyph per mode.
+    private var presentationIcon: String {
+        switch listPresentation.mode {
+        case .flat: "list.bullet"
+        case .grouped: "list.bullet.rectangle"
+        case .tree: "sidebar.leading"
+        }
     }
 
     private func toggleHostSection(_ hostID: Host.ID) {
