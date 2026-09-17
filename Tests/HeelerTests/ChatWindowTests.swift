@@ -89,7 +89,8 @@ struct ChatWindowTests {
         #expect(window.startOffset! > 0)
         // The confirmed start must be past the discarded partial record and
         // within one window of EOF.
-        let fileEnd = try #require(FileHandle(forReadingFrom: Self.fixtureURL)).seekToEnd()
+        let handle = try #require(try FileHandle(forReadingFrom: Self.fixtureURL))
+        let fileEnd = try handle.seekToEnd()
         #expect(window.startOffset! > Int(fileEnd) - window.windowBytes - 1)
         #expect(window.endOffset == Int(fileEnd))
         // First delivered line sits at/after the confirmed window start.

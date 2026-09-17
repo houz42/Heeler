@@ -237,7 +237,7 @@ struct ChatUITests {
     }
 
     @Test func pendingRowsComeAfterTranscriptRows() {
-        let pending = PendingInteraction(question: "Proceed?")
+        let pending = PendingInteraction(question: "Proceed?", options: [])
         let rows = ChatFiltering.visibleRows(
             messages: [assistantTurn()], toolResults: [], pending: [pending], level: .l0)
         guard case .pending = rows.last else {
@@ -263,8 +263,8 @@ struct ChatUITests {
 
     @Test func detailLevelPersistsPerPaneInNamespacedSuite() {
         let suiteName = "dev.houz42.heeler.chat.test.\(UUID().uuidString)"
-        defer { UserDefaults.removePersistentDomain(forName: suiteName) }
         let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
         let store = ChatDetailLevelStore(defaults: defaults)
 
         // Unknown pane → L0 default.

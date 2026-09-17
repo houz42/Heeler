@@ -603,6 +603,10 @@ struct Agent: Sendable, Equatable {
     let terminalTitleStripped: String?
     /// Pane presentation/manual title (`AgentInfo.title`), not a pane id.
     let paneTitle: String?
+    /// The agent's session reference (`agent_session`). A `.path` kind
+    /// carries the transcript file's absolute POSIX location, which the
+    /// chat surface reads; every other shape (or nil) means no transcript.
+    let agentSession: AgentSessionInfo?
     let tokens: [String: String]
     let stateLabels: [String: String]
     /// Snapshot ordering metadata for Agent panel sort consumers.
@@ -627,7 +631,8 @@ struct Agent: Sendable, Equatable {
         name: String? = nil,
         terminalTitle: String? = nil, terminalTitleStripped: String? = nil,
         paneTitle: String? = nil, tokens: [String: String] = [:],
-        stateLabels: [String: String] = [:], stateChangeSeq: Int? = nil
+        stateLabels: [String: String] = [:], stateChangeSeq: Int? = nil,
+        agentSession: AgentSessionInfo? = nil
     ) {
         self.terminalID = terminalID
         self.kind = kind
@@ -637,6 +642,7 @@ struct Agent: Sendable, Equatable {
         self.terminalTitleStripped = terminalTitleStripped
             ?? terminalTitle.map(Self.strippedSidebarTitle)
         self.paneTitle = paneTitle
+        self.agentSession = agentSession
         self.tokens = tokens
         self.stateLabels = stateLabels
         self.stateChangeSeq = stateChangeSeq
@@ -669,8 +675,8 @@ struct Agent: Sendable, Equatable {
             paneTitle: info.title,
             tokens: info.tokens ?? [:],
             stateLabels: info.stateLabels ?? [:],
-            stateChangeSeq: info.stateChangeSeq
-        )
+            stateChangeSeq: info.stateChangeSeq,
+            agentSession: info.agentSession)
     }
 
     /// herdr 0.8.2 removes one activity glyph only when followed by whitespace
