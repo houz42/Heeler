@@ -126,6 +126,9 @@ struct ChatScreen: View {
         .safeAreaInset(edge: .bottom) { inputFrame }
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
+        // Hiding the back button also disables the interactive pop gesture;
+        // re-enable it — the left-edge swipe is the chat surface's way back.
+        .background(PopGestureEnabler())
         .toolbar {
             // Top-leading, where the back button used to be: the level
             // switcher. Chat-only — the terminal surface has no levels.
@@ -299,6 +302,39 @@ struct ChatScreen: View {
                     // Delivery failed: keep the draft for retry.
                 }
             }
+        }
+    }
+}
+
+/// Re-enables the navigation stack's interactive pop gesture, which
+/// `.navigationBarBackButtonHidden(true)` silently disables. The chat
+/// surface has no visible back button, so the edge swipe IS the way back.
+private struct PopGestureEnabler: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> UIViewController {
+        PopGestureViewController()
+    }
+
+    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
+
+    final class PopGestureViewController: UIViewController {
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            enable()
+        }
+
+        override func viewWillAppear(_ animated: Bool) {
+            super.viewWillAppear(animated)
+            enable()
+        }
+
+        private func enable() {
+            guard let navigation = sequence(
+                first: parent as UIViewController?,
+                next: { $0?.parent }
+            ).compactMap({ $0 as? UINavigationController }).first
+            else { return }
+            navigation.interactivePopGestureRecognizer?.isEnabled = true
+            navigation.interactivePopGestureRecognizer?.delegate = nil
         }
     }
 }
