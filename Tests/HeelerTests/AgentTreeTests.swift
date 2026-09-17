@@ -254,6 +254,7 @@ struct AgentTreeTests {
 
     // MARK: Fold persistence
 
+    @MainActor
     @Test func foldDefaultsExpandedAndPersistsAcrossLaunches() throws {
         let (defaults, cleanup) = try makeDefaults()
         defer { cleanup() }

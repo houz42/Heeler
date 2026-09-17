@@ -116,7 +116,13 @@ struct ConsoleView: View {
                                 } label: {
                                     Label(
                                         "Presentation",
-                                        systemImage: presentationIcon)
+                                        systemImage: {
+                                            switch listPresentation.mode {
+                                            case .flat: "list.bullet"
+                                            case .grouped: "list.bullet.rectangle"
+                                            case .tree: "sidebar.leading"
+                                            }
+                                        }())
                                 }
                                 .hoverEffect(.highlight)
                                 .accessibilityLabel("Agent list presentation")
@@ -522,11 +528,8 @@ struct ConsoleView: View {
                         toggleTreeGroup(id)
                     }
                 }
-            case .agent(let agent, let depth):
+            case .agent(let agent, _):
                 agentRow(agent)
-                    .padding(.leading, CGFloat(depth) * 16)
-                    .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
-                    .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
             }
         }
     }
@@ -635,15 +638,6 @@ struct ConsoleView: View {
         Binding(
             get: { listPresentation.mode },
             set: { listPresentation.select($0) })
-    }
-
-    /// The presentation switcher's toolbar icon: one glyph per mode.
-    private var presentationIcon: String {
-        switch listPresentation.mode {
-        case .flat: "list.bullet"
-        case .grouped: "list.bullet.rectangle"
-        case .tree: "sidebar.leading"
-        }
     }
 
     private func toggleHostSection(_ hostID: Host.ID) {

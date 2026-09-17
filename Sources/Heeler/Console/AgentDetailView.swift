@@ -32,6 +32,8 @@ struct AgentDetailView: View {
     @State private var surface: AgentDetailSurface?
     /// The chat pane's rendered rows' detail level persistence.
     @State private var chatLevels = ChatDetailLevelStore.shared
+    /// The in-Agent header's layout mode + custom layout persistence.
+    @State private var headerLayoutStore = HeaderLayoutSettingsStore.shared
     @State private var openTerminal: AgentOpenTerminalStore
     /// Which window holds this Host's terminal channel; nil outside a scene
     /// root, where this detail always holds it.
@@ -210,12 +212,15 @@ struct AgentDetailView: View {
         }
     }
 
-    /// The header's token rows, rendered from the host's configured agent
-    /// list layout (Settings → Agent list fields).
+    /// The header's token rows, following the in-Agent header setting
+    /// (Settings → In-Agent Header): the Host's agent-list layout when it
+    /// says "Same as agent list", the stored custom layout otherwise.
     private var headerTokens: some View {
         AgentDetailHeaderTokens(
             rows: AgentRowRenderer.render(
-                layout: console.rowLayout(for: agent.hostID),
+                layout: headerLayoutStore.headerLayout(
+                    sameAsList: { [console] hostID in console.rowLayout(for: hostID) },
+                    for: agent.hostID),
                 agent: agent))
     }
 

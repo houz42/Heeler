@@ -297,7 +297,7 @@ struct AgentListFieldsHostDetailView: View {
 /// One fixed row slot edited in place: the title, one menu chip per field,
 /// and a trailing add chip. Provenance is explained once by the note under
 /// the rows, not tagged per row.
-private struct AgentListFieldsRowEditor: View {
+struct AgentListFieldsRowEditor: View {
     let index: Int
     let row: AgentRow
     let isEnabled: Bool

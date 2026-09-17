@@ -8,7 +8,11 @@ Entries reference the issue that motivated them.
 ## [Unreleased]
 
 ### Added
-
+- Configure the in-Agent header (the title area on the chat and terminal
+  screens) independently from the Agent list: a Same as agent list toggle
+  keeps the current behavior, and turning it off offers a custom global
+  layout with the same field editor as Agent list fields
+  (Settings → In-Agent Header).
 - Choose an existing Workspace or New Workspace from the same dropdown in
   New Agent. New Workspace opens a remote directory browser. The latest directory stays at the
   bottom of the dropdown, with its name and full path shown when selected. (PR #305)
