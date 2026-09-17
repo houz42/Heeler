@@ -159,6 +159,8 @@ struct DetailLevelSwitcher: View {
                     .buttonStyle(.plain)
                 }
             }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
             .presentationCompactAdaptation(.popover)
         }
     }

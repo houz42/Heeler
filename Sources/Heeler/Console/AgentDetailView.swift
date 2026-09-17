@@ -210,6 +210,15 @@ struct AgentDetailView: View {
         }
     }
 
+    /// The header's token rows, rendered from the host's configured agent
+    /// list layout (Settings → Agent list fields).
+    private var headerTokens: some View {
+        AgentDetailHeaderTokens(
+            rows: AgentRowRenderer.render(
+                layout: console.rowLayout(for: agent.hostID),
+                agent: agent))
+    }
+
     private var chatStateColor: Color {
         switch chatAgentState {
         case .idle: .secondary
@@ -343,10 +352,17 @@ struct AgentDetailView: View {
                         .fill(chatStateColor)
                         .frame(width: 8, height: 8)
                         .accessibilityLabel(Text(chatAgentState.rawValue))
-                    AgentDetailHeaderTokens(
-                        rows: AgentRowRenderer.render(
-                            layout: console.rowLayout(for: agent.hostID),
-                            agent: agent))
+                    // The terminal surface keeps the nav bar transparent by
+                    // design, so its header rides in a blur capsule instead
+                    // of floating bare text over terminal output.
+                    headerTokens
+                        .padding(.horizontal, surface == .terminal ? 10 : 0)
+                        .padding(.vertical, surface == .terminal ? 5 : 0)
+                        .background {
+                            if surface == .terminal {
+                                Capsule().fill(.ultraThinMaterial)
+                            }
+                        }
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
