@@ -110,6 +110,21 @@ struct ChatScreen: View {
                 }
                 .padding(.vertical, 10)
             }
+            // A transcript that parsed to zero rows (metadata-only session
+            // file, or a resumed session writing elsewhere) must not render
+            // as a blank screen.
+            .overlay {
+                if rows.isEmpty {
+                    ContentUnavailableView(
+                        "No Messages Yet",
+                        systemImage: "text.bubble",
+                        description: Text(
+                            "This transcript has no conversation records. The agent may be writing to a different session file."))
+                }
+            }
+            // Chat convention: open on the LATEST message; prepended
+            // older pages keep the visible row anchored (no jump).
+            .defaultScrollAnchor(.bottom)
             .onChange(of: pagingInputs) { _, _ in
                 firePagingIfNeeded()
             }
