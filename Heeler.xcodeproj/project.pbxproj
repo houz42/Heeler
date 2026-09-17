@@ -45,7 +45,7 @@
 		1565FE6BD35E1BF904B19595 /* SidebarLayoutVectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F868101495226A8BE768AC9 /* SidebarLayoutVectorTests.swift */; };
 		1566E45603CB8F83337BD9C3 /* TerminalAppearanceSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4273AC6F39EB1E015820E614 /* TerminalAppearanceSettingsView.swift */; };
 		15F48A8DDF0D76F41D8562A6 /* AgentInputModeSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D588CA22544907E638437FEA /* AgentInputModeSettingsTests.swift */; };
-		1706E607DD6100E20479457C /* GhosttyTerminal in Frameworks */ = {isa = PBXBuildFile; productRef = 19D717C20DA226346335AFF6 /* GhosttyTerminal */; };
+		1706E607DD6100E20479457C /* HeelerSSH in Frameworks */ = {isa = PBXBuildFile; productRef = 6B0C40F1407743FF92CC9242 /* HeelerSSH */; };
 		170F2BD0EB0840B197A6475E /* InputShortcutStripPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A001C1028C859D6281E1642 /* InputShortcutStripPresentation.swift */; };
 		172661D829E18F72C75B4F13 /* NotificationKeyMirror.swift in Sources */ = {isa = PBXBuildFile; fileRef = C91F0473741A92D7EFA40CBA /* NotificationKeyMirror.swift */; };
 		175FBCC1D3F792C2E9E3CAFF /* ChatLinkAllowlistStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 869FD0FF8221FE118C3FE598 /* ChatLinkAllowlistStore.swift */; };
@@ -99,7 +99,7 @@
 		3541FB43C2803B681D7C619F /* AgentRowRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAAD80C58EF11BE6B6F1D7F6 /* AgentRowRenderer.swift */; };
 		359A3FA92C332BEC1DA1982C /* NotificationConfigFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E38A3F2A443D311C8FCC218 /* NotificationConfigFile.swift */; };
 		3662BE3559CB08401960176C /* AgentNotificationRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B02412C186BA855DFD9379A /* AgentNotificationRoutingTests.swift */; };
-		3684BDED2C234F399A6758C9 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = 43F065148FE50447648203F0 /* MarkdownUI */; };
+		3684BDED2C234F399A6758C9 /* GhosttyTerminal in Frameworks */ = {isa = PBXBuildFile; productRef = 19D717C20DA226346335AFF6 /* GhosttyTerminal */; };
 		36C400FA8DE4CBF55A1F9104 /* SessionDiscoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7861155EA5DA98123E2D0F2 /* SessionDiscoveryTests.swift */; };
 		36FB81E449F98DC68A366C2E /* HerdrAPITypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F7065C3BE109D2F52AE3BC2 /* HerdrAPITypes.swift */; };
 		3776558F9FD16419AC405116 /* AttachRestorationTraceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6BD5F61844F525B628AB358 /* AttachRestorationTraceTests.swift */; };
@@ -309,6 +309,7 @@
 		AEE3EAD6534D2D9774BBDB1E /* SkillContentSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFB68C31A4C8A5EE1BAE32EC /* SkillContentSheet.swift */; };
 		AEFAF47E29B1ABADCC273B80 /* ConsoleListPresentationStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D0218973C687D6D07E82963 /* ConsoleListPresentationStoreTests.swift */; };
 		AFA3583DF83EFBAFEEE91E28 /* TerminalAgentSwitcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA59306306EAEAA6DA78E337 /* TerminalAgentSwitcherTests.swift */; };
+		B07A9A6794D3FC9C7878DCC3 /* ChatCodeHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A919DFA1EA567B59F865D738 /* ChatCodeHighlighter.swift */; };
 		B1AB54CA26E52887BC383B3C /* AgentListFieldsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAE86260EA6111621498F139 /* AgentListFieldsSettingsView.swift */; };
 		B253EC25B4FA08551D5E6B4B /* WeakNetworkProxy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F44E8A7E5D2D96096928B69C /* WeakNetworkProxy.swift */; };
 		B2C0FB87155FFE531C2C6265 /* AgentNotificationRouterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F1676B4E6BAB1C28E5596A7 /* AgentNotificationRouterTests.swift */; };
@@ -372,9 +373,9 @@
 		D3E3356479AC4B4EFA7D407D /* AgentListFieldsPreviewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58E018A4C6816BAEEACB96FA /* AgentListFieldsPreviewTests.swift */; };
 		D4834E9DD4C5FF62FC3C048D /* AgentControlKeyboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6056108BDA8023BCEC2D7AA7 /* AgentControlKeyboard.swift */; };
 		D5750879A465E0B27C9B4431 /* TerminalAttachTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07528112F1EC851708049E85 /* TerminalAttachTests.swift */; };
-		D618F80B03AABC27797586A1 /* HeelerSSH in Frameworks */ = {isa = PBXBuildFile; productRef = 6B0C40F1407743FF92CC9242 /* HeelerSSH */; };
+		D618F80B03AABC27797586A1 /* Splash in Frameworks */ = {isa = PBXBuildFile; productRef = 7A55711D0A19B49E07C5174C /* Splash */; };
 		D6620368048468EFA09B4142 /* HostOnboardingStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D961656A6D8B4F3964740BD /* HostOnboardingStoreTests.swift */; };
-		D6B61CDF8C3B0EFE3E269415 /* GhosttyTheme in Frameworks */ = {isa = PBXBuildFile; productRef = E086C559FC229264CF662993 /* GhosttyTheme */; };
+		D6B61CDF8C3B0EFE3E269415 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = 43F065148FE50447648203F0 /* MarkdownUI */; };
 		D6FBEC56A26E35A32CF2417A /* TerminalKeyModifiersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B99CB61015DC220A2D9306A /* TerminalKeyModifiersTests.swift */; };
 		D7DD62B232DBA9CE8C89AFDD /* NotificationKeyMirrorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D55C5296892657D59171DFE /* NotificationKeyMirrorTests.swift */; };
 		D868123FC703E505D48AFD85 /* HostOnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FC1C5701C464ADBBAE0525D /* HostOnboardingView.swift */; };
@@ -418,12 +419,14 @@
 		E9D5DD0D136597844A8FE54B /* HerdrEvents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 764EB7D298185F64BA26C8B2 /* HerdrEvents.swift */; };
 		EA6340CA36917C35588E0755 /* AgentRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = E48CA996470393ED037D0364 /* AgentRoute.swift */; };
 		EA83373CB743395BF9FF0689 /* ImagePreparer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAF5D79337402EF6FA70F9CA /* ImagePreparer.swift */; };
+		EAC8E3A95976D00D5B6BFE99 /* Splash in Frameworks */ = {isa = PBXBuildFile; productRef = 18127D3252A1CF7D394259C8 /* Splash */; };
 		EB251CDACF88FD7F5864E728 /* SealedEnvelopeCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BE9C95E2AC313465A7B38FD /* SealedEnvelopeCodec.swift */; };
 		EBF978B650F71EBDC2DC412E /* TranscriptFetch.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20880459C996365D8894131 /* TranscriptFetch.swift */; };
 		ED24AA39EBC4BC6B7341EEFB /* TransportError+Presentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8133B7654CEFC5533DCDCC5A /* TransportError+Presentation.swift */; };
 		ED78C30BC1FC7F679D392EDF /* ConsoleHostSectionHeaderPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = C85214981DECFA178F08F06F /* ConsoleHostSectionHeaderPresentation.swift */; };
 		EFDD1860A93F9F07158DABEA /* JsonlTranscriptWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4327A97285C490DFDB33E23 /* JsonlTranscriptWindow.swift */; };
 		F0A8E77693C3508A42EBF75F /* HostLiveActivityCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C3C7B94577B96CE8B76F3BB /* HostLiveActivityCoordinator.swift */; };
+		F0D3BF79EA150F23B9CCF9A6 /* GhosttyTheme in Frameworks */ = {isa = PBXBuildFile; productRef = E086C559FC229264CF662993 /* GhosttyTheme */; };
 		F13FEAFA65C75F4341F54D20 /* ConsoleSheetPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13300392C48361465F32D1C9 /* ConsoleSheetPresentation.swift */; };
 		F179667CF0A3DAD2F3F796E6 /* live-activity-content-v1.json in Resources */ = {isa = PBXBuildFile; fileRef = 9ED544C5E701A1ACD12C6F79 /* live-activity-content-v1.json */; };
 		F1896998EA513073CF4EE713 /* PushRegistrationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F63F7D63E32AA0C85E9F8FBC /* PushRegistrationStore.swift */; };
@@ -779,6 +782,7 @@
 		A5C6340A9A91119C998F64C3 /* SkillFrontmatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillFrontmatterTests.swift; sourceTree = "<group>"; };
 		A7103745D02C07787E49AC70 /* NotificationEnvelopeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationEnvelopeTests.swift; sourceTree = "<group>"; };
 		A8CFADE255E1F943BC2DCED5 /* AgentActivityContentBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentActivityContentBuilderTests.swift; sourceTree = "<group>"; };
+		A919DFA1EA567B59F865D738 /* ChatCodeHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatCodeHighlighter.swift; sourceTree = "<group>"; };
 		A9B369B42301D8ACC286AC50 /* AgentListFieldsEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentListFieldsEditor.swift; sourceTree = "<group>"; };
 		AACC0F2C9582DE0932380D35 /* KnownHostsStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KnownHostsStoreTests.swift; sourceTree = "<group>"; };
 		AAE2FC36626CBCBF497706C4 /* AgentRowLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRowLayout.swift; sourceTree = "<group>"; };
@@ -929,10 +933,11 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				D618F80B03AABC27797586A1 /* HeelerSSH in Frameworks */,
-				1706E607DD6100E20479457C /* GhosttyTerminal in Frameworks */,
-				3684BDED2C234F399A6758C9 /* MarkdownUI in Frameworks */,
-				D6B61CDF8C3B0EFE3E269415 /* GhosttyTheme in Frameworks */,
+				D618F80B03AABC27797586A1 /* Splash in Frameworks */,
+				1706E607DD6100E20479457C /* HeelerSSH in Frameworks */,
+				3684BDED2C234F399A6758C9 /* GhosttyTerminal in Frameworks */,
+				D6B61CDF8C3B0EFE3E269415 /* MarkdownUI in Frameworks */,
+				F0D3BF79EA150F23B9CCF9A6 /* GhosttyTheme in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -943,6 +948,7 @@
 				8DF7095F918DBDA5B76F24F1 /* HeelerSSH in Frameworks */,
 				FF4620613A476ADEB25FBA96 /* GhosttyTerminal in Frameworks */,
 				CFAA6CEE9088E0F35A100FFB /* MarkdownUI in Frameworks */,
+				EAC8E3A95976D00D5B6BFE99 /* Splash in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1513,6 +1519,7 @@
 		B1A71FE96959DF2755019A42 /* UI */ = {
 			isa = PBXGroup;
 			children = (
+				A919DFA1EA567B59F865D738 /* ChatCodeHighlighter.swift */,
 				8DA143C53F258AE215D3902B /* ChatDetailLevelStore.swift */,
 				699591038C8BEBE618B0EB26 /* ChatFiltering.swift */,
 				5BAE600FB5DE9F10EF90440D /* ChatMarkdownView.swift */,
@@ -1719,6 +1726,7 @@
 			);
 			name = Heeler;
 			packageProductDependencies = (
+				7A55711D0A19B49E07C5174C /* Splash */,
 				6B0C40F1407743FF92CC9242 /* HeelerSSH */,
 				19D717C20DA226346335AFF6 /* GhosttyTerminal */,
 				43F065148FE50447648203F0 /* MarkdownUI */,
@@ -1763,6 +1771,7 @@
 				13CFA5F5C15E83F411CC03BA /* HeelerSSH */,
 				BE53F92F352D5CEE9A715FA9 /* GhosttyTerminal */,
 				2F7667EF54A4B61557148F89 /* MarkdownUI */,
+				18127D3252A1CF7D394259C8 /* Splash */,
 			);
 			productName = HeelerTests;
 			productReference = FBA937EDF831047EA33892F9 /* HeelerTests.xctest */;
@@ -1824,6 +1833,7 @@
 			packageReferences = (
 				C24992F3A9C17BAA1883EEBB /* XCRemoteSwiftPackageReference "libghostty-spm" */,
 				96B4C33EE52D5AFEC8EADC80 /* XCRemoteSwiftPackageReference "MarkdownUI" */,
+				8B9DE4ABC7F8A30664D2F71A /* XCRemoteSwiftPackageReference "Splash" */,
 				056B9BE67ABA0AE15160C8D8 /* XCLocalSwiftPackageReference "Packages/HeelerSSH" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -1951,6 +1961,7 @@
 				CCEBF66BA9AFE64EDD371A78 /* AttachUserMessageIndex.swift in Sources */,
 				B787DA8CB25A81E3914F8638 /* AttachmentStaging.swift in Sources */,
 				35205050C9CB8E473D8A28C0 /* Base64URL.swift in Sources */,
+				B07A9A6794D3FC9C7878DCC3 /* ChatCodeHighlighter.swift in Sources */,
 				C1E6370BBDF7123AA4648FBF /* ChatDetailLevelStore.swift in Sources */,
 				FDFDA6AA6821DCDE31483E51 /* ChatFiltering.swift in Sources */,
 				175FBCC1D3F792C2E9E3CAFF /* ChatLinkAllowlistStore.swift in Sources */,
@@ -2691,6 +2702,14 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		8B9DE4ABC7F8A30664D2F71A /* XCRemoteSwiftPackageReference "Splash" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/JohnSundell/Splash";
+			requirement = {
+				kind = exactVersion;
+				version = 0.16.0;
+			};
+		};
 		96B4C33EE52D5AFEC8EADC80 /* XCRemoteSwiftPackageReference "MarkdownUI" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/gonzalezreal/MarkdownUI";
@@ -2714,6 +2733,11 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = HeelerSSH;
 		};
+		18127D3252A1CF7D394259C8 /* Splash */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 8B9DE4ABC7F8A30664D2F71A /* XCRemoteSwiftPackageReference "Splash" */;
+			productName = Splash;
+		};
 		19D717C20DA226346335AFF6 /* GhosttyTerminal */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = C24992F3A9C17BAA1883EEBB /* XCRemoteSwiftPackageReference "libghostty-spm" */;
@@ -2732,6 +2756,11 @@
 		6B0C40F1407743FF92CC9242 /* HeelerSSH */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = HeelerSSH;
+		};
+		7A55711D0A19B49E07C5174C /* Splash */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 8B9DE4ABC7F8A30664D2F71A /* XCRemoteSwiftPackageReference "Splash" */;
+			productName = Splash;
 		};
 		BE53F92F352D5CEE9A715FA9 /* GhosttyTerminal */ = {
 			isa = XCSwiftPackageProductDependency;

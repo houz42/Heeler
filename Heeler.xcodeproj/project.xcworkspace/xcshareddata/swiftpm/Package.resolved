@@ -1,5 +1,5 @@
 {
-  "originHash" : "5736363ac856a1a1cbc801fadf0aa999aec1a21eaca09c4979224c438a0e3b67",
+  "originHash" : "d168e584ff3b621c6e4260f39e905b90a6b4add5d33a85f48d23bddd366b7472",
   "pins" : [
     {
       "identity" : "libghostty-spm",
@@ -34,6 +34,15 @@
       "state" : {
         "revision" : "2849f5323265386e200484b0d0f896e73c3411b9",
         "version" : "6.0.1"
+      }
+    },
+    {
+      "identity" : "splash",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/JohnSundell/Splash",
+      "state" : {
+        "revision" : "7f4df436eb78fe64fe2c32c58006e9949fa28ad8",
+        "version" : "0.16.0"
       }
     },
     {
