@@ -266,6 +266,48 @@ struct AgentDetailView: View {
         }
     }
 
+    /// Builds and starts the chat store + input router when the agent's
+    /// session is a readable transcript path. Idempotent: re-entry with a
+    /// live store is a no-op. Called from the agent-identity task and from
+    /// late arrival of the session path / a manual switch to the chat
+    /// surface, so agents whose integration registers after first render
+    //  still get a chat.
+    private func buildChatIfPossible() async {
+        guard chat == nil,
+            agent.agent.agentSession?.kind == AgentSessionRefKind.path
+        else { return }
+        let store = ChatStore(
+            hostID: agent.hostID,
+            paneID: agent.agent.paneID,
+            reader: .console(console, hostID: agent.hostID))
+        chat = store
+        // The chat input's router: / # @ ! classification + plain delivery
+        // through agent.prompt. The scratch-shell pane for ! is created
+        // lazily on first use by the store.
+        chatRouter = ComposerRouterStore(
+            dependencies: ComposerRouterStore.makeChatDependencies(
+                console: console, agent: agent,
+                bashIO: ComposerBashIO(
+                    createScratchPane: { hostID in
+                        try await console.createShellTerminal(
+                            ShellTerminalCreationRequest(
+                                workspaceID: agent.agent.workspaceID,
+                                cwd: agent.agent.cwd),
+                            on: hostID).paneID
+                    },
+                    sendText: { hostID, paneID, text in
+                        try await console.sendPaneInput(
+                            paneID, text: text, on: hostID)
+                    },
+                    readPaneText: { hostID, paneID in
+                        try await console.readPaneOutput(
+                            paneID, lines: 200, on: hostID).text
+                    })))
+        await store.start(
+            agentSession: agent.agent.agentSession,
+            statusUpdates: console.agentStatusUpdates(for: agent.id))
+    }
+
     /// Builds (once per agent identity) and starts the chat store, then
     /// renders the chat surface.
     @ViewBuilder
@@ -378,44 +420,16 @@ struct AgentDetailView: View {
             if surface == nil { surface = initial }
         }
         .task(id: agent.id) {
-            // The router serves the chat surface's input frame only — the
-            // terminal surface's composer types into the agent's own TUI,
-            // where / already opens the agent's native menu.
-            if AgentDetailSurface.initial(agent: agent) == .chat {
-                let store = ChatStore(
-                    hostID: agent.hostID,
-                    paneID: agent.agent.paneID,
-                    reader: .console(console, hostID: agent.hostID))
-                chat = store
-                // The chat input's router: / # @ ! classification + plain
-                // delivery through agent.prompt. The scratch-shell pane for
-                // ! is created lazily on first use by the store.
-                chatRouter = ComposerRouterStore(
-                    dependencies: ComposerRouterStore.makeChatDependencies(
-                        console: console, agent: agent,
-                        bashIO: ComposerBashIO(
-                            createScratchPane: { hostID in
-                                try await console.createShellTerminal(
-                                    ShellTerminalCreationRequest(
-                                        workspaceID: agent.agent.workspaceID,
-                                        cwd: agent.agent.cwd),
-                                    on: hostID).paneID
-                            },
-                            sendText: { hostID, paneID, text in
-                                try await console.sendPaneInput(
-                                    paneID, text: text, on: hostID)
-                            },
-                            readPaneText: { hostID, paneID in
-                                try await console.readPaneOutput(
-                                    paneID, lines: 200, on: hostID).text
-                            })))
-                await store.start(
-                    agentSession: agent.agent.agentSession,
-                    statusUpdates: console.agentStatusUpdates(for: agent.id))
-            } else {
-                chat = nil
-                chatRouter = nil
-            }
+            await buildChatIfPossible()
+        }
+        // A session path that arrives after first render (agents started
+        // before the integration registered) must still build the store;
+        // so must a manual switch to the chat surface.
+        .onChange(of: agent.agent.agentSession?.value) { _, _ in
+            Task { await buildChatIfPossible() }
+        }
+        .onChange(of: surface) { _, new in
+            if new == .chat { Task { await buildChatIfPossible() } }
         }
 
         .onAppear {
@@ -428,6 +442,9 @@ struct AgentDetailView: View {
         .onDisappear {
             hasAppeared = false
             focus.leave()
+            // The chat store's poll loop must not outlive the detail view.
+            chat = nil
+            chatRouter = nil
         }
         .onChange(of: console.hostConnectionGenerations[agent.hostID]) { _, generation in
             openTerminal.transportGenerationDidChange(generation)
