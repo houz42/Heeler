@@ -221,41 +221,41 @@ struct ChatCollapsibleRow<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Button {
-                withAnimation(.snappy(duration: 0.2)) { expanded.toggle() }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: icon)
-                        .imageScale(.small)
-                        .foregroundStyle(.tint)
-                    Text(title)
-                        .font(.footnote.weight(expanded ? .semibold : .regular))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    if let badge {
-                        Text(badge)
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.red)
-                    }
-                    Spacer(minLength: 0)
-                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .imageScale(.small)
+                    .foregroundStyle(.tint)
+                Text(title)
+                    .font(.footnote.weight(expanded ? .semibold : .regular))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let badge {
+                    Text(badge)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.red)
                 }
-                // The whole row is the tap target: without an explicit
-                // content shape a .plain button only registers taps on its
-                // glyphs, and the spacer gap + small chevron made collapse
-                // nearly unhittable.
-                .contentShape(Rectangle())
+                Spacer(minLength: 0)
+                Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    // The chevron is the visible affordance; give it a real
+                    // target of its own even mid-animation.
+                    .padding(6)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("\(expanded ? "Collapse" : "Expand") \(title)")
 
             if expanded {
                 content()
-                    .transition(.opacity)
             }
         }
+        // A tap gesture on the whole row, not a Button: Button gestures on
+        // a label with a Spacer proved unreliable across rebuilds and during
+        // the expand/collapse transition (taps landed but never fired).
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.snappy(duration: 0.2)) { expanded.toggle() }
+        }
+        .accessibilityLabel("\(expanded ? "Collapse" : "Expand") \(title)")
         .padding(.vertical, 2)
         .opacity(isSubtle ? 0.9 : 1)
     }
