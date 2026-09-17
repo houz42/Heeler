@@ -25,6 +25,11 @@ packages:
   GhosttyTerminal:
     url: https://github.com/Lakr233/libghostty-spm.git
     revision: "7e45d27160f9b34aca9ca5c9820e9207482f9f04"
+  # Rich markdown rendering for chat text (headers, code blocks, tables).
+  # Pinned to the newest tagged 2.x release.
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/MarkdownUI
+    from: "2.4.1"
 
 targets:
   Heeler:
@@ -98,6 +103,7 @@ targets:
     dependencies:
       - package: HeelerSSH
       - package: GhosttyTerminal
+      - package: MarkdownUI
       - package: GhosttyTerminal
         product: GhosttyTheme
       - target: HeelerNotificationService
@@ -221,6 +227,7 @@ targets:
       - target: Heeler
       - package: HeelerSSH
       - package: GhosttyTerminal
+      - package: MarkdownUI
 
 schemes:
   Heeler:
