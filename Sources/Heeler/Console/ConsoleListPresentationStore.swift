@@ -16,6 +16,9 @@ enum ConsoleListPresentationMode: String, CaseIterable, Identifiable, Sendable {
         case .tree: "Tree"
         }
     }
+
+    /// `ForEach` over the picker cases needs one; the enum is its own identity.
+    var id: Self { self }
 }
 
 /// One Host section projected from the Host catalog and the Console's

@@ -116,11 +116,13 @@ struct ConsoleView: View {
                                 } label: {
                                     Label(
                                         "Presentation",
-                                        systemImage: switch listPresentation.mode {
-                                        case .flat: "list.bullet"
-                                        case .grouped: "list.bullet.rectangle"
-                                        case .tree: "sidebar.leading"
-                                        })
+                                        systemImage: {
+                                            switch listPresentation.mode {
+                                            case .flat: "list.bullet"
+                                            case .grouped: "list.bullet.rectangle"
+                                            case .tree: "sidebar.leading"
+                                            }
+                                        }())
                                 }
                                 .hoverEffect(.highlight)
                                 .accessibilityLabel("Agent list presentation")
