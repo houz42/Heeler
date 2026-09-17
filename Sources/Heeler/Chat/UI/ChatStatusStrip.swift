@@ -105,30 +105,61 @@ struct DetailLevelSwitcher: View {
         .l3: "Thinking blocks",
     ]
 
+    /// The system Menu can't tint a selection or shrink its rows, so the
+    /// switcher is a custom card: the floating button shows the current
+    /// level's icon; the card lists every level with ITS OWN icon (selection
+    /// reads as a tinted background, never a checkmark that steals the icon).
+    @State private var expanded = false
+
     var body: some View {
-        Menu {
-            ForEach(DetailLevel.allCases, id: \.rawValue) { candidate in
-                Button {
-                    changeLevel(candidate)
-                } label: {
-                    if candidate == level {
-                        Label(
-                            "\(Self.labels[candidate]!) — \(Self.hints[candidate]!)",
-                            systemImage: "checkmark")
-                    } else {
-                        Label(
-                            "\(Self.labels[candidate]!) — \(Self.hints[candidate]!)",
-                            systemImage: Self.icons[candidate]!)
-                    }
-                }
-            }
+        Button {
+            withAnimation(.easeOut(duration: 0.15)) { expanded.toggle() }
         } label: {
             Image(systemName: Self.icons[level]!)
                 .font(.subheadline)
-                .frame(width: 28, height: 28)
+                .frame(width: 36, height: 36)
+                .background(.ultraThinMaterial, in: Circle())
+                .shadow(radius: 2, y: 1)
                 .contentShape(Rectangle())
         }
-        .menuIndicator(.hidden)
+        .buttonStyle(.plain)
         .accessibilityLabel("Detail level: \(Self.labels[level]!)")
+        .popover(
+            isPresented: $expanded,
+            attachmentAnchor: .point(.top),
+            arrowEdge: .bottom
+        ) {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(DetailLevel.allCases, id: \.rawValue) { candidate in
+                    Button {
+                        changeLevel(candidate)
+                        expanded = false
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: Self.icons[candidate]!)
+                                .frame(width: 18)
+                            VStack(alignment: .leading, spacing: 0) {
+                                Text(Self.labels[candidate]!)
+                                    .font(.caption.weight(.medium))
+                                Text(Self.hints[candidate]!)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            candidate == level
+                                ? Color.accentColor.opacity(0.15) : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 8))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(6)
+            .presentationCompactAdaptation(.popover)
+        }
     }
 }

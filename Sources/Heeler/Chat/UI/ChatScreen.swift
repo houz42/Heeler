@@ -118,15 +118,18 @@ struct ChatScreen: View {
                     router: openRouter,
                     fetch: fetch ?? { _ in throw CocoaError(.fileNoSuchFile) }))
         }
-        // The floating input affordance only exists when a router is wired.
-        .overlay { if router != nil && deliver != nil { inputOverlay } }
+        // The input affordance floats bottom-trailing and only while the
+        // input frame is closed; the frame's own chevron closes it.
+        .overlay {
+            if !inputPresented, router != nil && deliver != nil { inputOverlay }
+        }
         .safeAreaInset(edge: .bottom) { inputFrame }
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
         .toolbar {
-            // Only the level switcher rides the nav bar from here; the
-            // title row and surface toggle are owned by the detail view so
-            // they exist on BOTH surfaces.
-            ToolbarItem(placement: .topBarTrailing) {
+            // Top-leading, where the back button used to be: the level
+            // switcher. Chat-only — the terminal surface has no levels.
+            ToolbarItem(placement: .topBarLeading) {
                 DetailLevelSwitcher(level: level) { newLevel in
                     level = newLevel
                     changeLevel(newLevel, paneID)
@@ -202,15 +205,10 @@ struct ChatScreen: View {
             HStack {
                 Spacer()
                 Button {
-                    if inputPresented {
-                        inputPresented = false
-                        inputFocused = false
-                    } else {
-                        inputPresented = true
-                        inputFocused = true
-                    }
+                    inputPresented = true
+                    inputFocused = true
                 } label: {
-                    Image(systemName: inputPresented ? "keyboard.chevron.compact.down" : "text.cursor")
+                    Image(systemName: "text.cursor")
                         .font(.title3)
                         .frame(width: 52, height: 52)
                 }
