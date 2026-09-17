@@ -47,9 +47,6 @@ struct ChatScreen: View {
     /// Extra chrome pinned in the status strip before the level switcher
     /// (the surface toggle lives here). Nil = no slot.
     var stripAccessory: AnyView? = nil
-    /// host:session · workspace · tab, shown in the nav bar's title slot
-    /// beside the back button. Nil leaves the bar titleless.
-    var breadcrumb: String? = nil
     /// The composer's submit router (Phase 2); enables the floating input
     /// button. Nil = read-only chat (previews, unwired hosts).
     var router: ComposerRouterStore? = nil
@@ -69,7 +66,6 @@ struct ChatScreen: View {
         isLoadingOlder: Bool = false,
         loadOlder: (@Sendable () async -> Void)? = nil,
         stripAccessory: AnyView? = nil,
-        breadcrumb: String? = nil,
         router: ComposerRouterStore? = nil,
         deliver: ((String) async throws -> Void)? = nil
     ) {
@@ -82,7 +78,6 @@ struct ChatScreen: View {
         self.isLoadingOlder = isLoadingOlder
         self.loadOlder = loadOlder
         self.stripAccessory = stripAccessory
-        self.breadcrumb = breadcrumb
         self.router = router
         self.deliver = deliver
         self._level = State(initialValue: initialLevel)
@@ -126,51 +121,17 @@ struct ChatScreen: View {
         // The floating input affordance only exists when a router is wired.
         .overlay { if router != nil && deliver != nil { inputOverlay } }
         .safeAreaInset(edge: .bottom) { inputFrame }
-        .navigationTitle(breadcrumb ?? "")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            // The whole header lives on the back button's row: state dot +
-            // title at principal, level switcher + surface toggle trailing.
-            // No second strip row — the chat owns the vertical space.
-            ToolbarItem(placement: .principal) {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(stateColor)
-                        .frame(width: 8, height: 8)
-                        .accessibilityLabel(Text(state.rawValue))
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(agentName)
-                            .font(.subheadline.weight(.semibold))
-                            .lineLimit(1)
-                        if let breadcrumb {
-                            Text(breadcrumb)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
-                }
-            }
+            // Only the level switcher rides the nav bar from here; the
+            // title row and surface toggle are owned by the detail view so
+            // they exist on BOTH surfaces.
             ToolbarItem(placement: .topBarTrailing) {
-                HStack(spacing: 4) {
-                    DetailLevelSwitcher(level: level) { newLevel in
-                        level = newLevel
-                        changeLevel(newLevel, paneID)
-                    }
-                    if let stripAccessory {
-                        stripAccessory
-                    }
+                DetailLevelSwitcher(level: level) { newLevel in
+                    level = newLevel
+                    changeLevel(newLevel, paneID)
                 }
             }
-        }
-    }
-
-    private var stateColor: Color {
-        switch state {
-        case .idle: .secondary
-        case .running: .green
-        case .blocked: .orange
-        case .offline: .red
         }
     }
 
@@ -241,10 +202,15 @@ struct ChatScreen: View {
             HStack {
                 Spacer()
                 Button {
-                    inputPresented = true
-                    inputFocused = true
+                    if inputPresented {
+                        inputPresented = false
+                        inputFocused = false
+                    } else {
+                        inputPresented = true
+                        inputFocused = true
+                    }
                 } label: {
-                    Image(systemName: "text.cursor")
+                    Image(systemName: inputPresented ? "keyboard.chevron.compact.down" : "text.cursor")
                         .font(.title3)
                         .frame(width: 52, height: 52)
                 }
@@ -278,6 +244,17 @@ struct ChatScreen: View {
                         .padding(.top, 6)
                 }
                 HStack(spacing: 8) {
+                    Button {
+                        inputPresented = false
+                        inputFocused = false
+                    } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 28, height: 28)
+                            .contentShape(Rectangle())
+                    }
+                    .accessibilityLabel("Close input")
                     TextField("Message — / # @ ! for commands", text: $draft, axis: .vertical)
                         .textFieldStyle(.plain)
                         .focused($inputFocused)

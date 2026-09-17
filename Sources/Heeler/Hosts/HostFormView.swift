@@ -42,6 +42,11 @@ struct HostFormView: View {
             Form {
                 Section("Host") {
                     TextField("Name (optional)", text: $draft.name)
+                    TextField(
+                        aliasPlaceholder,
+                        text: $draft.alias,
+                        prompt: Text(verbatim: aliasPlaceholder)
+                    )
                     TextField("Address", text: $draft.address)
                         .textContentType(.URL)
                         .autocorrectionDisabled()
@@ -164,6 +169,14 @@ struct HostFormView: View {
                 await discoverSessions()
             }
         }
+    }
+
+    /// The Alias field's title/placeholder: the Host's real name when the
+    /// form has one to preview, otherwise a generic hint. Empty stays empty
+    /// (no alias) rather than defaulting to the name.
+    private var aliasPlaceholder: String {
+        let realName = editing?.displayName ?? draft.name.trimmingCharacters(in: .whitespaces)
+        return realName.isEmpty ? "Alias (optional)" : "Alias (optional) — replaces \"\(realName)\""
     }
 
     private var jumpHostFooter: String {

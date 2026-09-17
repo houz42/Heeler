@@ -87,6 +87,15 @@ struct DetailLevelSwitcher: View {
         .l3: "Thinking",
     ]
 
+    /// One icon per level; the bar shows the CURRENT level's icon, so the
+    /// control is one glyph wide and still reads its state.
+    private static let icons: [DetailLevel: String] = [
+        .l0: "text.alignleft",
+        .l1: "hammer",
+        .l2: "tray.full",
+        .l3: "brain.head.profile",
+    ]
+
     /// Longer explanations in the menu itself, so the trade-off of each level
     /// is discoverable at the point of choice.
     private static let hints: [DetailLevel: String] = [
@@ -103,21 +112,23 @@ struct DetailLevelSwitcher: View {
                     changeLevel(candidate)
                 } label: {
                     if candidate == level {
-                        Label(Self.labels[candidate]!, systemImage: "checkmark")
+                        Label(
+                            "\(Self.labels[candidate]!) — \(Self.hints[candidate]!)",
+                            systemImage: "checkmark")
                     } else {
-                        Text("\(Self.labels[candidate]!) — \(Self.hints[candidate]!)")
+                        Label(
+                            "\(Self.labels[candidate]!) — \(Self.hints[candidate]!)",
+                            systemImage: Self.icons[candidate]!)
                     }
                 }
             }
         } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "line.3.horizontal.decrease")
-                    .imageScale(.small)
-                Text(Self.labels[level]!)
-            }
+            Image(systemName: Self.icons[level]!)
+                .font(.subheadline)
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
         }
         .menuIndicator(.hidden)
-        .buttonStyle(.borderless)
         .accessibilityLabel("Detail level: \(Self.labels[level]!)")
     }
 }

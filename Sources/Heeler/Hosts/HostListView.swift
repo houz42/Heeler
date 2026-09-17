@@ -6,7 +6,7 @@ struct HostRemovalRequest: Equatable {
 
     var title: String {
         if hosts.count == 1, let host = hosts.first {
-            return "Remove \(host.displayName)?"
+            return "Remove \(host.displayAliasName)?"
         }
         return "Remove \(hosts.count) Hosts?"
     }
@@ -296,7 +296,7 @@ struct HostListView: View {
                             addQuickSession(offer, on: host)
                         } label: {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("\(host.displayName) · session \(offer.sessionName)")
+                                Text("\(host.displayAliasName) · session \(offer.sessionName)")
                                     .font(.subheadline)
                                 Text(offer.isRunning ? "Running" : "Stopped")
                                     .font(.caption)
@@ -307,7 +307,7 @@ struct HostListView: View {
                 } header: {
                     Text("Discovered Sessions")
                 } footer: {
-                    Text("Tap to add a session as its own Host, reusing \(host.displayName)'s connection.")
+                    Text("Tap to add a session as its own Host, reusing \(host.displayAliasName)'s connection.")
                 }
             }
         }
@@ -339,7 +339,7 @@ private struct HostRow: View {
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(host.displayName)
+                Text(host.displayAliasName)
                     .font(.headline)
                 Text(subtitle)
                     .font(.subheadline)

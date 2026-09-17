@@ -683,7 +683,7 @@ final class HostConsoleProjection {
             }
             nextAgents[agent.paneID] = ConsoleAgent(
                 hostID: host.id,
-                hostName: host.displayName,
+                hostName: host.displayAliasName,
                 agent: agent,
                 workspaceLabel: workspace?.label,
                 repositoryCheckout: workspace?.worktree.map(RepositoryCheckout.init),

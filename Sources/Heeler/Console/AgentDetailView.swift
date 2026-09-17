@@ -173,6 +173,52 @@ struct AgentDetailView: View {
 
     /// The chat pane's rendered state, projecting the store's phase into
     /// ChatScreen's inputs.
+    /// The nav-bar principal content: the user-configured agent-list layout
+    /// (Settings → Agent list fields) rendered in place — row 0 as the title,
+    /// row 1 as the subtitle. Separators keep their spacing; token styling
+    /// (fg/bold/dim) is honored at text scale.
+    private struct AgentDetailHeaderTokens: View {
+        let rows: [[RenderedToken]]
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 0) {
+                if let title = rows.first {
+                    tokenLine(title, font: .subheadline.weight(.semibold))
+                }
+                if rows.count > 1 {
+                    tokenLine(rows[1], font: .caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+
+        private func tokenLine(_ tokens: [RenderedToken], font: Font) -> some View {
+            tokens.reduce(Text("")) { partial, token in
+                var text = Text(token.text)
+                if token.bold == true { text = text.bold() }
+                if token.dim == true { text = text.foregroundStyle(.secondary) }
+                var view = text.font(token.isSeparator ? nil : font)
+                if let hex = token.fg {
+                    view = view.foregroundStyle(Color(
+                        red: Double(hex.red) / 255,
+                        green: Double(hex.green) / 255,
+                        blue: Double(hex.blue) / 255))
+                }
+                return partial + view
+            }
+            .lineLimit(1)
+        }
+    }
+
+    private var chatStateColor: Color {
+        switch chatAgentState {
+        case .idle: .secondary
+        case .running: .green
+        case .blocked: .orange
+        case .offline: .red
+        }
+    }
+
     private var chatAgentState: ChatAgentState {
         switch console.agents.first(where: { $0.id == agent.id })?.agent.status {
         case .working: .running
@@ -213,18 +259,6 @@ struct AgentDetailView: View {
 
     /// Builds (once per agent identity) and starts the chat store, then
     /// renders the chat surface.
-    /// The chat surface's nav-bar breadcrumb: host:session · workspace · tab,
-    /// riding the back button's row instead of its own strip of vertical space.
-    private var chatBreadcrumb: String {
-        var parts: [String] = [agent.hostName]
-        if !agent.hostSessionName.isEmpty {
-            parts[0] += ":\(agent.hostSessionName)"
-        }
-        // The tab label is the title's job; repeating it here would double it.
-        if let workspace = agent.workspaceLabel { parts.append(workspace) }
-        return parts.joined(separator: " · ")
-    }
-
     @ViewBuilder
     private var chatSurface: some View {
         if let chat {
@@ -241,8 +275,6 @@ struct AgentDetailView: View {
                 hasOlder: chat.hasOlder,
                 isLoadingOlder: chat.isLoadingOlder,
                 loadOlder: { [weak chat] in await chat?.loadOlder() },
-                stripAccessory: AnyView(surfacePicker),
-                breadcrumb: chatBreadcrumb,
                 router: chatRouter,
                 deliver: { text in
                     try await console.promptAgent(
@@ -299,6 +331,26 @@ struct AgentDetailView: View {
                     composer: composer,
                     attachStore: attach)
                 .id(openTerminal.destination)
+            }
+        }
+        .toolbar {
+            // One header for both surfaces: state dot + title at principal,
+            // the chat/terminal toggle trailing. The chat surface adds its
+            // level switcher on top of this.
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(chatStateColor)
+                        .frame(width: 8, height: 8)
+                        .accessibilityLabel(Text(chatAgentState.rawValue))
+                    AgentDetailHeaderTokens(
+                        rows: AgentRowRenderer.render(
+                            layout: console.rowLayout(for: agent.hostID),
+                            agent: agent))
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                surfacePicker
             }
         }
         // The initial surface follows the agent's session shape; Chat is the
