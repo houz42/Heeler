@@ -96,31 +96,31 @@ struct ChatBlockText: View {
                     RoundedRectangle(cornerRadius: 1.5)
                         .fill(.tint)
                         .frame(width: 3)
-                    markdownText
+                    markdownBody
                 }
                 .padding(.vertical, 4)
                 .padding(.trailing, 4)
                 .background(.tint.opacity(0.07))
             } else {
-                markdownText
+                markdownBody
             }
         }
         .font(style.font)
         .foregroundStyle(style.color)
-        .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// Renders inline markdown (bold, code, links); falls back to plain
-    /// text when the content isn't valid markdown (never fails visually).
-    private var markdownText: Text {
-        if let attributed = try? AttributedString(
-            markdown: text,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
-        {
-            return Text(attributed)
+    /// Prose (user/assistant) renders as rich markdown; output/thinking
+    /// stay plain monospace — terminal-ish content must never have its
+    /// syntax reinterpreted (a fenced block inside tool output is data,
+    /// not markup).
+    @ViewBuilder private var markdownBody: some View {
+        if style.mono {
+            Text(text)
+                .textSelection(.enabled)
+        } else {
+            ChatMarkdownView(markdown: text)
         }
-        return Text(text)
     }
 
     private var alignment: Alignment {
@@ -290,18 +290,17 @@ struct ChatPendingRow: View {
 
 // MARK: - Linkified chat text (openers)
 
-/// The linkified form of `ChatBlockText`: same typography and selection,
-/// with `ChatLinkDetector`'s targets applied as tappable links routed
-/// through `OpenRouterCore`. Rows keep their exact layout — this wrapper
-/// only swaps the inner `Text` for an attributed one; when no links are
-/// detected the attributed string carries no links and rendering is
-/// unchanged.
+/// The linkified form of `ChatBlockText`: same layout, with the
+/// rendered markdown's links routed through `OpenRouterCore` via the
+/// `\.openURL` environment — the same interception seam the attributed-
+/// string path used (MarkdownUI renders links as `Text` with `.link`
+/// attributes, which SwiftUI hands to that environment's action).
+/// Output/thinking stay plain monospace exactly as `ChatBlockText`
+/// renders them (no markdown, no routing of terminal paths).
 struct ChatLinkText: View {
     let text: String
     let style: ChatBlockText.Style
     let router: OpenRouterCore?
-
-    @Environment(\.openURL) private var openURL
 
     init(
         _ text: String, style: ChatBlockText.Style, router: OpenRouterCore?
@@ -320,18 +319,17 @@ struct ChatLinkText: View {
                     RoundedRectangle(cornerRadius: 1.5)
                         .fill(.tint)
                         .frame(width: 3)
-                    linkedText
+                    linkedBody
                 }
                 .padding(.vertical, 4)
                 .padding(.trailing, 4)
                 .background(.tint.opacity(0.07))
             } else {
-                linkedText
+                linkedBody
             }
         }
         .font(style.font)
         .foregroundStyle(style.color)
-        .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: alignment)
         .environment(
             \.openURL,
@@ -342,37 +340,17 @@ struct ChatLinkText: View {
             })
     }
 
-    private var linkedText: Text {
-        Text(attributed)
-    }
-
-    /// The row's text with markdown rendered and detected targets linked.
-    /// Detection runs on the raw text; ranges are mapped onto the rendered
-    /// markdown string — when markdown rendering strips syntax characters
-    /// the map can miss, and that link silently stays plain text (never a
-    /// visual failure).
-    static func attributedText(
-        _ text: String
-    ) -> AttributedString {
-        var attributed = (try? AttributedString(
-            markdown: text,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(text)
-        // Detect on the RENDERED text: markdown parsing strips syntax
-        // characters, so raw-text ranges would map to wrong spans. Links
-        // written as markdown [text](url) already carry .link from the
-        // parser; this pass catches bare URLs and absolute paths.
-        let rendered = String(attributed.characters)
-        for link in ChatLinkDetector.detect(in: rendered) {
-            if let range = Range(link.range, in: attributed) {
-                attributed[range].link = link.target.linkURL
-            }
+    /// Prose renders rich markdown with the detector's path targets
+    /// rewritten in (bare URLs and http(s) constructs are MarkdownUI's
+    /// own); output/thinking stay plain monospace with text selection —
+    /// terminal paths open via the share flow, not tap accidents.
+    @ViewBuilder private var linkedBody: some View {
+        if style.mono {
+            Text(text)
+                .textSelection(.enabled)
+        } else {
+            ChatMarkdownView(markdown: ChatMarkdownText(text).rewritten)
         }
-        return attributed
-    }
-
-    private var attributed: AttributedString {
-        Self.attributedText(text)
     }
 
     private var alignment: Alignment {

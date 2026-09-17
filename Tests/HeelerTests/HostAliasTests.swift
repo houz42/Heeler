@@ -7,6 +7,7 @@ import Testing
 
 /// The user-assignable Host alias: resolution precedence, persistence,
 /// normalization, and migration of Hosts saved before the field existed.
+@MainActor
 @Suite("Host alias")
 struct HostAliasTests {
     // MARK: Resolution

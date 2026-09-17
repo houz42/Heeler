@@ -2,11 +2,11 @@ import SwiftUI
 
 // SPDX-License-Identifier: Apache-2.0
 //
-// The internal markdown viewer: minimal chrome, monospace scrollable text
-// (swift-markdown is not a dependency of this project — checked
-// Package.resolved — so v1 renders plain monospace text; adopting the
-// package later is a body-local change). Close plus the open-external
-// affordances (copy, share out) are the whole chrome.
+// The internal markdown viewer: minimal chrome, monospace scrollable text.
+// MarkdownUI is now a project dependency (chat rendering), but this
+// viewer keeps the plain-monospace v1 body: fetched files can be huge,
+// and Markdown-style rendering of arbitrary 10MB transcripts is not a
+// trade this surface needs yet. Adopting it later is a body-local change.
 
 /// Full-screen markdown document viewer for one fetched remote file.
 /// Minimal chrome: a thin inline header (title, Done, actions menu) and
