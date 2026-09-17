@@ -8,6 +8,8 @@ enum ConsoleListPresentationMode: String, CaseIterable, Identifiable, Sendable {
     case flat
     case grouped
     case tree
+    var id: String { rawValue }
+
     /// Toolbar / picker label for the presentation switcher.
     var title: String {
         switch self {
