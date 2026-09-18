@@ -12,9 +12,10 @@ struct HostDraft: Equatable, Sendable {
     /// Blank means "keep the stored password" when editing.
     var password = ""
     var sessionName = ""
-    /// Comma-separated alternative addresses for the same machine, dialed in
-    /// order after Address when it does not answer. Blank means single-path.
-    var additionalAddresses = ""
+    /// Alternative addresses for the same machine, dialed in order after
+    /// Address when it does not answer. One entry per form row; the empty
+    /// string means single-path.
+    var additionalAddresses: [String] = []
     /// Blank means a direct connection. When set, Address/Port above are
     /// resolved from the Jump Host, not from this device.
     var jumpAddress = ""
@@ -34,7 +35,7 @@ struct HostDraft: Equatable, Sendable {
         username = host.username
         authMethod = host.authMethod
         sessionName = host.sessionName
-        additionalAddresses = host.additionalAddresses.joined(separator: ", ")
+        additionalAddresses = host.additionalAddresses
         jumpAddress = host.jumpAddress
         jumpPort = String(host.jumpPort)
         jumpUsername = host.jumpUsername
@@ -89,21 +90,39 @@ struct HostDraft: Equatable, Sendable {
             username: username.trimmingCharacters(in: .whitespaces),
             authMethod: authMethod,
             sessionName: sessionName.trimmingCharacters(in: .whitespaces),
-            additionalAddresses: parsedAdditionalAddresses,
+            additionalAddresses: normalizedAdditionalAddresses,
             jumpAddress: jumpAddress.trimmingCharacters(in: .whitespaces),
             jumpPort: jumpPortNumber ?? 22,
             jumpUsername: jumpUsername.trimmingCharacters(in: .whitespaces),
             alias: trimmedAlias)
     }
 
-    /// The additional-addresses field is comma-separated: split on commas,
-    /// trim each, drop empties. Everything (decode, the form, the dialer)
-    /// sees the same candidate list.
-    var parsedAdditionalAddresses: [String] {
+    /// The form's additional rows: trimmed, empty entries dropped. Everything
+    /// (decode, the form, the dialer) sees the same candidate list.
+    var normalizedAdditionalAddresses: [String] {
         additionalAddresses
-            .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
+    }
+
+    /// Appends one additional-address row. A blank row is a no-op — the
+    /// row exists to be typed into; saving drops it instead of rejecting.
+    mutating func addAdditionalAddress(_ address: String = "") {
+        additionalAddresses.append(address)
+    }
+
+    /// Removes the additional row at `index`. Additional rows only: the
+    /// primary address is not part of this list and cannot be removed, so a
+    /// Host always keeps at least one dialable address.
+    mutating func removeAdditionalAddress(at index: Int) {
+        guard additionalAddresses.indices.contains(index) else { return }
+        additionalAddresses.remove(at: index)
+    }
+
+    /// Reorders the additional rows after an EditMode/onDelete OnMove. The
+    /// primary address stays first regardless of `destination`.
+    mutating func moveAdditionalAddress(from source: IndexSet, to destination: Int) {
+        additionalAddresses.move(fromOffsets: source, toOffset: destination)
     }
 
     /// A whitespace-only alias is no alias: trimmed, and nil when blank, so

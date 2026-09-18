@@ -24,32 +24,67 @@ struct HostOnboardingView: View {
         connectionStatus: EventsSessionStatus? = nil,
         standingFailure: TransportError? = nil,
         isManualReconnectInFlight: Bool = false,
-        retryConnection: (@MainActor @Sendable () async -> Void)? = nil
+        retryConnection: (@MainActor @Sendable () async -> Void)? = nil,
+        /// Pre-built store override for demo screenshots; nil builds the
+        /// production store keyed to this Host.
+        store: HostOnboardingStore? = nil
     ) {
         self.catalog = catalog
         self.connectionStatus = connectionStatus
         self.standingFailure = standingFailure
         self.isManualReconnectInFlight = isManualReconnectInFlight
         self.retryConnection = retryConnection
-        _store = State(initialValue: HostOnboardingStore(host: host))
+        _store = State(
+            initialValue: store ?? HostOnboardingStore(
+                host: host,
+                preferredAddresses: PreferredAddressStore(hostID: host.id)))
     }
 
     var body: some View {
         List {
             Section {
                 LabeledContent("Address", value: addressLine)
-                if let working = store.workingAddress {
-                    LabeledContent(
-                        "Connected via",
-                        value: working.failedAttempts == 0
-                            ? working.address
-                            : "\(working.address) (after \(working.failedAttempts) "
-                                + "unreachable path\(working.failedAttempts == 1 ? "" : "s"))")
-                }
                 LabeledContent("Session", value: sessionLine)
                 LabeledContent(
                     "Auth",
                     value: store.host.authMethod == .deviceKey ? "Device Key" : "Password")
+            }
+
+            // Every way this Host can be reached, with the live probe state
+            // of each from the last sweep. Multi-path Hosts run a sweep
+            // before connecting; single-address Hosts show their one row
+            // with the connection outcome.
+            Section {
+                ForEach(store.orderedCandidates, id: \.self) { address in
+                    candidateRow(address)
+                }
+                if let choices = store.pendingAddressChoice {
+                    Text(
+                        "Several addresses answered. Pick the one to use — "
+                            + "it becomes this Host's preferred path.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    ForEach(choices, id: \.self) { address in
+                        Button {
+                            Task { await store.chooseAddress(address) }
+                        } label: {
+                            HStack {
+                                Image(systemName: "checkmark.circle")
+                                    .foregroundStyle(.green)
+                                Text(address)
+                                Spacer()
+                                Text("Use")
+                                    .font(.callout.bold())
+                                    .foregroundStyle(.tint)
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+            } header: {
+                Text("Addresses")
+            } footer: {
+                Text(addressSectionFooter)
             }
 
             if retryConnection != nil {
@@ -205,6 +240,50 @@ struct HostOnboardingView: View {
             return name
         }
         return "default"
+    }
+
+    /// One address row: the address, its dialing position, and its live
+    /// probe state (spinner while probing, green/red once resolved,
+    /// gray before a sweep).
+    private func candidateRow(_ address: String) -> some View {
+        let state = store.candidateStates[address] ?? .unknown
+        let isPreferred = store.orderedCandidates.first == address
+        return HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(address)
+                if isPreferred {
+                    Text("Preferred")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            switch state {
+            case .unknown:
+                Image(systemName: "questionmark.circle")
+                    .foregroundStyle(.secondary)
+            case .probing:
+                ProgressView()
+                    .controlSize(.small)
+            case .reachable:
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            case .unreachable:
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+
+    private var addressSectionFooter: String {
+        if store.pendingAddressChoice != nil {
+            return "Pick the address to connect through."
+        }
+        if store.host.candidateAddresses.count > 1 {
+            return "Addresses are dialed in order until one answers. "
+                + "A pick made here becomes the preferred path."
+        }
+        return ""
     }
 
     private func retry() {

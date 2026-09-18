@@ -40,7 +40,7 @@ struct HostFormView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Host") {
+                Section {
                     TextField("Name (optional)", text: $draft.name)
                     TextField(
                         aliasPlaceholder,
@@ -51,16 +51,38 @@ struct HostFormView: View {
                         .textContentType(.URL)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
+                    ForEach($draft.additionalAddresses, id: \.self) { $address in
+                        HStack {
+                            TextField("Additional address", text: $address)
+                                .textContentType(.URL)
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.never)
+                            Button(role: .destructive) {
+                                removeAddress(at: getIndexOf(address))
+                            } label: {
+                                Image(systemName: "minus.circle.fill")
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+                    .onMove { source, destination in
+                        draft.moveAdditionalAddress(from: source, to: destination)
+                    }
+                    Button {
+                        draft.addAdditionalAddress()
+                    } label: {
+                        Label("Add address", systemImage: "plus.circle.fill")
+                    }
                     TextField("Port", text: $draft.port)
                         .keyboardType(.numberPad)
-                    TextField("Additional addresses (comma-separated)", text: $draft.additionalAddresses)
-                        .textContentType(.URL)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
                     TextField("User", text: $draft.username)
                         .textContentType(.username)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
+                } header: {
+                    Text("Host")
+                } footer: {
+                    Text(addressFooter)
                 }
 
                 Section {
@@ -194,6 +216,30 @@ struct HostFormView: View {
         return "The Host's Address and Port are resolved from the Jump Host, usually through "
             + "a loopback-only reverse tunnel. \(credentialRequirement) You confirm each "
             + "machine's host key fingerprint independently on first connect."
+    }
+
+    private var addressFooter: String {
+        "The first address is dialed first; each additional one is tried in "
+            + "order when the one before it does not answer. They should all "
+            + "name the same machine."
+    }
+
+    /// The binding ForEach renders rows by identity; removing a row needs
+    /// the row's index, not its (possibly duplicated) string value.
+    private func removeAddress(at index: Int) {
+        // Removing the last additional row returns to a single-address Host;
+        // the primary Address row itself can never be removed.
+        draft.removeAdditionalAddress(at: index)
+    }
+
+    /// Resolves a row's index from its binding wrapper. Rows are addressed
+    /// by index; duplicated strings would break a value-based lookup.
+    private func getIndexOf(_ address: String) -> Int {
+        // The ForEach binds `$address` — find by identity in the array.
+        if let index = draft.additionalAddresses.firstIndex(of: address) {
+            return index
+        }
+        return draft.additionalAddresses.count
     }
 
     @ViewBuilder

@@ -163,11 +163,15 @@ extension SSHTransportSettings {
 extension SSHTransportSettings {
     /// Transport settings for a catalog Host, given resolved credentials and
     /// the TOFU policy the UI wires up. The Host's port applies to every
-    /// candidate address: they name the same sshd on the same machine.
+    /// candidate address: they name the same sshd on the same machine. A
+    /// user-preferred address (see `PreferredAddressStore`) dials first; the
+    /// rest keep their configured order behind it.
     init(host: Host, credentials: SSHCredentials, hostKeyPolicy: HostKeyPolicy) {
+        let preferredOrder = PreferredAddressStore(hostID: host.id)
+            .preferredOrder(for: host.candidateAddresses)
         self.init(
-            host: host.address,
-            candidateAddresses: host.additionalAddresses,
+            host: preferredOrder.first ?? host.address,
+            candidateAddresses: Array(preferredOrder.dropFirst()),
             port: host.port,
             username: host.username,
             credentials: credentials,

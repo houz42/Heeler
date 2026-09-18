@@ -8,15 +8,35 @@ struct HostKeyReplacement: Equatable, Sendable {
     let presented: HostKeyFingerprint
 }
 
+/// Where one candidate address stands in an interactive probe sweep.
+enum CandidateProbeState: Equatable, Sendable {
+    /// Not probed yet in this sweep.
+    case unknown
+    /// The probe for this address is in flight.
+    case probing
+    /// The address answered an SSH handshake.
+    case reachable
+    /// The address did not answer within the probe budget.
+    case unreachable
+}
+
 /// Drives one Host's onboarding preflight (#14): resolve credentials,
 /// connect (surfacing the TOFU first-connect prompt), discover sessions,
 /// ping the selected session, and render the outcome as the checklist.
+///
+/// Multi-path Hosts get an interactive probe sweep before connecting:
+/// candidates are probed one by one (states published live), then exactly
+/// one reachable address connects directly while several reachable ones
+/// stop for the user's pick — the pick persists as the preferred dial order
+/// (`PreferredAddressStore`) so the next run dials it first.
 @MainActor
 @Observable
 final class HostOnboardingStore {
     enum Phase: Equatable {
         case idle
         case running
+        /// Probing candidate addresses one by one before connecting.
+        case probing
         case finished
     }
 
@@ -30,17 +50,25 @@ final class HostOnboardingStore {
     private(set) var report: PreflightReport?
     private(set) var serverInfo: ServerInfo?
     /// Which candidate address the preflight connection succeeded on. nil
-    /// until a connect succeeds (or when the Host has one address, which is
-    /// every connect — the value still names the dialed address).
+    /// until a connect succeeds; single-address Hosts report their one
+    /// address.
     private(set) var workingAddress: CandidateDialResult?
     private(set) var availableSessions: [HerdrSession] = []
     private(set) var sessionDiscoveryError: String?
+    /// Live state per candidate address during a probe sweep, in dialing
+    /// order. Empty outside a sweep; the UI renders the Address section
+    /// from it.
+    private(set) var candidateStates: [String: CandidateProbeState] = [:]
+    /// Set when a probe sweep found MORE THAN ONE reachable address and the
+    /// user must choose one; the UI renders it as a tappable list.
+    private(set) var pendingAddressChoice: [String]?
 
     let host: Host
 
     @ObservationIgnored private let connector: any TransportConnector
     @ObservationIgnored private let knownHosts: any KnownHostsStore
     @ObservationIgnored private let credentials: HostCredentialsProvider
+    @ObservationIgnored private let preferredAddresses: PreferredAddressStore
     /// The transport deliberately has no confirmation timeout (#2); the UI
     /// layer owns it (spec #20). An unanswered candidate is declined.
     @ObservationIgnored private let fingerprintTimeout: Duration
@@ -52,18 +80,165 @@ final class HostOnboardingStore {
         connector: any TransportConnector = SSHTransportConnector(),
         knownHosts: any KnownHostsStore = UserDefaultsKnownHostsStore.shared,
         credentials: HostCredentialsProvider = HostCredentialsProvider(),
+        // Callers build this keyed to `host.id` (the UI from the Host, tests
+        // from a volatile defaults suite); there is no default because the
+        // key depends on the Host.
+        preferredAddresses: PreferredAddressStore,
         fingerprintTimeout: Duration = .seconds(60)
     ) {
         self.host = host
         self.connector = connector
         self.knownHosts = knownHosts
         self.credentials = credentials
+        self.preferredAddresses = preferredAddresses
         self.fingerprintTimeout = fingerprintTimeout
     }
 
-    /// Runs the preflight once: connect + ping, rendered into `report`.
+    /// The addresses to render and probe: the Host's candidates in the
+    /// preferred dial order (a stored pick moves its address first).
+    var orderedCandidates: [String] {
+        preferredAddresses.preferredOrder(for: host.candidateAddresses)
+    }
+
+    /// Runs the preflight once: probe when the Host has several candidates
+    /// and no working state yet, then connect + ping, rendered into `report`.
     func runChecks() async {
-        guard phase != .running else { return }
+        guard phase != .running, phase != .probing else { return }
+        pendingAddressChoice = nil
+        // Credential failures (no password, corrupt Device Key) fail every
+        // candidate identically; surface them before a sweep so the hint
+        // names the credential problem, not "unreachable addresses".
+        if let failure = credentialsFailureReport() {
+            phase = .running
+            candidateStates = [:]
+            report = failure
+            phase = .finished
+            return
+        }
+        let candidates = orderedCandidates
+        if candidates.count > 1 {
+            await probeThenConnect(candidates: candidates)
+        } else {
+            candidateStates = [:]
+            await connectAndCheck(settingsHost: candidates.first ?? host.address)
+        }
+    }
+
+    /// The user's pick among several reachable addresses: persist it as the
+    /// preferred order, clear the choice, and connect through it.
+    func chooseAddress(_ address: String) async {
+        guard let choices = pendingAddressChoice, choices.contains(address) else { return }
+        pendingAddressChoice = nil
+        preferredAddresses.prefer(address, candidates: orderedCandidates)
+        candidateStates[address] = .reachable
+        await connectAndCheck(settingsHost: address)
+    }
+
+    /// The user's verdict on the pending fingerprint.
+    func confirmFingerprint(trusted: Bool) {
+        resolveFingerprint(trusted)
+    }
+
+    /// Persists a discovered session through the Host catalog. The enclosing
+    /// navigation destination is keyed by the Host value, so this recreates
+    /// onboarding and immediately checks the selected socket.
+    func selectSession(_ session: HerdrSession, in catalog: HostStore) throws {
+        var updated = host
+        updated.sessionName = session.isDefault ? "" : session.name
+        try catalog.update(updated)
+    }
+
+    /// Replaces a mismatched pin only after the UI has obtained an explicit
+    /// confirmation, then immediately proves the new pin by rerunning preflight.
+    func trustPresentedHostKey() async {
+        guard phase != .running, phase != .probing,
+            let replacement = pendingHostKeyReplacement
+        else { return }
+        try? await knownHosts.setFingerprint(
+            replacement.presented, host: host.address, port: host.port)
+        await runChecks()
+    }
+
+    // MARK: Probe sweep
+
+    /// Probes candidates one by one, publishing live states, then either
+    /// auto-connects (exactly one reachable), stops for the user's pick
+    /// (more than one), or fails (none).
+    private func probeThenConnect(candidates: [String]) async {
+        phase = .probing
+        report = nil
+        serverInfo = nil
+        workingAddress = nil
+        availableSessions = []
+        sessionDiscoveryError = nil
+        pendingHostKeyReplacement = nil
+        candidateStates = Dictionary(
+            uniqueKeysWithValues: candidates.map { ($0, CandidateProbeState.unknown) })
+
+        var reachable: [String] = []
+        for address in candidates {
+            candidateStates[address] = .probing
+            if await probeOne(address: address) {
+                candidateStates[address] = .reachable
+                reachable.append(address)
+            } else {
+                candidateStates[address] = .unreachable
+            }
+        }
+
+        switch reachable.count {
+        case 0:
+            phase = .finished
+            report = .failure(
+                check: .connection,
+                hint: "None of this Host's addresses could be reached. "
+                    + "Check the addresses and the network path to them.")
+        case 1:
+            // Exactly one path works: use it, like the automatic dialer.
+            await connectAndCheck(settingsHost: reachable[0])
+        default:
+            // Several paths work: the user knows which one they want (the
+            // cheap LAN hop over the metered VPN, say). Stop and ask.
+            phase = .finished
+            pendingAddressChoice = reachable
+        }
+    }
+
+    /// One connect-only probe of `address`. True when the SSH handshake
+    /// answered; failures of any other class (auth, trust) still prove the
+    /// path itself works, so they count as reachable too — the subsequent
+    /// full connect reports them with proper guidance.
+    private func probeOne(address: String) async -> Bool {
+        guard let resolved = try? credentials.credentials(for: host) else { return false }
+        // No TOFU prompt from a probe: keys not already trusted fail the
+        // probe quietly; the full connect owns the trust conversation.
+        let policy = HostKeyPolicy(knownHosts: knownHosts) { _ in false }
+        var settings = SSHTransportSettings(
+            host: host, credentials: resolved, hostKeyPolicy: policy)
+        settings.host = address
+        settings.candidateAddresses = []
+        do {
+            let transport = try await connector.connect(settings: settings)
+            try? await transport.close()
+            return true
+        } catch is CancellationError {
+            return false
+        } catch {
+            // Reach-class failures mean the path is down; anything else
+            // (auth rejected, unknown host key) still proves the path
+            // carries SSH traffic, so the address is reachable.
+            if let transportError = error as? TransportError,
+                transportError.isReachFailure
+            {
+                return false
+            }
+            return true
+        }
+    }
+
+    // MARK: Full connect + checks
+
+    private func connectAndCheck(settingsHost: String) async {
         phase = .running
         report = nil
         serverInfo = nil
@@ -73,34 +248,19 @@ final class HostOnboardingStore {
         pendingHostKeyReplacement = nil
         defer { phase = .finished }
 
-        let resolved: SSHCredentials
-        do {
-            resolved = try credentials.credentials(for: host)
-        } catch HostCredentialsError.passwordNotSet {
-            report = .failure(
-                check: .connection,
-                hint: "No password is saved for this Host. Edit the Host and enter one.")
-            return
-        } catch DeviceKeyStoreError.storedKeyCorrupt {
-            report = .failure(.deviceKeyCorrupt, authMethod: host.authMethod)
-            return
-        } catch {
-            report = .failure(
-                check: .connection,
-                hint: "Could not load this Host's credentials. (\(error))")
-            return
-        }
+        guard let resolved = resolveCredentials() else { return }
 
         let policy = HostKeyPolicy(knownHosts: knownHosts) { [weak self] candidate in
             await self?.awaitFingerprintDecision(for: candidate) ?? false
         }
-        let settings = SSHTransportSettings(
+        var settings = SSHTransportSettings(
             host: host, credentials: resolved, hostKeyPolicy: policy)
+        settings.host = settingsHost
+        settings.candidateAddresses = []
         do {
-            // The connector reports which candidate address answered;
-            // single-address Hosts report their one address.
-            let transport = try await connectWithCandidateReporting(
-                settings: settings)
+            let transport = try await connector.connect(settings: settings)
+            workingAddress = CandidateDialResult(
+                address: settingsHost, failedAttempts: 0)
             do {
                 availableSessions = try await transport.listSessions()
             } catch {
@@ -121,42 +281,43 @@ final class HostOnboardingStore {
         }
     }
 
-    /// The user's verdict on the pending fingerprint.
-    func confirmFingerprint(trusted: Bool) {
-        resolveFingerprint(trusted)
-    }
-
-    /// Persists a discovered session through the Host catalog. The enclosing
-    /// navigation destination is keyed by the Host value, so this recreates
-    /// onboarding and immediately checks the selected socket.
-    func selectSession(_ session: HerdrSession, in catalog: HostStore) throws {
-        var updated = host
-        updated.sessionName = session.isDefault ? "" : session.name
-        try catalog.update(updated)
-    }
-
-    /// Replaces a mismatched pin only after the UI has obtained an explicit
-    /// confirmation, then immediately proves the new pin by rerunning preflight.
-    func trustPresentedHostKey() async {
-        guard phase != .running, let replacement = pendingHostKeyReplacement else { return }
-        await knownHosts.setFingerprint(replacement.presented, host: host.address, port: host.port)
-        pendingHostKeyReplacement = nil
-        await runChecks()
-    }
-
-    /// Connects through the connector seam, recording which candidate
-    /// address answered. Only `SSHTransportConnector` reports candidates;
-    /// other connectors (tests, previews) connect without reporting, and
-    /// the working address simply stays nil.
-    private func connectWithCandidateReporting(
-        settings: SSHTransportSettings
-    ) async throws -> any Transport {
-        if let sshConnector = connector as? SSHTransportConnector {
-            return try await sshConnector.connect(settings: settings) { [weak self] result in
-                Task { @MainActor in self?.workingAddress = result }
-            }
+    /// Resolves credentials, or nil with `report` set to the credential
+    /// failure. Shared by the sweep pre-check and the full connect: the
+    /// failure report proves `credentials(for:)` succeeds before the second
+    /// call runs, so the fallback is unreachable in practice.
+    @discardableResult
+    private func resolveCredentials() -> SSHCredentials? {
+        if let failure = credentialsFailureReport() {
+            report = failure
+            return nil
         }
-        return try await connector.connect(settings: settings)
+        do {
+            return try credentials.credentials(for: host)
+        } catch {
+            report = .failure(
+                check: .connection,
+                hint: "Could not load this Host's credentials. (\(error))")
+            return nil
+        }
+    }
+
+    /// The credential failure that blocks any candidate from connecting, or
+    /// nil when credentials resolve. Same hints as the pre-multi-path flow.
+    private func credentialsFailureReport() -> PreflightReport? {
+        do {
+            _ = try credentials.credentials(for: host)
+            return nil
+        } catch HostCredentialsError.passwordNotSet {
+            return .failure(
+                check: .connection,
+                hint: "No password is saved for this Host. Edit the Host and enter one.")
+        } catch DeviceKeyStoreError.storedKeyCorrupt {
+            return .failure(.deviceKeyCorrupt, authMethod: host.authMethod)
+        } catch {
+            return .failure(
+                check: .connection,
+                hint: "Could not load this Host's credentials. (\(error))")
+        }
     }
 
     private func captureHostKeyReplacement(_ error: any Error) {
@@ -197,4 +358,20 @@ final class HostOnboardingStore {
         pendingFingerprint = nil
         decision.resume(returning: trusted)
     }
+
+    #if DEBUG && targetEnvironment(simulator)
+        /// Screenshot-only: pins the candidate probe states so the demo
+        /// capture shows a deterministic mid-sweep or resolved list. Never
+        /// compiled into device or Release builds.
+        func scriptProbeStatesForDemo(_ states: [String: CandidateProbeState]) {
+            candidateStates = states
+            phase = states.values.contains(.probing) ? .probing : .finished
+        }
+
+        /// Screenshot-only: pins the pick-between-reachable stop state.
+        func scriptAddressChoiceForDemo(_ choices: [String]) {
+            pendingAddressChoice = choices
+            phase = .finished
+        }
+    #endif
 }

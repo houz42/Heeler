@@ -24,6 +24,22 @@ private final class CandidateReportBox: @unchecked Sendable {
     }
 }
 
+/// A `TransportConnector` whose connect outcome depends on the dialed
+/// address: addresses NOT in `reachable` throw `.sshUnreachable`
+/// (probing marks them unreachable), reachable ones return a transport
+/// that pings with `pingResult` (a full connect succeeds on them).
+private struct AddressScriptedConnector: TransportConnector {
+    let reachable: Set<String>
+    let pingResult: Result<ServerInfo, TransportError>
+
+    func connect(settings: SSHTransportSettings) async throws -> any Transport {
+        guard reachable.contains(settings.host) else {
+            throw TransportError.sshUnreachable(detail: "no route to host")
+        }
+        return FakeTransport(pingResult: pingResult)
+    }
+}
+
 /// One Host, multiple candidate addresses: model shape, persistence
 /// migration, the form field, and the dialer's ordering + fallback through
 /// the `dialOne` stub seam (no real network).
@@ -102,11 +118,11 @@ struct HostMultiPathTests {
 
     // MARK: Draft (form) normalization
 
-    @Test func draftParsesCommaSeparatedAddresses() throws {
+    @Test func draftRowsNormalizeToCandidates() throws {
         var draft = HostDraft()
         draft.address = "192.168.31.71"
         draft.username = "dev"
-        draft.additionalAddresses = " CMF79KM7YF.local , vpn.example ,"
+        draft.additionalAddresses = ["  CMF79KM7YF.local ", "vpn.example", "  "]
 
         let host = try #require(draft.makeHost())
         #expect(host.additionalAddresses == ["CMF79KM7YF.local", "vpn.example"])
@@ -121,17 +137,64 @@ struct HostMultiPathTests {
             additionalAddresses: ["CMF79KM7YF.local", "vpn.example"])
 
         let draft = HostDraft(host: host)
-        #expect(draft.additionalAddresses == "CMF79KM7YF.local, vpn.example")
+        #expect(draft.additionalAddresses == ["CMF79KM7YF.local", "vpn.example"])
         #expect(try draft.makeHost(id: host.id) == host)
     }
 
-    @Test func blankDraftFieldMeansSinglePath() throws {
+    @Test func freshDraftHasNoAdditionalRows() throws {
         var draft = HostDraft()
         draft.address = "a.example"
         draft.username = "dev"
-        draft.additionalAddresses = "  "
 
         #expect(try draft.makeHost()?.additionalAddresses == [])
+    }
+
+    // MARK: Draft row editing (the edit form's dynamic list)
+
+    @Test func addRowAppendsAnAdditionalAddress() {
+        var draft = HostDraft()
+        draft.additionalAddresses = ["vpn.example"]
+
+        draft.addAdditionalAddress()
+
+        #expect(draft.additionalAddresses == ["vpn.example", ""])
+    }
+
+    @Test func removingTheLastAdditionalRowLeavesThePrimaryAddress() throws {
+        var draft = HostDraft()
+        draft.address = "a.example"
+        draft.username = "dev"
+        draft.additionalAddresses = ["vpn.example"]
+
+        draft.removeAdditionalAddress(at: 0)
+
+        // The floor is one TOTAL address: the primary row is not part of
+        // the additional list, so the Host still dials it.
+        let host = try #require(draft.makeHost())
+        #expect(host.additionalAddresses == [])
+        #expect(host.candidateAddresses == ["a.example"])
+    }
+
+    @Test func removingOutOfRangeIndexIsIgnored() {
+        var draft = HostDraft()
+        draft.additionalAddresses = ["vpn.example"]
+
+        draft.removeAdditionalAddress(at: 3)
+
+        #expect(draft.additionalAddresses == ["vpn.example"])
+    }
+
+    @Test func movingRowsReordersCandidatesButKeepsPrimaryFirst() throws {
+        var draft = HostDraft()
+        draft.address = "a.example"
+        draft.username = "dev"
+        draft.additionalAddresses = ["b.example", "c.example"]
+
+        draft.moveAdditionalAddress(from: IndexSet(integer: 1), to: 0)
+
+        let host = try #require(draft.makeHost())
+        #expect(
+            host.candidateAddresses == ["a.example", "c.example", "b.example"])
     }
 
     // MARK: Dial order and fallback (stub seam, no network)
@@ -264,29 +327,136 @@ struct HostMultiPathTests {
         #expect(await dialer.timeoutsUsed == [.seconds(15)])
     }
 
-    // MARK: Preflight reporting
+    // MARK: Preflight probe sweep and pick flow
 
-    @Test func multiAddressPreflightRunStillGoesAllGreen() async throws {
-        // FakeTransportConnector connects without candidate reporting (the
-        // default protocol path), so workingAddress stays nil while every
-        // check still passes. The winning-address value itself is exercised
-        // by the dialer seam tests above.
-        let store = HostOnboardingStore(
-            host: Host(
-                address: "lan.example", username: "dev",
-                additionalAddresses: ["vpn.example"]),
-            connector: FakeTransportConnector(
-                outcome: .connects(pingResult: .success(
-                    ServerInfo(version: "0.7.5", protocolVersion: 17)))),
+    /// FakeTransportConnector connects (and pings) every address it is
+    /// handed, so a multi-address sweep finds every candidate reachable.
+    private func makeOnboardingStore(
+        host: Host,
+        connector: any TransportConnector,
+        defaults: UserDefaults
+    ) -> HostOnboardingStore {
+        HostOnboardingStore(
+            host: host,
+            connector: connector,
             knownHosts: InMemoryKnownHostsStore(),
             credentials: HostCredentialsProvider(
                 deviceKeys: DeviceKeyStore(secrets: InMemorySecretStore()),
-                secrets: InMemorySecretStore()))
+                secrets: InMemorySecretStore()),
+            preferredAddresses: PreferredAddressStore(defaults: defaults, hostID: host.id))
+    }
+
+    @Test func sweepProbesEveryCandidateAndStopsForThePickWhenSeveralAnswer() async throws {
+        let (defaults, cleanup) = try makeDefaults()
+        defer { cleanup() }
+        let store = makeOnboardingStore(
+            host: Host(address: "lan.example", username: "dev", additionalAddresses: ["vpn.example"]),
+            connector: FakeTransportConnector(
+                outcome: .connects(pingResult: .success(
+                    ServerInfo(version: "0.7.5", protocolVersion: 17)))),
+            defaults: defaults)
 
         await store.runChecks()
 
+        // Both paths answered; the run stops for the user's pick.
+        #expect(store.pendingAddressChoice == ["lan.example", "vpn.example"])
+        #expect(store.report == nil)
+        #expect(store.candidateStates["lan.example"] == .reachable)
+        #expect(store.candidateStates["vpn.example"] == .reachable)
+    }
+
+    @Test func pickingAnAddressConnectsThroughItAndPersistsThePreference() async throws {
+        let (defaults, cleanup) = try makeDefaults()
+        defer { cleanup() }
+        let connector = FakeTransportConnector(
+            outcome: .connects(pingResult: .success(
+                ServerInfo(version: "0.7.5", protocolVersion: 17))))
+        let host = Host(
+            address: "lan.example", username: "dev",
+            additionalAddresses: ["vpn.example"])
+        let store = makeOnboardingStore(host: host, connector: connector, defaults: defaults)
+
+        await store.runChecks()
+        await store.chooseAddress("vpn.example")
+
+        #expect(store.pendingAddressChoice == nil)
         #expect(store.report?.isFullyPassed == true)
-        #expect(store.workingAddress == nil)
+        #expect(store.workingAddress?.address == "vpn.example")
+
+        // The pick persists as the preferred order: the next run probes the
+        // VPN path first.
+        let reloadedStore = makeOnboardingStore(
+            host: host, connector: connector, defaults: defaults)
+        #expect(reloadedStore.orderedCandidates == ["vpn.example", "lan.example"])
+    }
+
+    @Test func exactlyOneReachableCandidateAutoConnects() async throws {
+        let (defaults, cleanup) = try makeDefaults()
+        defer { cleanup() }
+        // Scripted per-address outcomes through the TransportConnector
+        // seam: lan throws unreachable, vpn connects.
+        let connector = AddressScriptedConnector(
+            reachable: ["vpn.example"],
+            pingResult: .success(ServerInfo(version: "0.7.5", protocolVersion: 17)))
+        let store = makeOnboardingStore(
+            host: Host(address: "lan.example", username: "dev", additionalAddresses: ["vpn.example"]),
+            connector: connector,
+            defaults: defaults)
+
+        await store.runChecks()
+
+        #expect(store.pendingAddressChoice == nil)
+        #expect(store.report?.isFullyPassed == true)
+        #expect(store.workingAddress?.address == "vpn.example")
+        #expect(store.candidateStates["lan.example"] == .unreachable)
+        #expect(store.candidateStates["vpn.example"] == .reachable)
+    }
+
+    @Test func noReachableCandidateFailsTheConnectionCheck() async throws {
+        let (defaults, cleanup) = try makeDefaults()
+        defer { cleanup() }
+        let connector = AddressScriptedConnector(reachable: [], pingResult: .failure(.timedOut))
+        let store = makeOnboardingStore(
+            host: Host(address: "lan.example", username: "dev", additionalAddresses: ["vpn.example"]),
+            connector: connector,
+            defaults: defaults)
+
+        await store.runChecks()
+
+        #expect(store.pendingAddressChoice == nil)
+        guard case .failed(let hint) = try #require(store.report)[.connection] else {
+            Issue.record("an all-unreachable sweep should fail the connection check")
+            return
+        }
+        #expect(hint.contains("None of this Host's addresses"))
+    }
+
+    @Test func preferredPickMovesItsAddressFirstForDialing() throws {
+        let (defaults, cleanup) = try makeDefaults()
+        defer { cleanup() }
+        let host = Host(
+            address: "lan.example", username: "dev",
+            additionalAddresses: ["vpn.example", "tailnet.example"])
+
+        let store = PreferredAddressStore(defaults: defaults, hostID: host.id)
+        store.prefer("tailnet.example", candidates: host.candidateAddresses)
+
+        #expect(
+            store.preferredOrder(for: host.candidateAddresses)
+                == ["tailnet.example", "lan.example", "vpn.example"])
+    }
+
+    @Test func stalePickForAnEditedHostIsIgnored() throws {
+        let (defaults, cleanup) = try makeDefaults()
+        defer { cleanup() }
+        let host = Host(address: "lan.example", username: "dev")
+
+        let store = PreferredAddressStore(defaults: defaults, hostID: host.id)
+        store.prefer("removed.example", candidates: ["lan.example", "removed.example"])
+
+        // The Host no longer carries the picked address; the configured
+        // order wins.
+        #expect(store.preferredOrder(for: host.candidateAddresses) == ["lan.example"])
     }
 
     // MARK: Support

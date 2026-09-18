@@ -16,23 +16,41 @@
             arguments.contains(launchArgument)
         }
 
-        /// Screenshot-route argument: opens the Add-Host form directly, for
-        /// capturing the Host form (including the additional-addresses
-        /// field) without scriptable taps. Implies ``launchArgument``.
-        static let hostFormLaunchArgument = "--demo-host-form"
+        /// Which multi-path screenshot surface the demo run should show.
+        enum Route: String {
+            /// The ordinary Console (no route argument).
+            case none
+            /// The Add/Edit Host form with its additional-address rows.
+            case hostForm
+            /// The Host detail page with its candidate list mid-probe.
+            case hostDetailProbing
+            /// The Host detail page stopped on the pick between two
+            /// reachable addresses.
+            case hostDetailPick
 
-        /// Whether the demo run should show the Host form.
-        static var showsHostForm: Bool {
-            ProcessInfo.processInfo.arguments.contains(hostFormLaunchArgument)
+            static func fromArguments() -> Route {
+                let arguments = ProcessInfo.processInfo.arguments
+                if arguments.contains(hostDetailProbingLaunchArgument) { return .hostDetailProbing }
+                if arguments.contains(hostDetailPickLaunchArgument) { return .hostDetailPick }
+                if arguments.contains(hostFormLaunchArgument) { return .hostForm }
+                return .none
+            }
         }
+
+        static let hostFormLaunchArgument = "--demo-host-form"
+        static let hostDetailProbingLaunchArgument = "--demo-host-detail-probing"
+        static let hostDetailPickLaunchArgument = "--demo-host-detail-pick"
+
+        /// The multi-path demo Host: the same machine over LAN and VPN.
+        static let multipathHost = Host(
+            name: "Studio Mac",
+            address: "192.168.31.71",
+            username: "developer",
+            additionalAddresses: ["CMF79KM7YF.local", "studio.vpn.example"])
     }
 
-    /// A safe composition root for screenshot runs. It reuses the production
-    /// Console, EventsSession, Transport, and terminal surfaces while keeping
-    /// Hosts, secrets, settings, notifications, and SSH fully process-local.
     @MainActor
     struct DemoScreenshotRootView: View {
-        @State private var isShowingHostForm = false
         @State private var hosts: HostStore
         @State private var console: ConsoleStore
         @State private var terminalThemes: TerminalThemeSettings
@@ -48,6 +66,8 @@
         @State private var bannerStore: AgentNotificationBannerStore
         @State private var liveActivities: HostLiveActivityCoordinator
         @State private var activity: AppActivityCoordinator
+
+        private let route = DemoScreenshotMode.Route.fromArguments()
 
         init() {
             let composition = DemoScreenshotComposition.make()
@@ -75,6 +95,25 @@
         }
 
         var body: some View {
+            switch route {
+            case .none:
+                consoleRoot
+            case .hostForm:
+                // The edit form against the multipath Host, so the rows are
+                // populated.
+                NavigationStack {
+                    HostFormView(
+                        store: hosts,
+                        editing: DemoScreenshotMode.multipathHost)
+                }
+            case .hostDetailProbing:
+                multipathDetail(midProbe: true)
+            case .hostDetailPick:
+                multipathDetail(midProbe: false)
+            }
+        }
+
+        private var consoleRoot: some View {
             ConsoleView(
                 hosts: hosts,
                 console: console,
@@ -90,19 +129,44 @@
                 activity: activity
             )
             .preferredColorScheme(appearance.preferredColorScheme)
-            .sheet(isPresented: $isShowingHostForm) {
-                HostFormView(store: hosts)
-            }
             .task {
-                // Presenting a sheet in the same runloop turn as the first
-                // render silently fails; give the window a beat to settle.
-                if DemoScreenshotMode.showsHostForm {
-                    try? await Task.sleep(for: .milliseconds(500))
-                    isShowingHostForm = true
-                }
                 console.setHosts(hosts.hosts)
                 notificationPreferences.setHosts(hosts.hosts)
                 await console.resume()
+            }
+        }
+
+        /// The Host detail page for the multipath demo Host, its store
+        /// scripted to the exact state being captured: mid-probe (first
+        /// address reachable, second unreachable, third probing) or the
+        /// pick-between-two-reachable stop.
+        private func multipathDetail(midProbe: Bool) -> some View {
+            let store = HostOnboardingStore(
+                host: DemoScreenshotMode.multipathHost,
+                connector: DemoMultipathConnector(),
+                preferredAddresses: PreferredAddressStore(
+                    defaults: DemoScreenshotFixture.makeDefaults(),
+                    hostID: DemoScreenshotMode.multipathHost.id))
+            if midProbe {
+                store.scriptProbeStatesForDemo([
+                    "192.168.31.71": .reachable,
+                    "CMF79KM7YF.local": .unreachable,
+                    "studio.vpn.example": .probing,
+                ])
+            } else {
+                store.scriptProbeStatesForDemo([
+                    "192.168.31.71": .reachable,
+                    "CMF79KM7YF.local": .unreachable,
+                    "studio.vpn.example": .reachable,
+                ])
+                store.scriptAddressChoiceForDemo([
+                    "192.168.31.71", "studio.vpn.example"])
+            }
+            return NavigationStack {
+                HostOnboardingView(
+                    host: DemoScreenshotMode.multipathHost,
+                    catalog: hosts,
+                    store: store)
             }
         }
     }
@@ -559,6 +623,15 @@
         private func endTerminal() {
             terminalContinuation?.finish()
             terminalContinuation = nil
+        }
+    }
+
+    /// Never-dialing connector for the multipath screenshot routes: the
+    /// store's states are pinned for the capture, so the connector only
+    /// needs to exist (and refuse anything that reaches it).
+    private struct DemoMultipathConnector: TransportConnector {
+        func connect(settings: SSHTransportSettings) async throws -> any Transport {
+            throw TransportError.sshUnreachable(detail: "Demo route never dials.")
         }
     }
 
