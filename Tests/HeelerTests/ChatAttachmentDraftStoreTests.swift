@@ -1,0 +1,335 @@
+import Foundation
+import Testing
+import UIKit
+
+@testable import Heeler
+
+// SPDX-License-Identifier: Apache-2.0
+//
+// The chat input's attachment flow, at the seams the feature lives in:
+//
+// 1. `ChatAttachmentDraftStore` — the draft seam the staging pipeline
+//    inserts into (caret-faithful, mirroring AgentComposerStore's
+//    contract) and the pending-image hold the paste flow shows as a
+//    thumbnail chip.
+// 2. `ChatPasteResolver` — the pinned paste precedence: image-only
+//    attaches, text-only pastes literally, both-present prefers TEXT.
+// 3. The full staging pipeline through the chat draft seam: a
+//    successful upload inserts the remote path reference into the draft
+//    (the same `"<path> "` convention the terminal Composer produces),
+//    and an upload failure surfaces an error message, not a silent
+//    no-op.
+
+// MARK: - Pasteboard scripting
+
+/// A scripted pasteboard snapshot, so the pinned precedence runs
+/// without the process-wide UIPasteboard.
+@MainActor
+private final class ScriptedPasteboard: ChatPasteboardSnapshotProviding {
+    var hasImages = false
+    var stringForPaste: String?
+    var imageDataRepresentation: Data?
+    var imageRepresentation: UIImage?
+
+    init(
+        hasImages: Bool = false,
+        stringForPaste: String? = nil,
+        imageDataRepresentation: Data? = nil,
+        imageRepresentation: UIImage? = nil
+    ) {
+        self.hasImages = hasImages
+        self.stringForPaste = stringForPaste
+        self.imageDataRepresentation = imageDataRepresentation
+        self.imageRepresentation = imageRepresentation
+    }
+}
+
+// MARK: - ChatAttachmentDraftStore: the draft seam
+
+@MainActor
+@Suite("Chat attachment draft store")
+struct ChatAttachmentDraftStoreTests {
+    @Test func insertIntoDraftLandsAtTheCaretAndAdvancesIt() {
+        // The staging store's completed-attachment path mirrors the
+        // terminal Composer's insertIntoDraft: text lands at the caret
+        // (or replaces the selection), and the caret follows the
+        // insertion.
+        let store = ChatAttachmentDraftStore(draft: "see this", selection: NSRange(location: 3, length: 0))
+        store.insertIntoDraft("/tmp/heeler-upload/img.jpg ")
+
+        #expect(store.draft == "see/tmp/heeler-upload/img.jpg  this")
+        #expect(
+            store.draftSelection
+                == NSRange(location: 3 + "/tmp/heeler-upload/img.jpg ".utf16.count, length: 0))
+    }
+
+    @Test func insertIntoDraftReplacesTheCurrentSelection() {
+        let store = ChatAttachmentDraftStore(
+            draft: "drop [this] here", selection: NSRange(location: 5, length: 6))
+        store.insertIntoDraft("/tmp/report.txt ")
+        #expect(store.draft == "drop /tmp/report.txt  here")
+    }
+
+    @Test func applyEditorDraftKeepsTheReportedCaretAndClampsStaleOnes() {
+        // Stale selection beyond the end (programmatic rewrites) must
+        // clamp exactly the way the text view does.
+        let store = ChatAttachmentDraftStore()
+        store.applyEditorDraft("hello", selection: NSRange(location: 99, length: 0))
+        #expect(store.draft == "hello")
+        #expect(store.draftSelection == NSRange(location: 5, length: 0))
+    }
+
+    @Test func applyEditorDraftIsANoOpForIdenticalState() {
+        let store = ChatAttachmentDraftStore(draft: "same", selection: NSRange(location: 4, length: 0))
+        store.applyEditorDraft("same", selection: NSRange(location: 4, length: 0))
+        #expect(store.draft == "same")
+        #expect(store.draftSelection == NSRange(location: 4, length: 0))
+    }
+
+    // MARK: - The pending-image hold (paste flow)
+
+    @Test func holdPendingImagePrependsItsPathToTheSentText() {
+        // The Send flow's message convention: the path reference rides
+        // ahead of the draft text — the same shape a bare path insert
+        // produces, so the agent reads one uniform reference format.
+        let store = ChatAttachmentDraftStore()
+        store.holdPendingImage(path: "/tmp/heeler-upload/pic.png")
+        #expect(
+            store.messageText(forDraft: "what is in this image?")
+            == "/tmp/heeler-upload/pic.png what is in this image?")
+    }
+
+    @Test func aPendingImageWithNoMessageTextStillBuildsASendableMessage() {
+        // The reference IS the message: paste then immediately Send.
+        let store = ChatAttachmentDraftStore()
+        store.holdPendingImage(path: "/tmp/heeler-upload/pic.png")
+        #expect(store.messageText(forDraft: "") == "/tmp/heeler-upload/pic.png ")
+    }
+
+    @Test func removingThePendingImageDropsThePathReference() {
+        // The chip's x: the message text goes back to the plain draft.
+        let store = ChatAttachmentDraftStore()
+        store.holdPendingImage(path: "/tmp/heeler-upload/pic.png")
+        store.clearPendingImage()
+        #expect(store.pendingImage == nil)
+        #expect(store.messageText(forDraft: "hello") == "hello")
+    }
+
+    @Test func withoutAPendingImageTheMessageTextIsTheDraftVerbatim() {
+        let store = ChatAttachmentDraftStore()
+        #expect(store.messageText(forDraft: "hello") == "hello")
+    }
+
+    // MARK: - Failure surfacing
+
+    @Test func uploadFailuresSurfaceAsAnErrorMessageNotASilentNoop() {
+        let store = ChatAttachmentDraftStore()
+        store.recordUploadFailure("Image upload failed.")
+        #expect(store.uploadFailureMessage == "Image upload failed.")
+        store.clearUploadFailure()
+        #expect(store.uploadFailureMessage == nil)
+    }
+
+    // MARK: - Pinned paste precedence
+
+    @Test func imageOnlyPasteAttaches() {
+        let pasteboard = ScriptedPasteboard(
+            hasImages: true, imageDataRepresentation: Data([0x89, 0x50, 0x4E, 0x47]))
+        let intent = ChatPasteResolver.resolve(pasteboard: pasteboard)
+        #expect(intent.attachesImage)
+        #expect(intent.text == nil)
+        #expect(intent.imageData == Data([0x89, 0x50, 0x4E, 0x47]))
+    }
+
+    @Test func textPasteStaysALiteralInsert() {
+        let pasteboard = ScriptedPasteboard(hasImages: false, stringForPaste: "plain text")
+        let intent = ChatPasteResolver.resolve(pasteboard: pasteboard)
+        #expect(!intent.attachesImage)
+        #expect(intent.imageData == nil)
+    }
+
+    @Test func imagePasteWithNoTextButNoReadableDataIsPlainPaste() {
+        // hasImages is only the pasteboard's claim; the provider must
+        // produce bytes or the paste is a no-op instead of a wrong
+        // text insert.
+        let pasteboard = ScriptedPasteboard(hasImages: true)
+        let intent = ChatPasteResolver.resolve(pasteboard: pasteboard)
+        #expect(!intent.attachesImage)
+        #expect(intent.imageData == nil)
+    }
+
+    @Test func bothPresentPrefersText() {
+        // The pinned rule: typed/copied text is the primary payload; a
+        // stray image representation beside it must not hijack the
+        // paste.
+        let pasteboard = ScriptedPasteboard(
+            hasImages: true,
+            stringForPaste: "the message",
+            imageDataRepresentation: Data([0x01]))
+        let intent = ChatPasteResolver.resolve(pasteboard: pasteboard)
+        #expect(!intent.attachesImage)
+        #expect(intent.text == "the message")
+        #expect(intent.imageData == nil)
+    }
+
+    @Test func emptyStringBesideAnImageDoesNotWin() {
+        // An empty string is not a payload: the image attaches.
+        let pasteboard = ScriptedPasteboard(
+            hasImages: true, stringForPaste: "", imageDataRepresentation: Data([0x01]))
+        let intent = ChatPasteResolver.resolve(pasteboard: pasteboard)
+        #expect(intent.attachesImage)
+        #expect(intent.imageData == Data([0x01]))
+    }
+}
+
+// MARK: - The staging pipeline through the chat draft seam
+
+@MainActor
+@Suite("Chat attachment staging pipeline")
+struct ChatAttachmentStagingTests {
+    private func makeFixture(
+        imagePlans: [Result<StagedImage, AttachmentStagingError>] = [
+            .success(try! StagedImage(path: "/tmp/heeler-upload/chat-img.jpg"))
+        ],
+        filePlans: [Result<StagedFile, AttachmentStagingError>] = [
+            .success(try! StagedFile(path: "/tmp/heeler-upload/chat-report.txt"))
+        ]
+    ) async -> (staging: ComposerStagingStore, draftStore: ChatAttachmentDraftStore, transport: ScriptedTransport) {
+        let transport = ScriptedTransport()
+        await transport.configureImageStaging(outcomes: imagePlans)
+        await transport.configureFileStaging(outcomes: filePlans)
+        let draftStore = ChatAttachmentDraftStore()
+        let staging = ComposerStagingStore(
+            imagePreparer: ScriptedChatImagePreparer(),
+            filePreparer: ScriptedChatFilePreparer(),
+            stageImage: { image, reporter in
+                try await transport.stageImage(image) { progress in
+                    await reporter.report(progress)
+                }
+            },
+            stageFile: { file, reporter in
+                try await transport.stageFile(file) { progress in
+                    await reporter.report(progress)
+                }
+            },
+            composer: draftStore)
+        return (staging, draftStore, transport)
+    }
+
+    @Test func successfulUploadInsertsThePathReferenceIntoTheChatDraft() async throws {
+        // The chat surface's + Add File lands the same message-format
+        // convention the terminal Composer produces: the remote path
+        // (with its trailing space) inserted at the caret.
+        let fixture = await makeFixture()
+        fixture.draftStore.applyEditorDraft(
+            "check this out ", selection: NSRange(location: 15, length: 0))
+
+        let id = fixture.staging.begin(.file(URL(fileURLWithPath: "/provider/report.txt")))
+        #expect(id != nil, "the pipeline must accept the begin")
+
+        try await waitUntil("upload should complete") {
+            if case .completed = fixture.staging.state { return true }
+            return false
+        }
+
+        #expect(
+            fixture.draftStore.draft
+                == "check this out /tmp/heeler-upload/chat-report.txt ")
+    }
+
+    @Test func uploadFailureSurfacesAnErrorAndLeavesTheDraftUntouched() async throws {
+        // A failing upload must not insert anything: the draft stays,
+        // and the failure is visible to the frame's error row.
+        let fixture = await makeFixture(
+            imagePlans: [.failure(.sftpUnavailable)])
+        let before = fixture.draftStore.draft
+
+        let id = fixture.staging.begin(.photo(DataImageSelection(data: Data([0x01]))))
+        #expect(id != nil)
+
+        try await waitUntil("upload should fail") {
+            if case .failed = fixture.staging.state { return true }
+            return false
+        }
+
+        #expect(fixture.draftStore.draft == before)
+        guard case .failed(let failure) = fixture.staging.state else {
+            Issue.record("expected a failed state")
+            return
+        }
+        #expect(failure.message.contains("SFTP"))
+        #expect(!failure.isRetryable)
+    }
+
+    @Test func beginWhileBusyIsRejectedNotSilentlyQueued() async throws {
+        // The busy guard: a second begin (double paste) returns nil
+        // instead of queueing behind the first — the caller surfaces
+        // the "already uploading" error.
+        let gate = ScriptedTransportCallGate()
+        let transport = ScriptedTransport()
+        await transport.configureImageStaging(
+            outcomes: [.success(try! StagedImage(path: "/tmp/heeler-upload/a.jpg"))],
+            gate: gate)
+        let draftStore = ChatAttachmentDraftStore()
+        let staging = ComposerStagingStore(
+            imagePreparer: ScriptedChatImagePreparer(),
+            filePreparer: ScriptedChatFilePreparer(),
+            stageImage: { image, reporter in
+                try await transport.stageImage(image) { progress in
+                    await reporter.report(progress)
+                }
+            },
+            stageFile: { file, reporter in
+                try await transport.stageFile(file) { progress in
+                    await reporter.report(progress)
+                }
+            },
+            composer: draftStore)
+
+        let first = staging.begin(.photo(DataImageSelection(data: Data([0x01]))))
+        #expect(first != nil)
+        let second = staging.begin(.photo(DataImageSelection(data: Data([0x02]))))
+        #expect(second == nil, "a busy pipeline must reject, not queue")
+
+        await gate.open()
+        try await waitUntil("first upload should complete") {
+            if case .completed = staging.state { return true }
+            return false
+        }
+    }
+
+    private func waitUntil(
+        _ comment: Comment,
+        timeout: Duration = .seconds(5),
+        condition: () async -> Bool
+    ) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            if await condition() { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(await condition(), comment)
+    }
+}
+
+/// Returns one bounded prepared image without touching the filesystem
+/// — the pipeline under test is the transport hop, not the decode.
+private actor ScriptedChatImagePreparer: ImagePreparing {
+    func prepare(_: any ImageSelection) async throws -> PreparedImage {
+        PreparedImage(
+            fileURL: URL(fileURLWithPath: "/nonexistent/prepared.jpg"),
+            format: .jpeg,
+            pixelWidth: 16,
+            pixelHeight: 16,
+            byteCount: 128)
+    }
+}
+
+private actor ScriptedChatFilePreparer: FilePreparing {
+    func prepare(_: URL) async throws -> PreparedFile {
+        PreparedFile(
+            fileURL: URL(fileURLWithPath: "/nonexistent/prepared.txt"),
+            fileExtension: "txt",
+            byteCount: 256)
+    }
+}
