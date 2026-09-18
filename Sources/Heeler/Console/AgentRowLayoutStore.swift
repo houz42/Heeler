@@ -5,13 +5,23 @@ enum AgentRowLayoutStoreError: Error, Equatable {
     case catalogUnreadable
 }
 
-/// Per-Host whole-layout choices. Plugin snapshots belong to the connection
-/// that fetched them and are deliberately not persisted in this catalog.
+/// Per-Host whole-layout choices plus the global default layout. Plugin
+/// snapshots belong to the connection that fetched them and are
+/// deliberately not persisted in this catalog.
 @MainActor
 @Observable
 final class AgentRowLayoutStore {
     private static let defaultsKey = "agent-row-layouts"
     private static let catalogVersion = 1
+
+    /// The fixed identity the global default layout is stored under in the
+    /// per-Host catalog — a global preference wearing the catalog's shape so
+    /// every catalog guarantee (lenient decode, atomic validated writes,
+    /// unreadable-bytes handling) applies to it unchanged. The UUID is
+    /// deterministic (not nil) so the Add Field sheet and chip editors keep
+    /// working on it like any Host.
+    static let globalLayoutHostID = UUID(
+        uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1))
 
     /// Earlier version-1 catalogs also carried a `globalLayout`. It is
     /// ignored on load and dropped by the next write, so a hidden legacy
@@ -48,6 +58,20 @@ final class AgentRowLayoutStore {
         }
     }
 
+    /// The saved global default layout, or nil when no Host follows a
+    /// configured default. The fixed identity is a real catalog entry: it is
+    /// visible in `hostLayouts` and behaves like any Host override, so
+    /// resolution, validation, and persistence need no separate code path.
+    var globalLayout: AgentRowLayout? {
+        hostLayouts[Self.globalLayoutHostID]
+    }
+
+    /// nil removes the global default so Hosts follow their herdr fields
+    /// (or the built-in fallback) again.
+    func setGlobalLayout(_ layout: AgentRowLayout?) throws {
+        try setLayout(layout, for: Self.globalLayoutHostID)
+    }
+
     /// Discards an unreadable catalog so every Host follows its herdr fields
     /// again and writes are accepted. The only way out of `catalogLoadError`;
     /// a readable catalog is left alone.
@@ -73,7 +97,10 @@ final class AgentRowLayoutStore {
     }
 
     func resolvedLayout(for hostID: Host.ID, pluginSnapshot: AgentRowLayoutSnapshot?) -> AgentRowLayout {
-        AgentRowLayoutResolver.resolve(hostLayout: hostLayouts[hostID], pluginSnapshot: pluginSnapshot)
+        AgentRowLayoutResolver.resolve(
+            hostLayout: hostLayouts[hostID],
+            globalLayout: hostLayouts[Self.globalLayoutHostID],
+            pluginSnapshot: pluginSnapshot)
     }
 
     private func persist(hostLayouts: [Host.ID: AgentRowLayout]) throws {

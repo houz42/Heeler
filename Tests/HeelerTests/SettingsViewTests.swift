@@ -78,7 +78,8 @@ struct AgentListFieldsSettingsTests {
         #expect(AgentListFieldsCopy.noHosts == "Add a Host to configure its Agent rows.")
         #expect(!AgentListFieldsCopy.listIntro.localizedCaseInsensitiveContains("edit"))
         #expect(AgentListFieldsCopy.listIntro.contains("Open a Host"))
-        #expect(!AgentListFieldsCopy.detailIntro.localizedCaseInsensitiveContains("tap edit"))
+        #expect(AgentListFieldsCopy.listIntro.contains("global default"))
+        #expect(AgentListFieldsCopy.detailIntro.localizedCaseInsensitiveContains("tap edit") == false)
         #expect(AgentListFieldsCopy.detailIntro.contains("save right away"))
         #expect(AgentListFieldsCopy.syncConfirmation.contains("saved right away"))
     }

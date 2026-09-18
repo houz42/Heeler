@@ -59,9 +59,14 @@ final class HeaderLayoutSettingsStore {
 
     /// The custom global layout: the stored choice, or the Console default
     /// when none was saved yet. Per-kind overrides never apply — the header
-    /// renders one agent at a time.
+    /// renders one agent at a time. It never inherits the Agent List Fields
+    /// global default: this suite's `customLayoutHostID` is its own choice,
+    /// so resolution passes no global layout.
     var customLayout: AgentRowLayout {
-        layouts.resolvedLayout(for: Self.customLayoutHostID, pluginSnapshot: nil)
+        AgentRowLayoutResolver.resolve(
+            hostLayout: layouts.hostLayouts[Self.customLayoutHostID],
+            globalLayout: nil,
+            pluginSnapshot: nil)
     }
 
     /// Sets the mode, persisting at once. A no-op writes nothing.

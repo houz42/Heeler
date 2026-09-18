@@ -67,15 +67,18 @@
                     try await $0.readSidebarLayout()
                 }
                 #expect(bytes == DemoScreenshotFixture.sidebarLayoutData)
+                // Both Hosts follow the seeded global default, not their
+                // plugin rows: resolution is host override > global > plugin.
                 #expect(composition.console.rowLayout(for: host.id)
-                    == AgentRowLayout(rows: [
-                        [.init(.workspace)], [.init(.terminalTitleStripped)], [.init(.directory)],
-                    ]))
+                    == DemoScreenshotFixture.globalLayout)
+                #expect(composition.console.rowLayouts.globalLayout
+                    == DemoScreenshotFixture.globalLayout)
             }
             let row = try #require(composition.console.agents.first)
             let card = AgentCardPresentation(agent: row, layout: composition.console.rowLayout(for: row.hostID))
-            #expect(card.headline == row.workspaceLabel)
-            #expect(card.additionalRows.first == row.agent.terminalTitleStripped)
+            // Row 1 is the seeded global default: workspace + agent + tab.
+            // Row 2 is the directory.
+            #expect(card.additionalRows.first == row.displayCwd)
         }
     }
 #endif

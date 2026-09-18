@@ -42,10 +42,14 @@ struct AgentRowLayoutTests {
         try console.validateForConsole()
         #expect(AgentRowSlot.slotRows([[.init(.agent)]]) == [[.init(.agent)], [], []])
         #expect(AgentRowSlot.slotRows(console.rows) == console.rows)
-        #expect(AgentRowLayoutResolver.resolve(hostLayout: wide, pluginSnapshot: nil) == console)
-        #expect(
-            AgentRowLayoutResolver.resolve(
-                hostLayout: nil, pluginSnapshot: AgentRowLayoutSnapshot(layout: wide)) == console)
+        #expect(AgentRowLayoutResolver.resolve(
+            hostLayout: wide, globalLayout: nil, pluginSnapshot: nil) == console)
+        #expect(AgentRowLayoutResolver.resolve(
+            hostLayout: nil, globalLayout: nil,
+            pluginSnapshot: AgentRowLayoutSnapshot(layout: wide)) == console)
+        #expect(AgentRowLayoutResolver.resolve(
+            hostLayout: nil, globalLayout: wide,
+            pluginSnapshot: AgentRowLayoutSnapshot(layout: .heelerDefault)) == console)
         #expect(AgentRowToken(rawValue: "state_icon") == .stateIcon)
         #expect(!AgentRowToken.herdrBuiltins.contains(.stateIcon))
         #expect(AgentRowToken.herdrBuiltins.contains(.stateText))
