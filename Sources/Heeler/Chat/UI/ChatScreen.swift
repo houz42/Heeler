@@ -107,8 +107,8 @@ struct ChatScreen: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         topSentinel
-                        ForEach(rows) { row in
-                            LinkifiedChatRow(row: row, router: openRouter)
+                        ForEach(items) { item in
+                            transcriptView(for: item)
                                 .padding(.horizontal, 12)
                         }
                         bottomSentinel
@@ -265,6 +265,48 @@ struct ChatScreen: View {
             pending: content.pending,
             level: level
         )
+    }
+
+    /// The bubble-grouped transcript: conversation text renders as per-
+    /// message bubbles (the unit the reaction/quote affordances hang
+    /// off); every other row keeps its plain shape.
+    private var items: [ChatTranscriptItem] {
+        ChatFiltering.visibleItems(from: rows)
+    }
+
+    @ViewBuilder
+    private func transcriptView(for item: ChatTranscriptItem) -> some View {
+        switch item {
+        case .bubble(let bubble):
+            ChatBubbleView(
+                bubble: bubble,
+                router: openRouter,
+                react: reactAffordance,
+                quote: quoteAffordance)
+        case .row(let row):
+            LinkifiedChatRow(row: row, router: openRouter)
+        }
+    }
+
+    /// Sends one quick reaction as a short plain user message through the
+    /// composer's passthrough path (an emoji is never a / # @ ! command).
+    /// The in-flight gate keeps a double-tap from duplicating the send.
+    private func reactAffordance(_ text: String) {
+        guard !isSending, let router else { return }
+        isSending = true
+        Task {
+            defer { isSending = false }
+            if case .passthrough = await router.submit(text) {
+                try? await deliver?(text)
+            }
+        }
+    }
+
+    /// Prefills the composer with the quoted text and opens the input.
+    private func quoteAffordance(_ text: String) {
+        draft = ChatQuote.draft(for: text)
+        inputPresented = true
+        inputFocused = true
     }
 
     // MARK: - Floating input

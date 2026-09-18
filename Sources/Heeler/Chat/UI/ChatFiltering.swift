@@ -65,6 +65,46 @@ internal enum ChatRow: Sendable, Equatable, Identifiable {
     }
 }
 
+/// One chat bubble: a run of consecutive visible `.text` rows that all
+/// belong to a single user/assistant message. Bubbles are the message-
+/// scoped unit the per-bubble affordances (quick reactions, Quote) hang
+/// off — keyed by the message, not the block. Chrome rows (thinking, tool
+/// calls, results) break runs and never enter a bubble.
+internal struct ChatBubble: Sendable, Equatable, Identifiable {
+    /// The first row's id (`messageID#blockIndex`) — stable for the run,
+    /// distinct per bubble, and a valid scroll anchor.
+    let id: String
+    /// The message the bubble renders (conversation identity).
+    let messageID: UUID
+    /// `.user` or `.assistant` — output records never bubble.
+    let role: ChatRole
+    /// The bubble's `.text` rows, in display order.
+    let rows: [ChatRow]
+
+    /// The bubble's quote payload: its texts joined with a blank line.
+    var text: String {
+        rows.compactMap { row -> String? in
+            guard case .text(_, _, _, let text) = row else { return nil }
+            return text
+        }.joined(separator: "\n\n")
+    }
+}
+
+/// What the transcript renders: bubbles for conversation text, plain rows
+/// for everything else. Ordering is the row order; bubbles only replace
+/// the consecutive `.text` runs they were built from.
+internal enum ChatTranscriptItem: Sendable, Equatable, Identifiable {
+    case bubble(ChatBubble)
+    case row(ChatRow)
+
+    var id: String {
+        switch self {
+        case .bubble(let bubble): bubble.id
+        case .row(let row): row.id
+        }
+    }
+}
+
 extension DetailLevel: Comparable {
     static func < (lhs: DetailLevel, rhs: DetailLevel) -> Bool {
         lhs.rawValue < rhs.rawValue
@@ -197,5 +237,51 @@ internal enum ChatFiltering {
         default:
             return .l1
         }
+    }
+
+    /// The bubble-grouped form of `visibleRows`: consecutive `.text` rows
+    /// of one user/assistant message collapse into a `ChatBubble`; every
+    /// other row passes through in place. Runs are keyed by message, so
+    /// two adjacent messages never merge and a message interleaved with
+    /// visible chrome (a tool call between two texts) yields one bubble
+    /// per contiguous run. The item ids are the underlying row ids (a
+    /// bubble takes its first row's), so level switching stays monotonic
+    /// in the item list exactly as it is in the row list.
+    static func visibleItems(from rows: [ChatRow]) -> [ChatTranscriptItem] {
+        var items: [ChatTranscriptItem] = []
+        var run: [ChatRow] = []
+
+        func flush() {
+            // The loop only ever buffers user/assistant `.text` rows
+            // (everything else appends directly), so the run is always
+            // a bubble.
+            guard case .text(let messageID, _, let role, _)? = run.first
+            else { return }
+            items.append(.bubble(ChatBubble(
+                id: run[0].id, messageID: messageID, role: role, rows: run)))
+            run = []
+        }
+
+        for row in rows {
+            if case .text(let messageID, _, let role, _) = row,
+                role == .user || role == .assistant,
+                let previous = run.last,
+                case .text(let lastID, _, let lastRole, _) = previous,
+                lastID == messageID, lastRole == role
+            {
+                run.append(row)
+            } else {
+                flush()
+                if case .text(_, _, let role, _) = row,
+                    role == .user || role == .assistant
+                {
+                    run = [row]
+                } else {
+                    items.append(.row(row))
+                }
+            }
+        }
+        flush()
+        return items
     }
 }

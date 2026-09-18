@@ -246,16 +246,18 @@
         /// the demo transport serves `chatTranscript` for it.
         static let chatTranscriptPath = "/home/demo/.local/share/omp/session.jsonl"
 
-        /// A small omp JSONL transcript: a user turn, an assistant turn with
-        /// thinking + a tool call + text, a paired tool result, and a closing
-        /// assistant turn — every transcript-fed row kind the chat surface
-        /// renders (the pending card stays preview-only until a transcript
-        /// record feeds it).
+        /// A small omp JSONL transcript: a user turn, an assistant turn
+        /// with thinking + a tool call + text, a paired tool result, and
+        /// a closing assistant round of TWO messages — so the chat
+        /// surface's bubble grouping shows one bubble per message within
+        /// the round (the pending card stays preview-only until a
+        /// transcript record feeds it).
         private static let chatTranscriptJSON = """
             {"type":"message","id":"demo-1","timestamp":1789292098261,"message":{"role":"user","content":[{"type":"text","text":"Ship the checkout fix — run the targeted tests first."}],"timestamp":1789292098261}}
             {"type":"message","id":"demo-2","timestamp":1789292105000,"message":{"role":"assistant","content":[{"type":"thinking","thinking":"The user wants the fix shipped. Read the failing test first, then run the suite."},{"type":"toolCall","id":"demo-call-1","name":"read","arguments":{"path":"CheckoutView.swift"}},{"type":"text","text":"The retry logic drops the cart because `PaymentCoordinator` resets state on the first attempt. I'll preserve the cart across retries and re-run `CheckoutFlowTests`."}],"timestamp":1789292105000}}
             {"type":"message","id":"demo-3","timestamp":1789292110000,"message":{"role":"toolResult","toolCallId":"demo-call-1","toolName":"read","content":[{"type":"text","text":"struct CheckoutView: View {\\n    var body: some View {\\n        Text(\\"Checkout\\")\\n    }\\n}"}],"timestamp":1789292110000}}
-            {"type":"message","id":"demo-4","timestamp":1789292120000,"message":{"role":"assistant","content":[{"type":"text","text":"All 18 tests pass. Ready to commit when you are."}],"timestamp":1789292120000}}
+            {"type":"message","id":"demo-4","timestamp":1789292115000,"message":{"role":"assistant","content":[{"type":"text","text":"Re-ran the suite: 18 of 18 passing, no flake in the retry path."}],"timestamp":1789292115000}}
+            {"type":"message","id":"demo-5","timestamp":1789292120000,"message":{"role":"assistant","content":[{"type":"text","text":"All 18 tests pass. Ready to commit when you are."}],"timestamp":1789292120000}}
             """
 
         static let chatTranscript = Data(chatTranscriptJSON.utf8)

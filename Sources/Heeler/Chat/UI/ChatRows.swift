@@ -426,6 +426,93 @@ struct LinkifiedChatRow: View {
     }
 }
 
+// MARK: - Bubbles (per-message affordances)
+
+/// One conversation bubble: a message's visible text run rendered as one
+/// unit — assistant prose in a rounded wash, user prose keeping its tinted
+/// rail — with the per-bubble affordances on long-press: quick reactions
+/// (delivered as a short plain message) and Quote (prefills the composer
+/// with a block-quoted draft).
+struct ChatBubbleView: View {
+    let bubble: ChatBubble
+    let router: OpenRouterCore
+    /// Sends one quick reaction. Nil (read-only hosts) hides reactions.
+    var react: ((String) -> Void)? = nil
+    /// Prefills the composer with the quoted text. Nil hides Quote.
+    var quote: ((String) -> Void)? = nil
+
+    @State private var showsAffordance = false
+
+    var body: some View {
+        content
+            // Long-press toggles the affordance bar. The dismiss tap is
+            // simultaneous so markdown link taps inside still route; it
+            // only dismisses an already-open affordance bar.
+            .onLongPressGesture {
+                withAnimation(.snappy) { showsAffordance.toggle() }
+            }
+            .simultaneousGesture(TapGesture().onEnded {
+                if showsAffordance { showsAffordance = false }
+            })
+            .overlay(alignment: .top) {
+                if showsAffordance { affordanceBar }
+            }
+            .zIndex(showsAffordance ? 1 : 0)
+    }
+
+    /// A bubble's rows all belong to one message, so they render as one
+    /// markdown document (joined by blank lines) — the block separation a
+    /// message's ordered text blocks already imply.
+    @ViewBuilder private var content: some View {
+        if bubble.role == .user {
+            ChatLinkText(bubble.text, style: .user, router: router)
+        } else {
+            ChatLinkText(bubble.text, style: .assistant, router: router)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 14))
+                // Trailing inset so the rounded rect reads as a bubble
+                // while the leading edge keeps the transcript's margin.
+                .padding(.trailing, 28)
+        }
+    }
+
+    /// The per-bubble affordance row: one quick reaction per emoji plus
+    /// Quote, floating just above the bubble.
+    private var affordanceBar: some View {
+        HStack(spacing: 14) {
+            ForEach(ChatReaction.allCases, id: \.rawValue) { reaction in
+                Button {
+                    react?(reaction.rawValue)
+                    showsAffordance = false
+                } label: {
+                    Text(reaction.rawValue)
+                        .font(.title3)
+                }
+                .buttonStyle(.plain)
+                .disabled(react == nil)
+                .accessibilityLabel(reaction.accessibilityLabel)
+            }
+            Capsule().fill(.separator).frame(width: 1, height: 16)
+            Button {
+                quote?(bubble.text)
+                showsAffordance = false
+            } label: {
+                Label("Quote", systemImage: "text.quote")
+                    .font(.footnote.weight(.medium))
+            }
+            .buttonStyle(.plain)
+            .disabled(quote == nil)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(.bar, in: Capsule())
+        .shadow(radius: 4, y: 2)
+        .offset(y: -16)
+        .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .bottom)))
+    }
+}
+
 /// The pane-level modifier that binds an `OpenRouterCore` and presents
 /// whatever it holds. One modifier so the ChatScreen wrap stays one call.
 struct ChatOpenersSurface: ViewModifier {
