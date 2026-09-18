@@ -86,6 +86,7 @@ struct HostDraft: Equatable, Sendable {
             authMethod: authMethod,
             sessionName: sessionName.trimmingCharacters(in: .whitespaces),
             jumpAddress: jumpAddress.trimmingCharacters(in: .whitespaces),
+            jumpPort: jumpPortNumber ?? 22,
             jumpUsername: jumpUsername.trimmingCharacters(in: .whitespaces),
             alias: trimmedAlias)
     }

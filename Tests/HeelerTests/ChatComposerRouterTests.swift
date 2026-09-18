@@ -368,13 +368,15 @@ struct ChatComposerRouterSuggestionTests {
     /// The omp table, as the store injects it for an omp-kind agent.
     private let ompCommands = OmpCommandProvider().slashCommands()
 
-    @Test func slashListsLocalsFirst() {
+    /// The agent's own commands lead the menu — the palette exists to
+    /// complete what the agent understands; client-local commands trail.
+    @Test func slashListsAgentCommandsFirstLocalsLast() {
         let suggestions = ComposerRouter.slashSuggestions(
             matching: "", agentCommands: ompCommands)
         #expect(!suggestions.isEmpty)
-        #expect(suggestions.first?.title == ComposerLocalCommand.level.name)
+        #expect(suggestions.first?.kind == .slash)
         #expect(
-            suggestions.prefix(2).map(\.title)
+            suggestions.suffix(ComposerLocalCommand.all.count).map(\.title)
             == ComposerLocalCommand.all.map(\.name))
     }
 
