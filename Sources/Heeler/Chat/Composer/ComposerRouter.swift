@@ -273,7 +273,10 @@ enum ComposerRouter {
                     kind: .local,
                     usage: command.usage))
         }
-        return Array(matches.prefix(maximumSuggestions))
+        // No cap here: the slash table is bounded and static, the menu
+        // scrolls, and the point of an empty `/` is the agent's full
+        // command palette — like the agent's own TUI shows.
+        return matches
     }
 
     /// `#` suggestions: statuses and agents always carry their field prefix

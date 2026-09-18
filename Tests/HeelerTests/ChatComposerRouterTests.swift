@@ -399,10 +399,19 @@ struct ChatComposerRouterSuggestionTests {
         ])
     }
 
-    @Test func slashIsCapped() {
-        #expect(ComposerRouter.slashSuggestions(
-            matching: "", agentCommands: ompCommands).count
-            <= ComposerRouter.maximumSuggestions)
+    /// An empty `/` query is the command palette: every agent command,
+    /// then the client-local ones, uncapped — the menu scrolls.
+    @Test func slashEmptyQueryListsEverythingAgentFirst() {
+        let suggestions = ComposerRouter.slashSuggestions(
+            matching: "", agentCommands: ompCommands)
+        #expect(suggestions.count
+            == ompCommands.count + ComposerLocalCommand.all.count)
+        #expect(suggestions.prefix(ompCommands.count).allSatisfy {
+            $0.kind == .slash
+        })
+        #expect(suggestions.suffix(ComposerLocalCommand.all.count).allSatisfy {
+            $0.kind == .local
+        })
     }
 
     @Test func tagStatusesCarryTheirField() {
