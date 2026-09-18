@@ -326,16 +326,21 @@ struct ChatLinkText: View {
     let text: String
     let style: ChatBlockText.Style
     let router: OpenRouterCore?
+    /// Overrides the style's text color when non-nil (iMessage user
+    /// bubbles: saturated blue fill needs white text).
+    var foregroundOverride: Color? = nil
 
     @Environment(\.openURL) private var openURL
     @Environment(\.colorScheme) private var colorScheme
     private var isDark: Bool { colorScheme == .dark }
     init(
-        _ text: String, style: ChatBlockText.Style, router: OpenRouterCore?
+        _ text: String, style: ChatBlockText.Style, router: OpenRouterCore?,
+        foregroundOverride: Color? = nil
     ) {
         self.text = text
         self.style = style
         self.router = router
+        self.foregroundOverride = foregroundOverride
     }
 
     var body: some View {
@@ -357,7 +362,7 @@ struct ChatLinkText: View {
             }
         }
         .font(style.font)
-        .foregroundStyle(style.color)
+        .foregroundStyle(foregroundOverride ?? style.color)
         .frame(maxWidth: .infinity, alignment: alignment)
         .environment(
             \.openURL,
@@ -376,8 +381,11 @@ struct ChatLinkText: View {
         if style.mono {
             Text(text)
                 .textSelection(.enabled)
+                .foregroundStyle(foregroundOverride ?? style.color)
         } else {
-            ChatMarkdownView(markdown: ChatMarkdownText(text).rewritten)
+            ChatMarkdownView(
+                markdown: ChatMarkdownText(text).rewritten,
+                textColor: foregroundOverride)
         }
     }
 
@@ -429,18 +437,22 @@ struct LinkifiedChatRow: View {
 // MARK: - Bubbles (per-message affordances)
 
 /// The iMessage-style bubble silhouette: ~18pt corners with a small
-/// curved tail at the bottom corner — bottom-left for agent bubbles,
-/// bottom-right (mirrored) for user bubbles. The tail protrudes
-/// `tailDepth` below the body; content pads the bottom so text never
-/// rides into it.
+/// curved tail nub hugging the bottom corner — bottom-left for agent
+/// bubbles, bottom-right (mirrored) for user bubbles. The nub is a few
+/// points tall and lands flush on the corner; content pads the bottom
+/// so text never rides into it. The path is drawn clockwise from the
+/// top edge, and the tail is inserted at whichever bottom corner the
+/// traversal reaches LAST — so the closing edge never crosses the
+/// shape (the mirrored user-side tail must not be drawn where the
+/// traversal has already passed).
 struct ChatBubbleShape: Shape {
-    static let tailDepth: CGFloat = 6
+    static let tailDepth: CGFloat = 5
     /// True when the tail sits at the bottom-right (user side).
     let userSide: Bool
 
     func path(in rect: CGRect) -> Path {
         let radius: CGFloat = 18
-        let tailRun: CGFloat = 14
+        let tailRun: CGFloat = 12
         let bodyBottom = rect.maxY - Self.tailDepth
         var p = Path()
         p.move(to: CGPoint(x: rect.minX + radius, y: rect.minY))
@@ -453,19 +465,28 @@ struct ChatBubbleShape: Shape {
             to: CGPoint(x: rect.maxX - radius, y: bodyBottom),
             control: CGPoint(x: rect.maxX, y: bodyBottom))
 
-        /// The tail: the bottom edge runs into a curve that dips below
-        /// the body and lands on the side edge, iMessage-style.
-        func tail(at leading: Bool) {
-            let edgeX = leading ? rect.minX : rect.maxX
-            let runX = leading ? rect.minX + tailRun : rect.maxX - tailRun
-            let bulgeX = leading
-                ? rect.minX + tailRun * 0.45 : rect.maxX - tailRun * 0.45
-            p.addLine(to: CGPoint(x: runX, y: bodyBottom))
+        if userSide {
+            // Bottom-right tail: the traversal just rounded into the
+            // bottom edge at the right corner, so the nub comes first.
+            // It hugs the corner: a short run out, a tight curve that
+            // dips `tailDepth` and lands back on the bottom edge.
             p.addQuadCurve(
-                to: CGPoint(x: edgeX, y: rect.maxY),
-                control: CGPoint(x: bulgeX, y: rect.maxY + 2))
+                to: CGPoint(x: rect.maxX - tailRun, y: bodyBottom),
+                control: CGPoint(
+                    x: rect.maxX - tailRun * 0.3,
+                    y: rect.maxY))
+            p.addLine(to: CGPoint(x: rect.minX + radius, y: bodyBottom))
+            p.addQuadCurve(
+                to: CGPoint(x: rect.minX, y: bodyBottom - radius),
+                control: CGPoint(x: rect.minX, y: bodyBottom))
+        } else {
+            // Bottom-left tail: the bottom edge runs left first, then
+            // the nub hugs the left corner before the edge turns up.
+            p.addLine(to: CGPoint(x: rect.minX + radius + tailRun, y: bodyBottom))
+            p.addQuadCurve(
+                to: CGPoint(x: rect.minX, y: bodyBottom - radius),
+                control: CGPoint(x: rect.minX + tailRun * 0.3, y: rect.maxY))
         }
-        tail(at: !userSide)
 
         p.addLine(to: CGPoint(x: rect.minX, y: rect.minY + radius))
         p.addQuadCurve(
@@ -496,10 +517,16 @@ struct ChatBubbleBody: View {
             if selectable {
                 Text(bubble.text)
                     .font(.system(.subheadline))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(isUser ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
                     .textSelection(.enabled)
             } else {
-                ChatLinkText(bubble.text, style: .assistant, router: router)
+                ChatLinkText(
+                    bubble.text,
+                    style: .assistant,
+                    router: router,
+                    // iMessage outgoing convention: saturated blue fill,
+                    // white text (the markdown body inherits the color).
+                    foregroundOverride: isUser ? .white : nil)
             }
         }
         .padding(.horizontal, 12)
@@ -510,7 +537,7 @@ struct ChatBubbleBody: View {
 
     private var fill: some ShapeStyle {
         isUser
-            ? AnyShapeStyle(.tint.opacity(ChatWash.turn(isDark: isDark)))
+            ? AnyShapeStyle(Color.blue)
             : AnyShapeStyle(.fill.tertiary)
     }
 }
@@ -625,8 +652,10 @@ struct ChatBubbleFocusLayer: View {
     }
 
     /// iMessage's text-action menu: Quote / Copy / Select as context-menu
-    /// rows (SF-symbol icon left, label right), a separate card below the
-    /// bubble with its left edge flush with the bubble's.
+    /// rows (SF-symbol icon left, label right) in a compact card sized to
+    /// its rows — never the full transcript width — below the bubble,
+    /// its edge flush with the bubble's (leading under agent bubbles,
+    /// trailing under user bubbles, via the VStack's alignment).
     private var actionMenu: some View {
         VStack(alignment: .leading, spacing: 2) {
             menuRow("text.quote", label: "Quote") {
@@ -643,6 +672,7 @@ struct ChatBubbleFocusLayer: View {
                 selectsText = true
             }
         }
+        .frame(width: 220)
         .padding(6)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
         .shadow(color: .black.opacity(0.2), radius: 10, y: 4)

@@ -64,6 +64,18 @@ enum ChatMarkdownTheme {
             ChatMarkdownTheme.tableCell(
                 configuration.row, label: configuration.label)
         }
+
+    /// The chat theme with its body text forced to a color (iMessage
+    /// user bubbles: white on blue). MarkdownUI resolves the paragraph
+    /// text color from the theme's text style, so a container-level
+    /// foreground never reaches the glyphs.
+    @MainActor
+    static func chatColored(_ color: SwiftUI.Color) -> MarkdownUI.Theme {
+        chat.text {
+            FontSize(15)
+            ForegroundColor(color)
+        }
+    }
 }
 
 extension ChatMarkdownTheme {
@@ -214,10 +226,17 @@ private enum SplashFont {
 ///   the attributed-string path used.
 struct ChatMarkdownView: View {
     let markdown: String
+    /// Overrides the rendered text color when non-nil (iMessage user
+    /// bubbles: white on blue). MarkdownUI resolves the paragraph text
+    /// color from the theme's text style, so the color rides the theme
+    /// (`ChatMarkdownTheme.chatColored`), not a container foreground.
+    var textColor: SwiftUI.Color? = nil
 
     var body: some View {
         Markdown(markdown)
-            .markdownTheme(ChatMarkdownTheme.chat)
+            .markdownTheme(
+                textColor.map(ChatMarkdownTheme.chatColored)
+                    ?? ChatMarkdownTheme.chat)
             // Chat never shows remote images; providers that silently
             // drop them (rather than fetching) keep the pane free of
             // unexpected network loads.
