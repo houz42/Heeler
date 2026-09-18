@@ -94,11 +94,14 @@ enum AgentTree {
         return id
     }
 
-    /// The rows to render. Groups sort alphabetically by label (stable —
-    /// the unique group id breaks label ties); leaves keep the supplied
-    /// order, which is the Console's `agent_panel_sort` sequence. A folded
-    /// group hides its whole subtree while its row keeps the subtree's
-    /// count and aggregate state.
+    /// The rows to render. Hosts sort alphabetically by label (stable —
+    /// the unique group id breaks label ties), the same policy as the
+    /// grouped mode's sections. Below each Host, groups follow the herdr
+    /// window's pane order — the snapshot enumerates workspaces, tabs,
+    /// and panes the way the user arranged them — and leaves within a
+    /// tab follow the pane's reading position. A folded group hides its
+    /// whole subtree while its row keeps the subtree's count and
+    /// aggregate state.
     ///
     /// `emptyHosts` keeps catalog Hosts with no Agents visible as foldable
     /// depth-0 group rows (the tree's counterpart of the grouped mode's
@@ -134,13 +137,17 @@ enum AgentTree {
     /// un-merges but keeps its id), and a depth-0 head still names its
     /// Host for the section header.
     ///
-    /// A tab holding exactly one Agent merges the other way: the chain
-    /// stops above it and the Agent's row absorbs the tab row (keeping
-    /// the tab's label when it adds information), because a foldable
-    /// group over a single visible leaf would render two rows where one
-    /// says everything. Folding is meaningless there — the merged row
-    /// renders no chevron, and a stale fold id for that tab re-engages
-    /// only once the tab holds two Agents again.
+    /// A chain that bottoms out in exactly one visible leaf merges the
+    /// other way, at ANY level — not just tabs: the chain stops there and
+    /// the Agent's row absorbs every remaining group row (keeping each
+    /// label that adds information). A single-agent workspace under a
+    /// multi-workspace host and a single-agent tab under a multi-tab
+    /// workspace collapse by the same rule, so the same shape renders
+    /// identically on every Host. A foldable group over a single visible
+    /// leaf would render two rows where one says everything; folding is
+    /// meaningless there — the merged row renders no chevron, and a stale
+    /// fold id for the absorbed group re-engages only once it holds two
+    /// visible leaves again.
     ///
     /// Two label-only drops keep merged rows readable: a label this
     /// build synthesized (`Other` for a missing workspace/tab label)
@@ -179,17 +186,32 @@ enum AgentTree {
         guard !foldedIDs.contains(id) else { return }
 
         if level >= 3 {
-            for agent in members {
-                rows.append(.agent(agent, depth: depth + 1))
+            for entry in members.enumerated().sorted(by: { lhs, rhs in
+                (leafIndex(lhs.element), lhs.offset)
+                    < (leafIndex(rhs.element), rhs.offset)
+            }) {
+                rows.append(.agent(entry.element, depth: depth + 1))
             }
             return
         }
-        for child in clusters(members, key: keys[level], label: keys[level]) {
-            // A single-Agent tab group merges into its Agent's row.
-            if level == 2, child.agents.count == 1, let only = child.agents.first {
-                rows.append(.agent(
-                    only, depth: depth + 1,
-                    tabLabel: only.showsTabLabel ? child.label : nil))
+        var children = clusters(members, key: keys[level], label: keys[level])
+        // Sessions are separate herdr servers, not panes in one window —
+        // they keep the tree's alphabetical group order. Workspaces and
+        // tabs are layout inside one window and keep pane order.
+        if level == 0 {
+            children.sort { ($0.label, $0.key) < ($1.label, $1.key) }
+        }
+        for child in children {
+            // A workspace or tab cluster whose whole subtree is one
+            // visible leaf merges into that Agent's row — at any grouping
+            // level below the session, so the same shape collapses the
+            // same way on every Host. A foldable group over a single
+            // leaf would render two rows where one says everything;
+            // folding is meaningless there — the merged row renders no
+            // chevron, and a stale fold id for the absorbed group
+            // re-engages only once it holds two visible leaves again.
+            if level >= 1, let absorbed = absorbSingleLeafChain(child, level: level) {
+                rows.append(absorbed(depth + 1))
                 continue
             }
             emitGroup(
@@ -197,6 +219,41 @@ enum AgentTree {
                 label: child.label, members: child.agents,
                 depth: depth + 1, level: level + 1,
                 foldedIDs: foldedIDs, rows: &rows)
+        }
+    }
+
+    /// A cluster whose whole subtree bottoms out in exactly one visible
+    /// leaf renders as that Agent's row, at any grouping level below the
+    /// session — a one-Agent workspace under a multi-workspace Host and a
+    /// one-Agent tab under a multi-tab workspace collapse by the same
+    /// rule, so the same shape renders identically on every Host. The
+    /// Agent row keeps the tab label when it adds information, exactly
+    /// as the tab-level merge always has. nil means the cluster holds
+    /// multiple leaves and keeps its foldable group row. Sessions (level
+    /// 0) never absorb: the session name is identity the chain merge
+    /// already carries into its label.
+    private static func absorbSingleLeafChain(
+        _ cluster: (key: String, label: String, agents: [ConsoleAgent]),
+        level: Int
+    ) -> ((Int) -> AgentTreeRow)? {
+        guard cluster.agents.count == 1, let only = cluster.agents.first else {
+            return nil
+        }
+        // A one-Agent workspace: the leaf may sit under a one-Agent tab
+        // whose label then rides the row (the tab renders no row of its
+        // own either).
+        if level == 1 {
+            let tabs = clusters(cluster.agents, key: tabKey, label: tabKey)
+            guard tabs.count == 1, let tab = tabs.first, tab.agents.count == 1,
+                only.showsTabLabel
+            else { return { depth in .agent(only, depth: depth) } }
+            return { depth in .agent(only, depth: depth, tabLabel: tab.label) }
+        }
+        // level == 2: a one-Agent tab, the merge the tree always had.
+        return { depth in
+            .agent(
+                only, depth: depth,
+                tabLabel: only.showsTabLabel ? cluster.label : nil)
         }
     }
 
@@ -219,14 +276,23 @@ enum AgentTree {
 
     /// One clustering level: agents keyed by `key`, labeled from the
     /// cluster's first element (every member shares the key by
-    /// construction), sorted alphabetically by label with the unique key
-    /// as the stable tiebreaker.
+    /// construction). Within a Host, clusters keep the herdr window's
+    /// order — the snapshot enumerates workspaces, tabs, and panes the
+    /// way the user arranged them — via the first member's snapshot
+    /// collection position, with the supplied sequence as the stable
+    /// fallback (tests and legacy shapes with no snapshot order).
     private static func clusters(
         _ agents: [ConsoleAgent],
         key: (ConsoleAgent) -> String,
         label: (ConsoleAgent) -> String
     ) -> [(key: String, label: String, agents: [ConsoleAgent])] {
-        Dictionary(grouping: agents, by: key)
+        var firstIndex: [String: Int] = [:]
+        for (index, agent) in agents.enumerated() {
+            if firstIndex[key(agent)] == nil {
+                firstIndex[key(agent)] = index
+            }
+        }
+        return Dictionary(grouping: agents, by: key)
             .map { grouped -> (key: String, label: String, agents: [ConsoleAgent]) in
                 let first = grouped.value.first
                 return (
@@ -235,7 +301,29 @@ enum AgentTree {
                     agents: grouped.value
                 )
             }
-            .sorted { ($0.label, $0.key) < ($1.label, $1.key) }
+            .sorted { lhs, rhs in
+                let lhsOrder = clusterIndex(lhs.agents)
+                let rhsOrder = clusterIndex(rhs.agents)
+                if lhsOrder != rhsOrder { return lhsOrder < rhsOrder }
+                // Same (possibly missing) snapshot position: keep the
+                // supplied sequence.
+                return (firstIndex[lhs.key] ?? Int.max) < (firstIndex[rhs.key] ?? Int.max)
+            }
+    }
+
+    /// The window position a group occupies: the earliest snapshot
+    /// collection order among its members. The snapshot enumerates
+    /// workspaces, tabs, and panes in window order, so the first pane of
+    /// a group in window order is the group's reading position.
+    private static func clusterIndex(_ agents: [ConsoleAgent]) -> Int {
+        agents.map { $0.snapshotOrder ?? Int.max }.min() ?? Int.max
+    }
+
+    /// The reading position of a leaf within its tab: pane geometry first
+    /// (rows top-to-bottom, then left-to-right), falling back to the
+    /// snapshot's collection order when no layout carried the pane.
+    private static func leafIndex(_ agent: ConsoleAgent) -> Int {
+        agent.paneOrder ?? agent.snapshotOrder ?? Int.max
     }
 
     /// Cluster keys. A missing (nil or blank) workspace/tab label collapses

@@ -28,9 +28,20 @@ struct ConsoleAgent: Identifiable, Sendable, Equatable {
     /// One-based position within the snapshot's workspace tabs. herdr's
     /// automatic label uses position, not TabInfo.number's stable identity.
     let tabPosition: Int?
+    /// Tabs in the Agent's workspace, shell-only tabs included. One tab
+    /// means herdr's automatic label is the position and names nothing.
     let workspaceTabCount: Int
     /// Collection order from session.snapshot.agents for the `spaces` sort.
+    /// The snapshot enumerates workspaces, then tabs, then panes in the
+    /// herdr window's order, so this is also the tree's group-order key.
     let snapshotOrder: Int?
+    /// Zero-based reading order of the pane within its tab (rows
+    /// top-to-bottom, then left-to-right), from the snapshot's pane
+    /// layouts; nil when no layout carried the pane. The Agents tree
+    /// orders leaves by it — pane geometry beats `snapshotOrder`, which
+    /// can follow creation order for splits — and falls back to
+    /// `snapshotOrder` when absent.
+    let paneOrder: Int?
     /// Snapshot git metadata when the workspace reported any. Presence does
     /// not mean this is removable: the main checkout is reported with
     /// `isLinkedWorktree == false` too.
@@ -54,7 +65,8 @@ struct ConsoleAgent: Identifiable, Sendable, Equatable {
         tabPosition: Int? = nil,
         workspaceTabCount: Int = 0,
         snapshotOrder: Int? = nil,
-        paneLabel: String? = nil
+        paneLabel: String? = nil,
+        paneOrder: Int? = nil
     ) {
         self.hostID = hostID
         self.hostName = hostName
@@ -69,6 +81,7 @@ struct ConsoleAgent: Identifiable, Sendable, Equatable {
         self.snapshotOrder = snapshotOrder
         self.repositoryCheckout = repositoryCheckout
         self.lastOutputSnippet = lastOutputSnippet
+        self.paneOrder = paneOrder
     }
 
     var repoName: String? { repositoryCheckout?.repoName }
