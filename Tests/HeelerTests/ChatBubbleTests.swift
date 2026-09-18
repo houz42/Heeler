@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 
 @testable import Heeler
@@ -211,9 +212,57 @@ struct ChatBubbleTests {
 
     // MARK: quick reactions
 
-    @Test func quickReactionsOfferThumbsOkAndCelebration() {
-        #expect(ChatReaction.allCases.map(\.rawValue) == ["👍", "✅", "🎉"])
+    @Test func quickReactionsOfferThumbsOkAndCross() {
+        #expect(ChatReaction.allCases.map(\.rawValue) == ["👍", "✅", "❌"])
         // Distinct spoken labels: one per reaction button.
-        #expect(Set(ChatReaction.allCases.map(\.accessibilityLabel)).count == 3)
+        #expect(
+            Set(ChatReaction.allCases.map(\.accessibilityLabel))
+                == ["Thumbs up", "OK", "Cross mark"])
+    }
+
+    @Test func reactionMessageReferencesItsTargetAsBlockQuote() {
+        // The reaction must land unambiguously against its target: the
+        // emoji plus the block-quoted target text, never a bare emoji.
+        #expect(
+            ChatReaction.thumbsUp.message(for: "Found the bug.")
+            == "👍\n> Found the bug.\n\n")
+        #expect(
+            ChatReaction.cross.message(for: "line one\nline two")
+            == "❌\n> line one\n> line two\n\n")
+        // A blank target (never in practice) still delivers the emoji.
+        #expect(ChatReaction.ok.message(for: "") == "✅")
+    }
+
+    // MARK: quote caret + copy
+
+    @Test func quoteCaretLandsAtDraftEndOnTheBlankLineAfterTheQuote() {
+        let draft = ChatQuote.draft(for: "Here is what I found.")
+        // The caret offset is the draft's full UTF-16 length: the very
+        // end, i.e. the blank line after the quote — where the reply
+        // types.
+        #expect(ChatQuote.caretLocation(for: draft) == draft.utf16.count)
+        #expect(draft.hasSuffix("\n\n"))
+        // A caret request is one-shot by identity: two requests for the
+        // same location are distinct requests.
+        let a = ChatCaretRequest(location: 4)
+        let b = ChatCaretRequest(location: 4)
+        #expect(a != b)
+        #expect(a.location == 4)
+    }
+
+    @MainActor
+    @Test func copyPutsPlainTextOnThePasteboard() {
+        // bold) so the clipboard reads as plain text.
+        #expect(
+            ChatBubbleCopy.plainText(from: "fix `PaymentCoordinator` now")
+            == "fix PaymentCoordinator now")
+        #expect(
+            ChatBubbleCopy.plainText(from: "**bold** and normal")
+            == "bold and normal")
+        // The pasteboard seam writes exactly the plain text.
+        let pasteboard = UIPasteboard.general
+        ChatBubbleCopy.perform(
+            "run `CheckoutFlowTests`", pasteboard: pasteboard)
+        #expect(pasteboard.string == "run CheckoutFlowTests")
     }
 }

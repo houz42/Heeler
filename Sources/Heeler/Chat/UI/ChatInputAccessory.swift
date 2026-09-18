@@ -256,6 +256,11 @@ struct ChatInputTextView: UIViewRepresentable {
     /// router's suggestion pass.
     let onEdit: (String, Int) -> Void
     @Binding var isFocused: Bool
+    /// One-shot caret placement (Quote's draft insert): the text view
+    /// moves the caret to this location the next time it applies a
+    /// request it has not seen. The id makes a request single-apply —
+    /// re-renders carrying the same request never move the caret again.
+    var caretRequest: ChatCaretRequest? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(onEdit: onEdit, isFocused: $isFocused)
@@ -287,6 +292,16 @@ struct ChatInputTextView: UIViewRepresentable {
             textView.text = text
             textView.selectedRange = selection
         }
+        // Quote's caret placement: applied once per request, after the
+        // text assignment above settles, and only within the text's
+        // bounds.
+        if let caretRequest, context.coordinator.appliedCaret != caretRequest,
+            caretRequest.location <= (text as NSString).length
+        {
+            context.coordinator.appliedCaret = caretRequest
+            textView.selectedRange = NSRange(
+                location: caretRequest.location, length: 0)
+        }
         context.coordinator.wantsFocus = isFocused
         if isFocused != textView.isFirstResponder {
             DispatchQueue.main.async { [weak textView] in
@@ -301,6 +316,7 @@ struct ChatInputTextView: UIViewRepresentable {
             }
         }
     }
+
 
     func sizeThatFits(
         _ proposal: ProposedViewSize,
@@ -331,7 +347,6 @@ struct ChatInputTextView: UIViewRepresentable {
         return CGSize(width: width, height: height)
     }
 
-
     @MainActor
     final class Coordinator: NSObject, UITextViewDelegate {
         var onEdit: (String, Int) -> Void
@@ -339,6 +354,9 @@ struct ChatInputTextView: UIViewRepresentable {
         /// change re-checks before acting (the same race the Composer's
         /// editor guards).
         var wantsFocus = false
+        /// The last applied one-shot caret request; a request equal to
+        /// this has already moved the caret and never will again.
+        var appliedCaret: ChatCaretRequest?
         private var placeholderLabel: UILabel?
         private var isFocused: Binding<Bool>
 

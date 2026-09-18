@@ -184,6 +184,10 @@ struct ChatScreen: View {
                     router: openRouter,
                     fetch: fetch ?? { _ in throw CocoaError(.fileNoSuchFile) }))
         }
+        // The iMessage-style bubble focus presentation, above everything
+        // (transcript, composer, keyboard): blurred dim behind, lifted
+        // bubble with the Tapback pill and action menu.
+        .overlay { bubbleFocusOverlay }
         // The input affordance floats bottom-trailing and only while the
         // input frame is closed; the frame's own chevron closes it.
         .overlay {
@@ -281,16 +285,26 @@ struct ChatScreen: View {
             ChatBubbleView(
                 bubble: bubble,
                 router: openRouter,
-                react: reactAffordance,
-                quote: quoteAffordance)
+                isFocused: focusedBubble == bubble,
+                onLongPress: { enterBubbleFocus(bubble) })
         case .row(let row):
             LinkifiedChatRow(row: row, router: openRouter)
         }
     }
 
-    /// Sends one quick reaction as a short plain user message through the
-    /// composer's passthrough path (an emoji is never a / # @ ! command).
-    /// The in-flight gate keeps a double-tap from duplicating the send.
+    /// The iMessage-style long-press focus: at most one bubble lifted at
+    /// a time, its id (the first row's) keying which in-place copy hides.
+    @State private var focusedBubble: ChatBubble?
+
+    private func enterBubbleFocus(_ bubble: ChatBubble) {
+        guard router != nil else { return }
+        withAnimation(.snappy) { focusedBubble = bubble }
+    }
+
+    /// Sends one quick reaction's composed message (emoji + block-quoted
+    /// target) as a plain user message through the composer's passthrough
+    /// path (it never starts with / # @ !). The in-flight gate keeps a
+    /// double-tap from duplicating the send.
     private func reactAffordance(_ text: String) {
         guard !isSending, let router else { return }
         isSending = true
@@ -302,11 +316,40 @@ struct ChatScreen: View {
         }
     }
 
-    /// Prefills the composer with the quoted text and opens the input.
+    /// Prefills the composer with the quoted draft and opens the input,
+    /// caret at the draft's end (the blank line after the quote).
     private func quoteAffordance(_ text: String) {
-        draft = ChatQuote.draft(for: text)
+        let quoted = ChatQuote.draft(for: text)
+        draft = quoted
+        caretRequest = ChatCaretRequest(location: ChatQuote.caretLocation(for: quoted))
         inputPresented = true
         inputFocused = true
+    }
+
+    /// A one-shot caret placement for the composer's text view.
+    @State private var caretRequest: ChatCaretRequest?
+
+    /// Puts the bubble's plain text on the pasteboard.
+    private func copyAffordance(_ text: String) {
+        ChatBubbleCopy.perform(text)
+    }
+
+    /// The full-screen focus presentation over everything: blurred,
+    /// dimmed transcript behind; the lifted bubble, Tapback pill above,
+    /// and action menu above the composer/keyboard.
+    @ViewBuilder
+    private var bubbleFocusOverlay: some View {
+        if let bubble = focusedBubble {
+            ChatBubbleFocusLayer(
+                bubble: bubble,
+                router: openRouter,
+                react: reactAffordance,
+                quote: quoteAffordance,
+                copy: copyAffordance,
+                dismiss: {
+                    withAnimation(.snappy) { focusedBubble = nil }
+                })
+        }
     }
 
     // MARK: - Floating input
@@ -379,7 +422,8 @@ struct ChatScreen: View {
                         onEdit: { newText, _ in
                             draft = newText
                         },
-                        isFocused: $inputFocused)
+                        isFocused: $inputFocused,
+                        caretRequest: caretRequest)
                     Button {
                         sendDraft()
                     } label: {
