@@ -414,6 +414,33 @@ final class ComposerRouterStore {
             draft, with: suggestions[selectedSuggestionIndex].insertion)
     }
 
+    /// The accepted draft plus the caret the accept leaves: the end of the
+    /// applied insertion (UTF-16 offset). Every token case lands the
+    /// insertion at the applied draft's tail — slash tokens are trailing,
+    /// a tag replaces the whole draft, and a mention's remainder is empty
+    /// while the menu is open — so the insertion end is the draft's end.
+    func acceptSelectedSuggestionWithCaret(
+        into draft: String
+    ) -> (draft: String, caret: Int)? {
+        guard let accepted = acceptSelectedSuggestion(into: draft)
+        else { return nil }
+        return (accepted, accepted.utf16.count)
+    }
+
+    /// Return-key arbitration for the text fields: with the menu open the
+    /// key accepts the highlighted suggestion instead of inserting a
+    /// newline. `consumedKey` tells the editor to keep the newline out;
+    /// the accept may still be nil when the draft no longer holds the
+    /// token — the key is consumed regardless so a stale menu cannot
+    /// leak a newline (parity with the Composer's newline handler).
+    func handleReturnKey(into draft: String) -> (
+        accepted: (draft: String, caret: Int)?, consumedKey: Bool
+    ) {
+        guard handleKey(.enter), hasActiveSuggestions
+        else { return (nil, false) }
+        return (acceptSelectedSuggestionWithCaret(into: draft), true)
+    }
+
     func clearRoutingError() {
         routingError = nil
     }

@@ -276,6 +276,11 @@ struct ChatScreen: View {
     @State private var draft = ""
     @State private var isSending = false
     @State private var inputFocused = false
+    /// A suggestion accept waiting for the text view: the applied draft
+    /// plus the caret the accept leaves (end of the insertion). Applied
+    /// on the next representable update so text and caret land together;
+    /// cleared there so an ordinary edit cannot re-apply it.
+    @State private var pendingAccept: (draft: String, caret: Int)?
 
     private var inputOverlay: some View {
         VStack {
@@ -309,7 +314,16 @@ struct ChatScreen: View {
                 if router.hasActiveSuggestions {
                     ComposerSuggestionRow(
                         router: router, draft: draft,
-                        applyDraft: { draft = $0 })
+                        applyDraft: { newDraft in
+                            // Every token case lands the insertion at the
+                            // applied draft's end (slash tokens are
+                            // trailing, a tag replaces the whole draft, a
+                            // mention's remainder is empty while the menu
+                            // is open), so the accept's caret — end of the
+                            // insertion, after its trailing space — is the
+                            // new draft's end.
+                            pendingAccept = (newDraft, newDraft.utf16.count)
+                        })
                 }
                 if let error = router.routingError {
                     Text(error)
@@ -337,6 +351,18 @@ struct ChatScreen: View {
                         onEdit: { newText, _ in
                             draft = newText
                         },
+                        onReturnKey: {
+                            // Return with the menu open accepts the
+                            // highlighted suggestion (no newline); with
+                            // it closed the stock newline insert keeps
+                            // working, matching the Composer.
+                            let result = router.handleReturnKey(into: draft)
+                            if let accepted = result.accepted {
+                                pendingAccept = accepted
+                            }
+                            return result.consumedKey
+                        },
+                        pendingAccept: $pendingAccept,
                         isFocused: $inputFocused)
                     Button {
                         sendDraft()
