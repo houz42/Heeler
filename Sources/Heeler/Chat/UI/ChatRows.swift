@@ -436,73 +436,35 @@ struct LinkifiedChatRow: View {
 
 // MARK: - Bubbles (per-message affordances)
 
-/// The iMessage-style bubble silhouette: ~18pt corners with a small
-/// curved tail nub hugging the bottom corner — bottom-left for agent
-/// bubbles, bottom-right (mirrored) for user bubbles. The nub is a few
-/// points tall and lands flush on the corner; content pads the bottom
-/// so text never rides into it. The path is drawn clockwise from the
-/// top edge, and the tail is inserted at whichever bottom corner the
-/// traversal reaches LAST — so the closing edge never crosses the
-/// shape (the mirrored user-side tail must not be drawn where the
-/// traversal has already passed).
-struct ChatBubbleShape: Shape {
-    static let tailDepth: CGFloat = 5
-    /// True when the tail sits at the bottom-right (user side).
-    let userSide: Bool
+/// The iMessage (iOS 17+) bubble silhouette: rounded corners everywhere
+/// (~18pt) except ONE near-square corner (~4pt) at the speaker's bottom
+/// side — bottom-left for agent bubbles, bottom-right for user bubbles.
+/// The tightened asymmetric corner replaced the tail in modern iMessage;
+/// UnevenRoundedRectangle does it with no custom path to get wrong.
+enum ChatBubbleSilhouette {
+    static let cornerRadius: CGFloat = 18
+    static let tightenedRadius: CGFloat = 4
 
-    func path(in rect: CGRect) -> Path {
-        let radius: CGFloat = 18
-        let tailRun: CGFloat = 12
-        let bodyBottom = rect.maxY - Self.tailDepth
-        var p = Path()
-        p.move(to: CGPoint(x: rect.minX + radius, y: rect.minY))
-        p.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.minY))
-        p.addQuadCurve(
-            to: CGPoint(x: rect.maxX, y: rect.minY + radius),
-            control: CGPoint(x: rect.maxX, y: rect.minY))
-        p.addLine(to: CGPoint(x: rect.maxX, y: bodyBottom - radius))
-        p.addQuadCurve(
-            to: CGPoint(x: rect.maxX - radius, y: bodyBottom),
-            control: CGPoint(x: rect.maxX, y: bodyBottom))
+    /// The per-corner radii for one speaker's bubble.
+    static func radii(userSide: Bool) -> RectangleCornerRadii {
+        RectangleCornerRadii(
+            topLeading: cornerRadius,
+            bottomLeading: userSide ? cornerRadius : tightenedRadius,
+            bottomTrailing: userSide ? tightenedRadius : cornerRadius,
+            topTrailing: cornerRadius)
+    }
 
-        if userSide {
-            // Bottom-right tail: the traversal just rounded into the
-            // bottom edge at the right corner, so the nub comes first.
-            // It hugs the corner: a short run out, a tight curve that
-            // dips `tailDepth` and lands back on the bottom edge.
-            p.addQuadCurve(
-                to: CGPoint(x: rect.maxX - tailRun, y: bodyBottom),
-                control: CGPoint(
-                    x: rect.maxX - tailRun * 0.3,
-                    y: rect.maxY))
-            p.addLine(to: CGPoint(x: rect.minX + radius, y: bodyBottom))
-            p.addQuadCurve(
-                to: CGPoint(x: rect.minX, y: bodyBottom - radius),
-                control: CGPoint(x: rect.minX, y: bodyBottom))
-        } else {
-            // Bottom-left tail: the bottom edge runs left first, then
-            // the nub hugs the left corner before the edge turns up.
-            p.addLine(to: CGPoint(x: rect.minX + radius + tailRun, y: bodyBottom))
-            p.addQuadCurve(
-                to: CGPoint(x: rect.minX, y: bodyBottom - radius),
-                control: CGPoint(x: rect.minX + tailRun * 0.3, y: rect.maxY))
-        }
-
-        p.addLine(to: CGPoint(x: rect.minX, y: rect.minY + radius))
-        p.addQuadCurve(
-            to: CGPoint(x: rect.minX + radius, y: rect.minY),
-            control: CGPoint(x: rect.minX, y: rect.minY))
-        p.closeSubpath()
-        return p
+    static func shape(userSide: Bool) -> UnevenRoundedRectangle {
+        UnevenRoundedRectangle(cornerRadii: radii(userSide: userSide))
     }
 }
 
 /// The bubble interior both presentations share: the message's text in
-/// the iMessage-style silhouette — one markdown document (a bubble's rows
-/// all belong to one message), agent fill or user tint by speaker, tail
-/// at the speaker's bottom corner. `selectable` swaps the markdown for
-/// plain selectable text (the Select affordance): MarkdownUI's view tree
-/// does not support UIKit drag-selection.
+/// the iMessage-style silhouette — one markdown document (a bubble's
+/// rows all belong to one message), agent gray or user blue by speaker,
+/// tightened corner at the speaker's bottom side. `selectable` swaps the
+/// markdown for plain selectable text (the Select affordance): MarkdownUI's
+/// view tree does not support UIKit drag-selection.
 struct ChatBubbleBody: View {
     let bubble: ChatBubble
     let router: OpenRouterCore
@@ -531,8 +493,7 @@ struct ChatBubbleBody: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .padding(.bottom, ChatBubbleShape.tailDepth)
-        .background(fill, in: ChatBubbleShape(userSide: isUser))
+        .background(fill, in: ChatBubbleSilhouette.shape(userSide: isUser))
     }
 
     private var fill: some ShapeStyle {
