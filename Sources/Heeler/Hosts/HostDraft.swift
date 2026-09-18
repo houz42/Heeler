@@ -18,6 +18,8 @@ struct HostDraft: Equatable, Sendable {
     var jumpPort = "22"
     /// Blank reuses the Host's own username.
     var jumpUsername = ""
+    /// Optional presentation alias; blank means no alias.
+    var alias = ""
 
     init() {}
 
@@ -32,6 +34,7 @@ struct HostDraft: Equatable, Sendable {
         jumpAddress = host.jumpAddress
         jumpPort = String(host.jumpPort)
         jumpUsername = host.jumpUsername
+        alias = host.alias ?? ""
     }
 
     var portNumber: Int? {
@@ -83,8 +86,15 @@ struct HostDraft: Equatable, Sendable {
             authMethod: authMethod,
             sessionName: sessionName.trimmingCharacters(in: .whitespaces),
             jumpAddress: jumpAddress.trimmingCharacters(in: .whitespaces),
-            jumpPort: jumpPortNumber ?? 22,
-            jumpUsername: jumpUsername.trimmingCharacters(in: .whitespaces))
+            jumpUsername: jumpUsername.trimmingCharacters(in: .whitespaces),
+            alias: trimmedAlias)
+    }
+
+    /// A whitespace-only alias is no alias: trimmed, and nil when blank, so
+    /// the form and decode agree on what "no alias" is.
+    private var trimmedAlias: String? {
+        let trimmed = alias.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     /// What to hand `HostStore.add/update` as the password argument: a new

@@ -915,7 +915,12 @@ struct AgentTerminalView: View {
                 inputMode: inputMode.mode,
                 height: composerKeyboardLayout.availableToolsHeight,
                 quickKeysEnabled: true,
-                sendQuickKey: sendAgentQuickKey)
+                sendQuickKey: sendAgentQuickKey,
+                macroContext: MacroKeyboardContext(
+                    paneID: agent.agent.paneID,
+                    snippets: { terminal.snippets.snippets },
+                    insert: insertToolsText),
+                sendChord: { bytes in attach.send(bytes) })
             .opacity(activeKeyboardPresentation == .tools ? 1 : 0)
             .disabled(activeKeyboardPresentation != .tools)
             .allowsHitTesting(activeKeyboardPresentation == .tools)

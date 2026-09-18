@@ -3,7 +3,11 @@
   "dependencyCoverage": {
     "packageResolved": {
       "libghostty-spm": ["libghostty-spm", "Ghostty", "GhosttyTheme"],
-      "msdisplaylink": ["MSDisplayLink"]
+      "markdownui": ["MarkdownUI"],
+      "msdisplaylink": ["MSDisplayLink"],
+      "networkimage": ["NetworkImage"],
+      "splash": ["Splash"],
+      "swift-cmark": ["cmark-gfm"]
     },
     "heelerSSHBinaryTargets": {
       "CLibSSH2": ["libssh2", "libssh2-bcrypt_pbkdf", "libssh2-cipher-chachapoly"],
@@ -11,7 +15,9 @@
     },
     "projectPackages": {
       "GhosttyTerminal": ["libghostty-spm", "Ghostty", "GhosttyTheme"],
-      "HeelerSSH": ["libssh2", "libssh2-bcrypt_pbkdf", "libssh2-cipher-chachapoly", "OpenSSL"]
+      "MarkdownUI": ["MarkdownUI"],
+      "HeelerSSH": ["libssh2", "libssh2-bcrypt_pbkdf", "libssh2-cipher-chachapoly", "OpenSSL"],
+      "Splash": ["Splash"]
     },
     "bundledFontFamilies": {
       "IBMPlexMono": ["IBMPlexMono"],
@@ -52,6 +58,14 @@
       "notice": "JetBrainsMono-OFL-1.1.txt"
     },
     {
+      "id": "MarkdownUI",
+      "displayName": "MarkdownUI",
+      "version": "2.4.1",
+      "source": "https://github.com/gonzalezreal/MarkdownUI",
+      "spdx": "MIT",
+      "notice": "MarkdownUI-MIT.txt"
+    },
+    {
       "id": "MSDisplayLink",
       "displayName": "MSDisplayLink",
       "version": "2.1.0",
@@ -60,12 +74,36 @@
       "notice": "MSDisplayLink-MIT.txt"
     },
     {
+      "id": "NetworkImage",
+      "displayName": "NetworkImage (transitive via MarkdownUI)",
+      "version": "6.0.1",
+      "source": "https://github.com/gonzalezreal/NetworkImage",
+      "spdx": "MIT",
+      "notice": "NetworkImage-MIT.txt"
+    },
+    {
+      "id": "cmark-gfm",
+      "displayName": "cmark-gfm (swift-cmark)",
+      "version": "0.8.0",
+      "source": "https://github.com/swiftlang/swift-cmark (products cmark-gfm, cmark-gfm-extensions)",
+      "spdx": "BSD-2-Clause",
+      "notice": "cmark-gfm-COPYING.txt"
+    },
+    {
       "id": "OpenSSL",
       "displayName": "OpenSSL",
       "version": "3.6.3",
       "source": "Packages/HeelerSSH/Artifacts (tag openssl-3.6.3)",
       "spdx": "Apache-2.0",
       "notice": "OpenSSL-Apache-2.0.txt"
+    },
+    {
+      "id": "Splash",
+      "displayName": "Splash",
+      "version": "0.16.0",
+      "source": "https://github.com/JohnSundell/Splash",
+      "spdx": "MIT",
+      "notice": "Splash-MIT.txt"
     },
     {
       "id": "libghostty-spm",

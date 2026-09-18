@@ -9,20 +9,31 @@ struct HostFormView: View {
     var onSaved: ((Host) -> Void)?
 
     @State private var draft: HostDraft
+    @State private var availableSessions: [HerdrSession] = []
     @State private var authorizedKeysLine: String?
     @State private var didCopyKeyLine = false
     @State private var saveFailed = false
     @State private var deviceKeyIsCorrupt = false
     @State private var isConfirmingDeviceKeyReplacement = false
     @State private var deviceKeyReplacementError: String?
+    @State private var isDiscoveringSessions = false
     @Environment(\.dismiss) private var dismiss
 
     private let credentials = HostCredentialsProvider()
-
-    init(store: HostStore, editing: Host? = nil, onSaved: ((Host) -> Void)? = nil) {
+    /// Session discovery probe for the Edit form. The default connector is
+    /// the real SSH one; previews and tests inject nothing (discovery
+    /// silently finds no sessions).
+    private let sessionConnector: any TransportConnector
+    init(
+        store: HostStore,
+        editing: Host? = nil,
+        onSaved: ((Host) -> Void)? = nil,
+        sessionConnector: any TransportConnector = SSHTransportConnector()
+    ) {
         self.store = store
         self.editing = editing
         self.onSaved = onSaved
+        self.sessionConnector = sessionConnector
         _draft = State(initialValue: editing.map(HostDraft.init) ?? HostDraft())
     }
 
@@ -31,6 +42,11 @@ struct HostFormView: View {
             Form {
                 Section("Host") {
                     TextField("Name (optional)", text: $draft.name)
+                    TextField(
+                        aliasPlaceholder,
+                        text: $draft.alias,
+                        prompt: Text(verbatim: aliasPlaceholder)
+                    )
                     TextField("Address", text: $draft.address)
                         .textContentType(.URL)
                         .autocorrectionDisabled()
@@ -71,10 +87,22 @@ struct HostFormView: View {
                     TextField("Session name", text: $draft.sessionName)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
+                    if !availableSessions.isEmpty {
+                        Picker("Discovered", selection: $draft.sessionName) {
+                            Text("default").tag("")
+                            ForEach(availableSessions, id: \.name) { session in
+                                Text(session.name).tag(session.name)
+                            }
+                        }
+                    }
                 } header: {
                     Text("herdr Session")
                 } footer: {
-                    Text("Leave blank for the default herdr session.")
+                    if availableSessions.isEmpty {
+                        Text("Leave blank for the default herdr session.")
+                    } else {
+                        Text("Pick a discovered session or type a name. Leave blank for the default herdr session.")
+                    }
                 }
 
                 Section {
@@ -138,8 +166,17 @@ struct HostFormView: View {
             }
             .task {
                 loadDeviceKey()
+                await discoverSessions()
             }
         }
+    }
+
+    /// The Alias field's title/placeholder: the Host's real name when the
+    /// form has one to preview, otherwise a generic hint. Empty stays empty
+    /// (no alias) rather than defaulting to the name.
+    private var aliasPlaceholder: String {
+        let realName = editing?.displayName ?? draft.name.trimmingCharacters(in: .whitespaces)
+        return realName.isEmpty ? "Alias (optional)" : "Alias (optional) — replaces \"\(realName)\""
     }
 
     private var jumpHostFooter: String {
@@ -208,6 +245,31 @@ struct HostFormView: View {
             didCopyKeyLine = false
         } catch {
             deviceKeyReplacementError = "The replacement could not be saved to the Keychain."
+        }
+    }
+
+    /// Sessions/Hosts blending (Phase 5): populates the session picker for
+    /// an existing Host by connecting once and running `session list`.
+    /// Best-effort by design — a failure (offline, stale pin, untrusted
+    /// key, missing password) leaves the manual text field as the only
+    /// session source, exactly as before. A first-connect trust prompt can
+    /// never fire from here: an unknown host key is declined silently and
+    /// discovery ends; onboarding owns the TOFU conversation.
+    private func discoverSessions() async {
+        guard let editing, !isDiscoveringSessions else { return }
+        isDiscoveringSessions = true
+        defer { isDiscoveringSessions = false }
+        do {
+            let resolved = try credentials.credentials(for: editing)
+            // No TOFU prompt from the form: keys not already trusted fail.
+            let policy = HostKeyPolicy(knownHosts: UserDefaultsKnownHostsStore.shared) { _ in false }
+            let settings = SSHTransportSettings(
+                host: editing, credentials: resolved, hostKeyPolicy: policy)
+            let transport = try await sessionConnector.connect(settings: settings)
+            defer { Task { try? await transport.close() } }
+            availableSessions = try await transport.listSessions()
+        } catch {
+            availableSessions = []
         }
     }
 

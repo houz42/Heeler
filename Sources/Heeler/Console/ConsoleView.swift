@@ -40,6 +40,8 @@ struct ConsoleView: View {
     @State private var commandRegistry = ConsoleCommandRegistry()
     /// Owns flat/grouped mode and per-Host collapsed state (#245).
     @State private var listPresentation = ConsoleListPresentationStore()
+    /// Owns the hierarchical list's per-group fold state.
+    @State private var treeFolds = AgentTreeFoldStore()
     /// Outlives the detail column's rebuilds, which is the whole point: it
     /// carries the raised keyboard from one Attach screen to the next.
     @State private var keyboardHandoff = TerminalKeyboardHandoff()
@@ -112,11 +114,14 @@ struct ConsoleView: View {
                                         }
                                     }
                                 } label: {
-                                    Label(
-                                        "Presentation",
-                                        systemImage: listPresentation.mode == .grouped
-                                            ? "list.bullet.rectangle"
-                                            : "list.bullet")
+                                    // Swift disallows switch expressions in
+                                    // argument position — extract to a let.
+                                    let icon = switch listPresentation.mode {
+                                    case .flat: "list.bullet"
+                                    case .grouped: "list.bullet.rectangle"
+                                    case .tree: "sidebar.leading"
+                                    }
+                                    Label("Presentation", systemImage: icon)
                                 }
                                 .hoverEffect(.highlight)
                                 .accessibilityLabel("Agent list presentation")
@@ -163,7 +168,11 @@ struct ConsoleView: View {
                 standingFailures: console.hostStandingFailures,
                 latencies: console.hostLatencies,
                 manualReconnectInFlightHostIDs: manualReconnectInFlightHostIDs,
-                retryConnection: { await reconnectHost($0) })
+                retryConnection: { await reconnectHost($0) },
+                // One discovery store per sheet presentation, probing over
+                // the Console's live connections.
+                discovery: SessionDiscoveryStore(
+                    listSessions: { hostID in try await console.listSessions(on: hostID) }))
             .modifier(ConsoleSheetPresentationModifier(
                 presentation: ConsoleSheetPresentation(
                     horizontalSizeClass: horizontalSizeClass)))
@@ -239,7 +248,10 @@ struct ConsoleView: View {
                     selection: notificationRouter.path.last,
                     agents: listPresentation.mode == .flat
                         ? filteredAgents.map(\.id)
-                        : hostSections.filter { !$0.isCollapsed }.flatMap { $0.agents.map(\.id) },
+                        : listPresentation.mode == .grouped
+                            ? hostSections.filter { !$0.isCollapsed }
+                                .flatMap { $0.agents.map(\.id) }
+                            : treeRows.compactMap(\.agent).map(\.id),
                     isSearchFocused: isSearchFocused,
                     isCovered: hostSheet != nil || isStartingAgent || isShowingSettings,
                     inputMode: inputMode.mode)
@@ -441,10 +453,13 @@ struct ConsoleView: View {
             }
         case .rows:
             List(selection: selectedAgent) {
-                if listPresentation.mode == .flat {
+                switch listPresentation.mode {
+                case .flat:
                     flatAgentListRows
-                } else {
+                case .grouped:
                     groupedAgentListRows
+                case .tree:
+                    treeAgentListRows
                 }
             }
             .listStyle(.plain)
@@ -489,13 +504,111 @@ struct ConsoleView: View {
         }
     }
 
-    private func agentRow(_ agent: ConsoleAgent) -> some View {
-        NavigationLink(value: agent.id) {
+    /// The hierarchical list: Host → session → workspace → tab → Agents,
+    /// with single-child chains collapsed into merged rows. The depth-0
+    /// row — bare Host or merged chain head — renders as the Host section
+    /// header so an empty or disconnected Host keeps its readiness state
+    /// exactly like the grouped mode's sections; the tree fold store owns
+    /// its disclosure state.
+    @ViewBuilder
+    private var treeAgentListRows: some View {
+        ForEach(treeRows) { row in
+            switch row {
+            case .group(let id, let label, let depth, let count, let aggregate, let isFolded):
+                if depth == 0, let section = hostSection(forTreeGroup: id) {
+                    ConsoleHostSectionHeaderView(
+                        presentation: ConsoleHostSectionHeaderPresentation(
+                            section: section, title: label, isCollapsed: isFolded)
+                    ) {
+                        toggleTreeGroup(id)
+                    }
+                    .listRowInsets(Self.treeRowInsets)
+                } else {
+                    AgentTreeGroupRowView(
+                        id: id, label: label, depth: depth, count: count,
+                        aggregateState: aggregate, isFolded: isFolded
+                    ) {
+                        toggleTreeGroup(id)
+                    }
+                    .listRowInsets(Self.treeRowInsets)
+                }
+            case .agent(let agent, let depth, let tabLabel):
+                agentRow(
+                    agent, mergedTabLabel: tabLabel,
+                    leadingIndent: CGFloat(depth) * Self.treeIndentStep
+                        + Self.treeChevronGutter)
+                    .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
+                    .listRowInsets(Self.treeRowInsets)
+            }
+        }
+    }
+
+    /// The tree's compact row chrome: rows sit closer together than the
+    /// flat/grouped lists, and every level shares one leading base so the
+    /// `depth`-scaled paddings align group and Agent rows.
+    fileprivate static let treeRowInsets = EdgeInsets(top: 2, leading: 12, bottom: 2, trailing: 12)
+    fileprivate static let treeIndentStep: CGFloat = 14
+    /// A group row's label sits one chevron gutter (12-wide chevron + 8
+    /// spacing) right of its row edge. Agent rows skip the chevron, so
+    /// without this offset a depth-N agent would land LEFT of its
+    /// depth-(N-1) group's label and read as unindented.
+    private static let treeChevronGutter: CGFloat = 20
+
+    /// The tree rows over the same filtered Agents the flat/grouped lists
+    /// show — `hostSections` owns the per-Host connection state and the
+    /// search/Host-filter policy, so the tree inherits both. Below each
+    /// Host, everything sorts alphabetically by group label, with
+    /// `AgentTree` owning that policy.
+    private var treeRows: [AgentTreeRow] {
+        AgentTree.rows(
+            agents: hostSections.flatMap { $0.agents },
+            foldedIDs: treeFolds.foldedIDs,
+            emptyHosts: hostSections.map { ($0.hostID, $0.hostDisplayName) })
+    }
+
+    /// The catalog section whose Host a tree group id names. Only the
+    /// caller knows whether the row is Host-level (depth 0); this resolves
+    /// the id's Host component either way, so a merged chain head
+    /// ("h/<host>/s/…") and a bare Host id ("h/<host>") both find their
+    /// section.
+    private func hostSection(forTreeGroup groupID: String) -> ConsoleHostSection? {
+        guard let id = AgentTree.hostID(ofGroupID: groupID) else { return nil }
+        return hostSections.first { $0.hostID == id }
+    }
+
+    private func toggleTreeGroup(_ groupID: String) {
+        if reduceMotion {
+            treeFolds.toggle(groupID)
+        } else {
+            withAnimation(.snappy) {
+                treeFolds.toggle(groupID)
+            }
+        }
+    }
+
+    /// `mergedTabLabel` carries the tab group label a tree row folded
+    /// into this Agent's row. The prefix renders only when the card's
+    /// configured layout does not already show the tab (herdr's default
+    /// Row 1 does), so the label never repeats.
+    private func agentRow(
+        _ agent: ConsoleAgent,
+        mergedTabLabel: String? = nil,
+        leadingIndent: CGFloat = 0
+    ) -> some View {
+        let layout = console.rowLayout(for: agent.hostID)
+        let prefix = AgentRowRenderer.unrenderedTabLabel(
+            mergedTabLabel, layout: layout, agent: agent)
+            .map { "\($0) — " } ?? ""
+        return NavigationLink(value: agent.id) {
             AgentCardView(
                 agent: agent,
-                layout: console.rowLayout(for: agent.hostID),
+                layout: layout,
                 isPinned: console.pins.isPinned(
-                    hostID: agent.hostID, paneID: agent.agent.paneID))
+                    hostID: agent.hostID, paneID: agent.agent.paneID),
+                headlinePrefix: prefix)
+            // Indentation rides INSIDE the link label: padding on the
+            // NavigationLink itself is dropped by List row layout.
+            .padding(.leading, leadingIndent)
         }
         .hoverEffect(.highlight)
         .contextMenu {
@@ -858,6 +971,76 @@ private struct ConsoleHostSectionHeaderView: View {
         .accessibilityValue(presentation.accessibilityValue)
         .accessibilityHint(presentation.accessibilityHint)
         .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// One foldable group row of the hierarchical Agents list: chevron, label,
+/// Agent count, and the subtree's most-urgent live state bleeding through
+/// as a status dot. Indentation follows depth.
+private struct AgentTreeGroupRowView: View {
+    let id: String
+    let label: String
+    let depth: Int
+    let count: Int
+    let aggregateState: AgentStatus
+    let isFolded: Bool
+    let onToggle: () -> Void
+
+    private var accessibilityPresentation: AgentTreeGroupRowPresentation {
+        AgentTreeGroupRowPresentation(
+            label: label, count: count, aggregateState: aggregateState, isFolded: isFolded)
+    }
+
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: 8) {
+                Image(
+                    systemName: isFolded
+                        ? "chevron.right" : "chevron.down"
+                )
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 12, alignment: .center)
+                .accessibilityHidden(true)
+                Text(label)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Text("\(count)")
+                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+                if aggregateState != .unknown {
+                    Circle()
+                        .fill(Color(aggregateState.inkUIColor))
+                        .frame(width: 8, height: 8)
+                        .accessibilityHidden(true)
+                }
+            }
+            .contentShape(Rectangle())
+            .padding(.leading, CGFloat(depth) * ConsoleView.treeIndentStep)
+            .padding(.vertical, 3)
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityPresentation.accessibilityLabel)
+        .accessibilityValue(accessibilityPresentation.accessibilityValue)
+        .accessibilityHint(accessibilityPresentation.accessibilityHint)
+    }
+}
+
+/// Pure presentation values for one tree group row, so VoiceOver wording
+/// stays unit-testable without hosting a List.
+struct AgentTreeGroupRowPresentation: Equatable {
+    let accessibilityLabel: String
+    let accessibilityValue: String
+    let accessibilityHint: String
+
+    init(label: String, count: Int, aggregateState: AgentStatus, isFolded: Bool) {
+        accessibilityLabel = "\(label), \(count) agent\(count == 1 ? "" : "s")"
+        accessibilityValue = isFolded ? "Collapsed" : "Expanded"
+        accessibilityHint = isFolded ? "Expands this group." : "Collapses this group."
     }
 }
 

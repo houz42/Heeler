@@ -605,6 +605,63 @@ actor HeelerSSHTransport: Transport {
         return content
     }
 
+    /// Reads one whole transcript file over SFTP (the chat initial load).
+    /// The path must be an absolute POSIX transcript location (Drover's
+    /// rule); anything else is refused before a channel opens. An absent
+    /// transcript reads as empty `Data` — the append-only file may simply
+    /// not exist yet — while every read error still throws. ADR-0011: one
+    /// SFTP channel per call, always closed.
+    func readTranscriptFile(atPath path: String) async throws -> Data {
+        guard TranscriptFetch.validatedTranscriptPath(path) != nil else {
+            throw TransportError.channelFailed(
+                detail: "transcript path is not absolute")
+        }
+        return try await channelAdmission.withChannel(.ordinarySession) {
+            let sftp = try await self.connection.openSFTP(
+                timeout: self.requestTimeout)
+            do {
+                let contents = try await sftp.readFileIfPresent(
+                    at: path,
+                    timeout: self.requestTimeout) ?? Data()
+                try await sftp.close(timeout: .seconds(2))
+                return contents
+            } catch {
+                try? await sftp.close(timeout: .seconds(2))
+                throw error
+            }
+        }
+    }
+
+    /// Reads up to `length` bytes of a transcript file starting at `offset`
+    /// over SFTP (append-poll and loadOlder paging). Empty `Data` means the
+    /// offset is at or past EOF; a missing file throws, matching the
+    /// underlying ranged read. Same absolute-path rule and per-call channel
+    /// lifecycle as `readTranscriptFile`.
+    func readTranscriptFileChunk(
+        atPath path: String, offset: UInt64, length: Int
+    ) async throws -> Data {
+        guard TranscriptFetch.validatedTranscriptPath(path) != nil else {
+            throw TransportError.channelFailed(
+                detail: "transcript path is not absolute")
+        }
+        return try await channelAdmission.withChannel(.ordinarySession) {
+            let sftp = try await self.connection.openSFTP(
+                timeout: self.requestTimeout)
+            do {
+                let contents = try await sftp.readFileChunk(
+                    at: path,
+                    offset: offset,
+                    length: length,
+                    timeout: self.requestTimeout)
+                try await sftp.close(timeout: .seconds(2))
+                return contents
+            } catch {
+                try? await sftp.close(timeout: .seconds(2))
+                throw error
+            }
+        }
+    }
+
     func listAgents() async throws -> [Agent] {
         try await request(method: "agent.list", decoding: AgentListResponse.self)
             .agents.map(Agent.init)
@@ -634,6 +691,13 @@ actor HeelerSSHTransport: Transport {
     func sendAgentKeys(_ params: AgentSendKeysParams) async throws {
         _ = try await request(
             method: "agent.send_keys",
+            params: params,
+            decoding: OkResponse.self)
+    }
+
+    func sendPaneInput(_ params: PaneSendInputParams) async throws {
+        _ = try await request(
+            method: "pane.send_input",
             params: params,
             decoding: OkResponse.self)
     }

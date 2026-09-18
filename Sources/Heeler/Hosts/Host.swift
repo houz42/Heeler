@@ -31,13 +31,18 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
     /// Account on the Jump Host. Blank reuses `username`, which is the common
     /// case only when both machines share an account name.
     var jumpUsername: String
+    /// User-assignable label shown instead of `name` wherever the Host is
+    /// presented. Nil (or whitespace-only) means no alias and `name` shows.
+    /// A separate field from `name` on purpose: `name` is the user's primary
+    /// label for the connection, while the alias is presentation-only.
+    var alias: String?
 
     /// `socatPath` is deliberately absent: Hosts serialized before ADR 0011
     /// still carry it on disk, and leaving it out of the keys both ignores it
     /// on decode and drops it on the Host's next save.
     private enum CodingKeys: String, CodingKey {
         case id, name, address, port, username, authMethod, sessionName
-        case jumpAddress, jumpPort, jumpUsername
+        case jumpAddress, jumpPort, jumpUsername, alias
     }
 
     /// Whether this Host is reached through a Jump Host.
@@ -61,7 +66,8 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         sessionName: String = "",
         jumpAddress: String = "",
         jumpPort: Int = 22,
-        jumpUsername: String = ""
+        jumpUsername: String = "",
+        alias: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -73,6 +79,7 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         self.jumpAddress = jumpAddress
         self.jumpPort = jumpPort
         self.jumpUsername = jumpUsername
+        self.alias = alias
     }
 
     init(from decoder: any Decoder) throws {
@@ -89,6 +96,10 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         jumpAddress = try container.decodeIfPresent(String.self, forKey: .jumpAddress) ?? ""
         jumpPort = try container.decodeIfPresent(Int.self, forKey: .jumpPort) ?? 22
         jumpUsername = try container.decodeIfPresent(String.self, forKey: .jumpUsername) ?? ""
+        // Absent in Hosts saved before aliases; a whitespace-only persisted
+        // alias decodes as nil so presentation never shows a blank label.
+        alias = try container.decodeIfPresent(String.self, forKey: .alias)
+            .flatMap { Self.normalizedAlias($0) }
 
         let trimmedSessionName = sessionName.trimmingCharacters(in: .whitespaces)
         guard trimmedSessionName.isEmpty || HerdrSessionName.isValid(trimmedSessionName) else {
@@ -97,9 +108,28 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         }
     }
 
+    /// A stored alias is only meaningful when it renders: trimmed, and nil
+    /// when empty. One normalization so decode, the form, and the list all
+    /// agree on what "no alias" is.
+    private static func normalizedAlias(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     var displayName: String {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         return trimmed.isEmpty ? "\(username)@\(address)" : trimmed
+    }
+
+    /// The name every Host surface shows: the alias when it renders, `name`
+    /// (itself falling back to `user@address`) otherwise. Decode and the
+    /// form already normalize stored aliases, so the blank check only
+    /// guards direct construction.
+    var displayAliasName: String {
+        guard let alias, !alias.trimmingCharacters(in: .whitespaces).isEmpty else {
+            return displayName
+        }
+        return alias
     }
 
     /// The herdr socket this Host's session name points at.

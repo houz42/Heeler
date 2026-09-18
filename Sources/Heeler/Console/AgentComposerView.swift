@@ -126,6 +126,10 @@ struct AgentComposerView: View {
     /// Drop is Composer-only. Defaults to Composer so existing call sites stay
     /// a drop target; Direct Input must pass `.direct` to keep this inert.
     var inputMode: AgentInputMode = .composer
+    /// The chat surface's input-mode router (fork plan, Phase 2). Nil on
+    /// Monitor/Attach — routing through it is opt-in per surface, and the
+    /// Composer's behavior is byte-identical without it.
+    var router: ComposerRouterStore? = nil
     @State private var isInputFocused = false
     /// An explicit dismissal hides suggestions for the current trigger token;
     /// removing the token arms them again.
@@ -150,7 +154,17 @@ struct AgentComposerView: View {
 
                 VStack(spacing: 0) {
                     VStack(alignment: .leading, spacing: 8) {
-                        if let skills, let trigger = suggestionTrigger,
+                        if let router, isInputFocused,
+                            router.hasActiveSuggestions || router.routingError != nil
+                        {
+                            // The router's menu outranks the Skills menu on
+                            // its own prefixes (/ # @); without a router the
+                            // Skills path renders exactly as before.
+                            ComposerSuggestionRow(
+                                router: router,
+                                draft: store.draft,
+                                applyDraft: { store.replaceDraft(with: $0) })
+                        } else if let skills, let trigger = suggestionTrigger,
                             isInputFocused, !isSuggestionsDismissed
                         {
                             AgentComposerSkillSuggestions(
@@ -172,7 +186,9 @@ struct AgentComposerView: View {
                                 keyboardHandoffID: keyboardHandoffID,
                                 isKeyboardHandoffCurrent: isKeyboardHandoffCurrent,
                                 onFirstResponderRequest: onFirstResponderRequest,
-                                onKeyboardHandoffSettled: onKeyboardHandoffSettled)
+                                onKeyboardHandoffSettled: onKeyboardHandoffSettled,
+                                onComposerPress: composerPressHandler,
+                                onNewline: composerNewlineHandler)
                             if store.draft.isEmpty {
                                 Text("Message Agent")
                                     .foregroundStyle(.tertiary)
@@ -268,7 +284,7 @@ struct AgentComposerView: View {
                                 isEnabled: store.canSend,
                                 accessibilityHint: store.sendAccessibilityHint
                             ) {
-                                Task { await deliverDraft { await store.send() } }
+                                Task { await sendDraft() }
                             }
                         }
                     }
@@ -311,7 +327,7 @@ struct AgentComposerView: View {
             agentID: switcher.selectedID,
             isFocused: isInputFocused,
             hasDraft: { store.canSend },
-            send: { await deliverDraft { await store.send() } }))
+            send: { await sendDraft() }))
         .onAppear {
             guard let selectedID = switcher.selectedID,
                   keyboardHandoff.consume(selectedID)
@@ -331,6 +347,7 @@ struct AgentComposerView: View {
             }
         }
         .onChange(of: store.draft) { _, _ in
+            router?.updateSuggestions(forDraft: store.draft)
             guard let skills else { return }
             if suggestionTrigger == nil {
                 isSuggestionsDismissed = false
@@ -403,6 +420,58 @@ struct AgentComposerView: View {
         withTransaction(transaction) {
             setKeyboardPresentation(.tools)
             isInputFocused = !toolsDockReleasesFocus
+        }
+    }
+
+    /// The Send path with the optional input-mode router in front. Without
+    /// a router this is exactly the previous delivery; with one, a
+    /// passthrough outcome (plain text and omp slash commands) still rides
+    /// the same delivery — including the Blocked insert-without-Enter —
+    /// while handled outcomes never reach the agent's prompt.
+    private func sendDraft() async {
+        guard let router else {
+            await deliverDraft { await store.send() }
+            return
+        }
+        let text = store.draft
+        switch await router.submit(text) {
+        case .passthrough:
+            await deliverDraft { await store.send() }
+        case .handled:
+            store.replaceDraft(with: "")
+        case .rejected:
+            // The rejection's reason renders in the suggestion row; the
+            // draft stays for editing.
+            break
+        }
+    }
+
+    /// Hardware key presses the suggestion menu consumes before the text
+    /// editor acts on them. Nil without a router, so the editor keeps its
+    /// stock behavior.
+    private var composerPressHandler: ((UIKey) -> Bool)? {
+        guard let router else { return nil }
+        return { key in
+            switch key.keyCode {
+            case .keyboardUpArrow: return router.handleKey(.up)
+            case .keyboardDownArrow: return router.handleKey(.down)
+            case .keyboardEscape: return router.handleKey(.escape)
+            default: return false
+            }
+        }
+    }
+
+    /// Enter while the menu is showing accepts the selection instead of
+    /// inserting a newline; nil without a router keeps newlines as-is.
+    private var composerNewlineHandler: (() -> Bool)? {
+        guard let router else { return nil }
+        return {
+            guard router.handleKey(.enter), router.hasActiveSuggestions
+            else { return false }
+            if let newDraft = router.acceptSelectedSuggestion(into: store.draft) {
+                store.replaceDraft(with: newDraft)
+            }
+            return true
         }
     }
 
@@ -604,6 +673,11 @@ private struct AgentComposerTextEditor: UIViewRepresentable {
     let isKeyboardHandoffCurrent: (UUID) -> Bool
     let onFirstResponderRequest: (UUID, Bool) -> Void
     let onKeyboardHandoffSettled: (UUID) -> Void
+    /// Hardware presses the suggestion menu may consume (arrows, Escape).
+    var onComposerPress: ((UIKey) -> Bool)? = nil
+    /// Enter while the suggestion menu shows accepts it instead of
+    /// inserting a newline.
+    var onNewline: (() -> Bool)? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(onEdit: onEdit, isFocused: $isFocused)
@@ -619,6 +693,8 @@ private struct AgentComposerTextEditor: UIViewRepresentable {
         textView.textContainer.lineFragmentPadding = 0
         textView.accessibilityLabel = "Message the Agent"
         textView.onKeyboardHandoffSettled = onKeyboardHandoffSettled
+        textView.onComposerPress = onComposerPress
+        context.coordinator.onNewline = onNewline
         return textView
     }
 
@@ -632,13 +708,14 @@ private struct AgentComposerTextEditor: UIViewRepresentable {
         }
         textView.updateKeyboard(presentation: keyboardPresentation)
         textView.onKeyboardHandoffSettled = onKeyboardHandoffSettled
-        let shouldFocus = isFocused
+        textView.onComposerPress = onComposerPress
+        context.coordinator.onNewline = onNewline
         let coordinator = context.coordinator
-        coordinator.wantsFocus = shouldFocus
-        guard shouldFocus != textView.isFirstResponder else { return }
+        coordinator.wantsFocus = isFocused
+        guard isFocused != textView.isFirstResponder else { return }
         DispatchQueue.main.async { [weak textView] in
             guard let textView else { return }
-            if shouldFocus {
+            if isFocused {
                 if let keyboardHandoffID {
                     guard textView.window != nil,
                           isKeyboardHandoffCurrent(keyboardHandoffID)
@@ -686,11 +763,26 @@ private struct AgentComposerTextEditor: UIViewRepresentable {
         /// The latest focus intent, from either SwiftUI or UIKit, so a
         /// deferred focus change can recheck it before acting.
         var wantsFocus = false
+        /// Enter while the suggestion menu shows never becomes a newline;
+        /// without the menu (or without a router) the editor behaves
+        /// exactly as before.
+        var onNewline: (() -> Bool)?
         private var isFocused: Binding<Bool>
 
         init(onEdit: @escaping (String, NSRange) -> Void, isFocused: Binding<Bool>) {
             self.onEdit = onEdit
             self.isFocused = isFocused
+        }
+
+        func textView(
+            _ textView: UITextView,
+            shouldChangeTextIn range: NSRange,
+            replacementText string: String
+        ) -> Bool {
+            if string == "\n" || string == "\r", let onNewline, onNewline() {
+                return false
+            }
+            return true
         }
 
         func textViewDidChange(_ textView: UITextView) {
@@ -728,6 +820,10 @@ final class AgentComposerUITextView: UITextView {
     private var keyboardPresentation: AgentComposerKeyboardPresentation = .hidden
     var onKeyboardHandoffSettled: ((UUID) -> Void)?
     private var activeKeyboardHandoffID: UUID?
+    /// Hardware presses the suggestion menu consumes before the text
+    /// system acts on them (arrow navigation, Escape). Nil keeps the
+    /// stock behavior.
+    var onComposerPress: ((UIKey) -> Bool)?
 
     override init(frame: CGRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
@@ -798,6 +894,15 @@ final class AgentComposerUITextView: UITextView {
             reloadInputViews()
         }
     }
+    /// Arrow and Escape presses the suggestion menu consumes never reach
+    /// the text system; everything else behaves exactly as before.
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if let onComposerPress,
+           presses.contains(where: { press in press.key.map(onComposerPress) ?? false }) {
+            return
+        }
+        super.pressesBegan(presses, with: event)
+    }
 }
 
 struct AgentToolsKeyboard: View {
@@ -809,6 +914,11 @@ struct AgentToolsKeyboard: View {
     let height: CGFloat
     let quickKeysEnabled: Bool
     let sendQuickKey: (AgentQuickKey) -> Void
+    /// Macro slots for the Agent pad's Macros page (KeyboardChords). Nil
+    /// keeps the original layout byte-identical.
+    var macroContext: MacroKeyboardContext? = nil
+    /// Raw-bytes seam for herdr prefix chords on the Agent key row's swipe.
+    var sendChord: ((Data) -> Void)? = nil
     @State private var selectedTab: TerminalKeysTab = .controls
 
     private var tabs: [TerminalKeysTab] {
@@ -829,7 +939,9 @@ struct AgentToolsKeyboard: View {
                         AgentControlKeyboard(
                             isEnabled: quickKeysEnabled,
                             keyboardControl: keyboardControl,
-                            send: sendQuickKey)
+                            send: sendQuickKey,
+                            macros: macroContext,
+                            sendChord: sendChord)
                     }
                 case .skills:
                     if let skills = context.skills {

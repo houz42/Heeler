@@ -8,7 +8,11 @@ Entries reference the issue that motivated them.
 ## [Unreleased]
 
 ### Added
-
+- Configure the in-Agent header (the title area on the chat and terminal
+  screens) independently from the Agent list: a Same as agent list toggle
+  keeps the current behavior, and turning it off offers a custom global
+  layout with the same field editor as Agent list fields
+  (Settings → In-Agent Header).
 - Choose an existing Workspace or New Workspace from the same dropdown in
   New Agent. New Workspace opens a remote directory browser. The latest directory stays at the
   bottom of the dropdown, with its name and full path shown when selected. (PR #305)
@@ -19,6 +23,10 @@ Entries reference the issue that motivated them.
   native filtering, empty states, and retry for failed navigation. (PR #305)
 
 ### Fixed
+
+- Chat now reads correctly in Dark Mode: user-turn and blocked-question
+  accent washes lift their opacity against dark backgrounds, and the
+  detail-level control keeps a visible edge over the status bar.
 
 - Show the directory browser on the first New Workspace tap. (PR #305)
 - Viewing a Done Agent marks it seen on its Host and refreshes Console and

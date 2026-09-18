@@ -21,6 +21,19 @@ struct AgentDetailView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var composer: AgentComposerStore
     @State private var attach: AgentAttachStore
+    /// The chat surface's live-data store, one per (host, pane). Created
+    /// alongside attach: both surfaces stay mounted-capable across switches.
+    @State private var chat: ChatStore?
+    /// The chat input's submit router (/ # @ ! routing). Built with the
+    /// same per-agent task as the chat store.
+    @State private var chatRouter: ComposerRouterStore?
+    /// Which surface the detail shows. Set on first appearance from the
+    /// agent's session shape; the picker is the only other writer.
+    @State private var surface: AgentDetailSurface?
+    /// The chat pane's rendered rows' detail level persistence.
+    @State private var chatLevels = ChatDetailLevelStore.shared
+    /// The in-Agent header's layout mode + custom layout persistence.
+    @State private var headerLayoutStore = HeaderLayoutSettingsStore.shared
     @State private var openTerminal: AgentOpenTerminalStore
     /// Which window holds this Host's terminal channel; nil outside a scene
     /// root, where this detail always holds it.
@@ -143,6 +156,192 @@ struct AgentDetailView: View {
         }
     }
 
+
+    /// The Agent detail's two surfaces. Chat (the parsed transcript) is the
+    /// default when the agent carries a `.path` agent session; the live
+    /// Terminal (ADR 0013's Attach surface, still the fallback and always
+    /// available) remains one tap away.
+    private enum AgentDetailSurface: Hashable {
+        case chat
+        case terminal
+
+        /// The surface a detail opens on: Chat when a transcript is
+        /// readable, Terminal otherwise.
+        static func initial(agent: ConsoleAgent) -> AgentDetailSurface {
+            agent.agent.agentSession?.kind == AgentSessionRefKind.path
+                ? .chat : .terminal
+        }
+    }
+
+    /// The chat pane's rendered state, projecting the store's phase into
+    /// ChatScreen's inputs.
+    /// The nav-bar principal content: the user-configured agent-list layout
+    /// (Settings → Agent list fields) rendered in place — row 0 as the title,
+    /// row 1 as the subtitle. Separators keep their spacing; token styling
+    /// (fg/bold/dim) is honored at text scale.
+    private struct AgentDetailHeaderTokens: View {
+        let rows: [[RenderedToken]]
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 0) {
+                if let title = rows.first {
+                    tokenLine(title, font: .subheadline.weight(.semibold))
+                }
+                if rows.count > 1 {
+                    tokenLine(rows[1], font: .caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+
+        private func tokenLine(_ tokens: [RenderedToken], font: Font) -> some View {
+            tokens.reduce(Text("")) { partial, token in
+                var text = Text(token.text)
+                if token.bold == true { text = text.bold() }
+                if token.dim == true { text = text.foregroundStyle(.secondary) }
+                var view = text.font(token.isSeparator ? nil : font)
+                if let hex = token.fg {
+                    view = view.foregroundStyle(Color(
+                        red: Double(hex.red) / 255,
+                        green: Double(hex.green) / 255,
+                        blue: Double(hex.blue) / 255))
+                }
+                return partial + view
+            }
+            .lineLimit(1)
+        }
+    }
+
+    /// The header's token rows, following the in-Agent header setting
+    /// (Settings → In-Agent Header): the Host's agent-list layout when it
+    /// says "Same as agent list", the stored custom layout otherwise.
+    private var headerTokens: some View {
+        AgentDetailHeaderTokens(
+            rows: AgentRowRenderer.render(
+                layout: headerLayoutStore.headerLayout(
+                    sameAsList: { [console] hostID in console.rowLayout(for: hostID) },
+                    for: agent.hostID),
+                agent: agent))
+    }
+
+    private var chatStateColor: Color {
+        switch chatAgentState {
+        case .idle: .secondary
+        case .running: .green
+        case .blocked: .orange
+        case .offline: .red
+        }
+    }
+
+    private var chatAgentState: ChatAgentState {
+        switch console.agents.first(where: { $0.id == agent.id })?.agent.status {
+        case .working: .running
+        case .blocked: .blocked
+        case .done, .idle, nil: .idle
+        default: .idle
+        }
+    }
+
+    /// One icon, one tap: on the chat surface it switches to the terminal,
+    /// on the terminal surface it switches back to chat. The icon names the
+    /// destination, not the current surface.
+    private var surfacePicker: some View {
+        Button {
+            surface = (surface == .chat) ? .terminal : .chat
+        } label: {
+            Image(
+                systemName: surface == .chat
+                    ? "terminal" : "bubble.left.and.bubble.right")
+        }
+        .labelStyle(.iconOnly)
+        .hoverEffect(.highlight)
+        .accessibilityLabel(surface == .chat ? "Show Terminal" : "Show Chat")
+    }
+
+    /// The graceful empty state for an agent whose chat surface has no
+    /// readable transcript (no `.path` agent session): the surface stays
+    /// reachable, telling the user why it is empty.
+    private struct ChatUnavailablePlaceholder: View {
+        var body: some View {
+            ContentUnavailableView(
+                "No Transcript",
+                systemImage: "bubble.left.and.bubble.right",
+                description: Text(
+                    "This agent has no transcript file to read. Use the surface menu to open the live Terminal."))
+        }
+    }
+
+    /// Builds and starts the chat store + input router when the agent's
+    /// session is a readable transcript path. Idempotent: re-entry with a
+    /// live store is a no-op. Called from the agent-identity task and from
+    /// late arrival of the session path / a manual switch to the chat
+    /// surface, so agents whose integration registers after first render
+    //  still get a chat.
+    private func buildChatIfPossible() async {
+        guard chat == nil,
+            agent.agent.agentSession?.kind == AgentSessionRefKind.path
+        else { return }
+        let store = ChatStore(
+            hostID: agent.hostID,
+            paneID: agent.agent.paneID,
+            reader: .console(console, hostID: agent.hostID))
+        chat = store
+        // The chat input's router: / # @ ! classification + plain delivery
+        // through agent.prompt. The scratch-shell pane for ! is created
+        // lazily on first use by the store.
+        chatRouter = ComposerRouterStore(
+            dependencies: ComposerRouterStore.makeChatDependencies(
+                console: console, agent: agent,
+                bashIO: ComposerBashIO(
+                    createScratchPane: { hostID in
+                        try await console.createShellTerminal(
+                            ShellTerminalCreationRequest(
+                                workspaceID: agent.agent.workspaceID,
+                                cwd: agent.agent.cwd),
+                            on: hostID).paneID
+                    },
+                    sendText: { hostID, paneID, text in
+                        try await console.sendPaneInput(
+                            paneID, text: text, on: hostID)
+                    },
+                    readPaneText: { hostID, paneID in
+                        try await console.readPaneOutput(
+                            paneID, lines: 200, on: hostID).text
+                    })))
+        await store.start(
+            agentSession: agent.agent.agentSession,
+            statusUpdates: console.agentStatusUpdates(for: agent.id))
+    }
+
+    /// Builds (once per agent identity) and starts the chat store, then
+    /// renders the chat surface.
+    @ViewBuilder
+    private var chatSurface: some View {
+        if let chat {
+            ChatScreen(
+                paneID: agent.agent.paneID,
+                agentName: agent.tabLabel ?? agent.agent.displayName,
+                state: chatAgentState,
+
+                content: chat.content,
+                initialLevel: chatLevels.level(paneID: agent.agent.paneID),
+                changeLevel: { [chatLevels] level, paneID in
+                    chatLevels.setLevel(level, paneID: paneID)
+                },
+                hasOlder: chat.hasOlder,
+                isLoadingOlder: chat.isLoadingOlder,
+                loadOlder: { [weak chat] in await chat?.loadOlder() },
+                router: chatRouter,
+                deliver: { text in
+                    try await console.promptAgent(
+                        AgentPromptParams(target: agent.agent.paneID, text: text),
+                        on: agent.hostID)
+                })
+        } else {
+            ChatUnavailablePlaceholder()
+        }
+    }
+
     var body: some View {
         Group {
             if let shell = openTerminal.shell {
@@ -158,6 +357,10 @@ struct AgentDetailView: View {
                     await openTerminal.returnToAgent()
                 }
                 .id(openTerminal.destination)
+            } else if surface == .chat {
+                // The surface toggle rides inside the chat's status strip
+                // (accessory slot) — never an overlay over the content.
+                chatSurface
             } else {
                 AgentTerminalView(
                     agent: agent,
@@ -186,6 +389,54 @@ struct AgentDetailView: View {
                 .id(openTerminal.destination)
             }
         }
+        .toolbar {
+            // One header for both surfaces: state dot + title at principal,
+            // the chat/terminal toggle trailing. The chat surface adds its
+            // level switcher on top of this.
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(chatStateColor)
+                        .frame(width: 8, height: 8)
+                        .accessibilityLabel(Text(chatAgentState.rawValue))
+                    // The terminal surface keeps the nav bar transparent by
+                    // design, so its header rides in a blur capsule instead
+                    // of floating bare text over terminal output.
+                    headerTokens
+                        .padding(.horizontal, surface == .terminal ? 10 : 0)
+                        .padding(.vertical, surface == .terminal ? 5 : 0)
+                        .background {
+                            if surface == .terminal {
+                                Capsule().fill(.ultraThinMaterial)
+                            }
+                        }
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                surfacePicker
+            }
+        }
+        // The initial surface follows the agent's session shape; Chat is the
+        // default whenever a transcript is readable, and a switch that lands
+        // on an agent without one falls back to the Terminal without the
+        // user picking anything.
+        .onChange(of: AgentDetailSurface.initial(agent: agent), initial: true) {
+            _, initial in
+            if surface == nil { surface = initial }
+        }
+        .task(id: agent.id) {
+            await buildChatIfPossible()
+        }
+        // A session path that arrives after first render (agents started
+        // before the integration registered) must still build the store;
+        // so must a manual switch to the chat surface.
+        .onChange(of: agent.agent.agentSession?.value) { _, _ in
+            Task { await buildChatIfPossible() }
+        }
+        .onChange(of: surface) { _, new in
+            if new == .chat { Task { await buildChatIfPossible() } }
+        }
+
         .onAppear {
             hasAppeared = true
             updateFocus()
@@ -196,6 +447,9 @@ struct AgentDetailView: View {
         .onDisappear {
             hasAppeared = false
             focus.leave()
+            // The chat store's poll loop must not outlive the detail view.
+            chat = nil
+            chatRouter = nil
         }
         .onChange(of: console.hostConnectionGenerations[agent.hostID]) { _, generation in
             openTerminal.transportGenerationDidChange(generation)

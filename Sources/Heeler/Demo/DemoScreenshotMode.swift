@@ -181,7 +181,8 @@
                             paneID: "mobile:p1", status: .working,
                             workspaceID: "mobile", kind: "codex",
                             name: "ios-polish", title: "Polish the Attach experience",
-                            cwd: "/workspace/heeler"),
+                            cwd: "/workspace/heeler",
+                            transcriptPath: chatTranscriptPath),
                         agent(
                             paneID: "docs:p2", status: .idle,
                             workspaceID: "docs", kind: "claude",
@@ -191,7 +192,8 @@
                             paneID: "mobile:p4", status: .done,
                             workspaceID: "mobile", kind: "gemini",
                             name: "accessibility", title: "Audit VoiceOver labels",
-                            cwd: "/workspace/heeler"),
+                            cwd: "/workspace/heeler",
+                            transcriptPath: chatTranscriptPath),
                     ],
                     workspaces: [
                         workspace(
@@ -208,7 +210,8 @@
                     "mobile:p1": terminalOutput,
                     "docs:p2": terminalOutput,
                     "mobile:p4": terminalOutput,
-                ]),
+                ],
+                transcripts: [chatTranscriptPath: chatTranscript]),
             buildHostID: DemoHostProfile(
                 snapshot: snapshot(
                     agents: [
@@ -216,7 +219,8 @@
                             paneID: "checkout:p3", status: .blocked,
                             workspaceID: "checkout", kind: "claude",
                             name: "reviewer", title: "Checkout review",
-                            cwd: "/workspace/storefront"),
+                            cwd: "/workspace/storefront",
+                            transcriptPath: chatTranscriptPath),
                         agent(
                             paneID: "api:p7", status: .working,
                             workspaceID: "api", kind: "opencode",
@@ -234,8 +238,27 @@
                 terminalOutputs: [
                     "checkout:p3": terminalOutput,
                     "api:p7": terminalOutput,
-                ]),
+                ],
+                transcripts: [chatTranscriptPath: chatTranscript]),
         ]
+
+        /// The absolute path every demo agent's `.path` session points at;
+        /// the demo transport serves `chatTranscript` for it.
+        static let chatTranscriptPath = "/home/demo/.local/share/omp/session.jsonl"
+
+        /// A small omp JSONL transcript: a user turn, an assistant turn with
+        /// thinking + a tool call + text, a paired tool result, and a closing
+        /// assistant turn — every transcript-fed row kind the chat surface
+        /// renders (the pending card stays preview-only until a transcript
+        /// record feeds it).
+        private static let chatTranscriptJSON = """
+            {"type":"message","id":"demo-1","timestamp":1789292098261,"message":{"role":"user","content":[{"type":"text","text":"Ship the checkout fix — run the targeted tests first."}],"timestamp":1789292098261}}
+            {"type":"message","id":"demo-2","timestamp":1789292105000,"message":{"role":"assistant","content":[{"type":"thinking","thinking":"The user wants the fix shipped. Read the failing test first, then run the suite."},{"type":"toolCall","id":"demo-call-1","name":"read","arguments":{"path":"CheckoutView.swift"}},{"type":"text","text":"The retry logic drops the cart because `PaymentCoordinator` resets state on the first attempt. I'll preserve the cart across retries and re-run `CheckoutFlowTests`."}],"timestamp":1789292105000}}
+            {"type":"message","id":"demo-3","timestamp":1789292110000,"message":{"role":"toolResult","toolCallId":"demo-call-1","toolName":"read","content":[{"type":"text","text":"struct CheckoutView: View {\\n    var body: some View {\\n        Text(\\"Checkout\\")\\n    }\\n}"}],"timestamp":1789292110000}}
+            {"type":"message","id":"demo-4","timestamp":1789292120000,"message":{"role":"assistant","content":[{"type":"text","text":"All 18 tests pass. Ready to commit when you are."}],"timestamp":1789292120000}}
+            """
+
+        static let chatTranscript = Data(chatTranscriptJSON.utf8)
 
         static let terminalOutput = """
             \u{001B}[2J\u{001B}[H\u{001B}[1;36mHERDR  •  CLAUDE CODE\u{001B}[0m\r
@@ -309,7 +332,8 @@
             kind: String,
             name: String,
             title: String,
-            cwd: String
+            cwd: String,
+            transcriptPath: String? = nil
         ) -> AgentInfo {
             AgentInfo(
                 agentStatus: status,
@@ -320,6 +344,10 @@
                 terminalID: "terminal:\(paneID)",
                 workspaceID: workspaceID,
                 agent: kind,
+                agentSession: transcriptPath.map { path in
+                    AgentSessionInfo(
+                        agent: name, kind: .path, source: "demo", value: path)
+                },
                 cwd: cwd,
                 name: name,
                 terminalTitleStripped: title)
@@ -354,6 +382,9 @@
         let snapshot: SessionSnapshot
         let paneSnippets: [String: String]
         let terminalOutputs: [String: String]
+        /// Demo transcripts served for `.path` agent sessions, keyed by the
+        /// absolute session path (the chat surface's initial read + polling).
+        let transcripts: [String: Data]
     }
 
     private actor DemoScreenshotTransport: Transport {
@@ -384,6 +415,20 @@
 
         func sessionSnapshot() async throws -> SessionSnapshot {
             profile.snapshot
+        }
+
+        func readTranscriptFile(atPath path: String) async throws -> Data {
+            profile.transcripts[path]
+                ?? Data()  // An absent file reads as empty, per the transport contract.
+        }
+
+        func readTranscriptFileChunk(
+            atPath path: String, offset: UInt64, length: Int
+        ) async throws -> Data {
+            let data = profile.transcripts[path] ?? Data()
+            let start = Int(offset)
+            guard start < data.count else { return Data() }
+            return data[start..<min(start + max(length, 0), data.count)]
         }
 
         func readPane(_ params: PaneReadParams) async throws -> PaneReadResult {

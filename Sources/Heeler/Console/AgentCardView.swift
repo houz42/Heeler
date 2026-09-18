@@ -9,6 +9,10 @@ struct AgentCardView: View {
     let agent: ConsoleAgent
     var layout: AgentRowLayout = .heelerDefault
     var isPinned: Bool = false
+    /// A leading secondary span ("Label — ") before Row 1, for contexts
+    /// where a group label was folded into the Agent's own row (tree
+    /// mode's single-Agent tab). Empty by default.
+    var headlinePrefix: String = ""
 
     private var presentation: AgentCardPresentation {
         AgentCardPresentation(agent: agent, layout: layout)
@@ -16,9 +20,15 @@ struct AgentCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            // Centered, not baseline-aligned: the status capsule is smaller
-            // type with padding, so baseline alignment drops it below Row 1.
+            // Centered, not baseline-aligned: the status dot is smaller
+            // than Row 1's type, so baseline alignment drops it below Row 1.
             HStack(alignment: .center) {
+                if !headlinePrefix.isEmpty {
+                    Text(verbatim: headlinePrefix)
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
                 AgentRowText(tokens: presentation.rows.first ?? [])
                     .font(.headline)
                     .lineLimit(1)
@@ -54,13 +64,35 @@ struct AgentCardView: View {
         .padding(.vertical, 4)
         // Terminal blank rows become bounded extra card spacing on a phone.
         .padding(.bottom, CGFloat(min(layout.rowGap, 3)) * 8)
+        // A live Agent tints the whole row's background at low opacity so
+        // the state reads from scan distance; idle/done stay plain.
+        .background(rowTint)
+    }
+
+    @ViewBuilder
+    private var rowTint: some View {
+        switch agent.agent.status {
+        case .working, .blocked:
+            Color(agent.agent.status.tintUIColor)
+                .opacity(0.10)
+        default:
+            EmptyView()
+        }
     }
 
     private var hostText: some View {
-        Text(verbatim: agent.hostName)
+        Text(verbatim: hostChip)
             .font(.caption)
             .foregroundStyle(.secondary)
             .lineLimit(1)
+    }
+
+    /// The trailing Host chip: `host:session` when the Host points at a
+    /// named herdr session, else the Host name alone.
+    private var hostChip: String {
+        agent.hostSessionName.isEmpty
+            ? agent.hostName
+            : "\(agent.hostName):\(agent.hostSessionName)"
     }
 }
 
@@ -116,26 +148,29 @@ struct AgentCardPresentation: Equatable, Sendable {
     }
 }
 
-/// Status rendered as a tinted capsule; Blocked gets the loudest color
-/// because it is the one asking for the user. Working keeps a live solving
-/// orb inside the capsule — a still badge cannot tell a busy Agent from a
+/// The agent's live state as a big colored dot (~10–12pt), painted from
+/// the single status palette. Working keeps the live solving orb inside
+/// the dot's footprint — a still badge cannot tell a busy Agent from a
 /// finished one at a glance.
 struct AgentStatusBadge: View {
     let status: AgentStatus
 
     var body: some View {
-        HStack(spacing: 4) {
+        Group {
             if status == .working {
-                SolvingOrbView(size: 12)
+                SolvingOrbView(size: 11)
+                    .accessibilityHidden(true)
+            } else {
+                Circle()
+                    .fill(Color(status.inkUIColor))
+                    .frame(width: 11, height: 11)
                     .accessibilityHidden(true)
             }
-            Text(status.rawValue.capitalized)
-                .font(.caption2.weight(.semibold))
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(Color(status.tintUIColor).opacity(0.15), in: Capsule())
-        .foregroundStyle(Color(status.inkUIColor))
+        .frame(width: 11, height: 11)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Agent status")
+        .accessibilityValue(status.rawValue.capitalized)
     }
 }
 

@@ -1222,6 +1222,88 @@ actor SessionDriver {
         }
     }
 
+    /// Reads up to `length` bytes from one remote file starting at `offset`
+    /// without exposing a native read handle. Reading at or past EOF
+    /// returns empty `Data`; a missing file surfaces as a path-free
+    /// `SSHError.sftpFailure` with the SFTP no-such-file status, matching
+    /// the file-operation error style. One SFTP file handle per call.
+    func readSFTPFileRange(
+        id: UInt64,
+        path: String,
+        offset: UInt64,
+        length: Int,
+        timeout: Duration
+    ) async throws -> Data {
+        guard Self.isValidSFTPPath(path) else { throw SSHError.channelFailed }
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        return try await withSFTPUse(id: id, deadline: deadline) {
+            guard let fileID = try await openSFTPFileForReadingIfPresent(
+                sftpID: id,
+                path: path,
+                deadline: deadline)
+            else {
+                throw SSHError.sftpFailure(
+                    status: UInt64(LIBSSH2_FX_NO_SUCH_FILE))
+            }
+
+            do {
+                // A non-positive length still opens and closes the handle,
+                // so a missing file reports before a nonsensical length is
+                // honored; the loop below then yields empty Data.
+                try await seekSFTPFile(
+                    sftpID: id,
+                    fileID: fileID,
+                    offset: offset)
+                var contents = Data()
+                var remaining = length
+                while remaining > 0,
+                    let chunk = try await readSFTPFileChunk(
+                        sftpID: id,
+                        fileID: fileID,
+                        deadline: deadline)
+                {
+                    if chunk.count > remaining {
+                        contents.append(chunk.prefix(remaining))
+                        remaining = 0
+                    } else {
+                        contents.append(chunk)
+                        remaining -= chunk.count
+                    }
+                }
+                try await closeSFTPFileWithinUse(
+                    sftpID: id,
+                    fileID: fileID,
+                    timeout: timeout)
+                return contents
+            } catch {
+                try? await closeSFTPFileWithinUse(
+                    sftpID: id,
+                    fileID: fileID,
+                    timeout: .seconds(2))
+                throw normalize(error)
+            }
+        }
+    }
+
+
+    /// Positions one open SFTP read handle at `offset`. `seek64` is
+    /// synchronous and never returns EAGAIN; it only fails when the handle
+    /// vanished underneath us, which is the invalidation already reported.
+    private func seekSFTPFile(
+        sftpID: UInt64,
+        fileID: UInt64,
+        offset: UInt64
+    ) async throws {
+        await acquireOperation()
+        defer { releaseOperation() }
+        guard
+            let file = sftpClients[sftpID]?.files[fileID]
+        else {
+            throw SSHError.connectionInvalidated
+        }
+        libssh2_sftp_seek64(file, offset)
+    }
+
     private func openSFTPFileForReadingIfPresent(
         sftpID: UInt64,
         path: String,

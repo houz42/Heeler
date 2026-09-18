@@ -45,6 +45,11 @@ protocol Transport: Sendable {
     /// herdr's own spellings, shared with `pane.send_keys` / `pane.send_input`.
     func sendAgentKeys(_ params: AgentSendKeysParams) async throws
 
+    /// Types text (and/or keys) into any Pane (`pane.send_input`) — the
+    /// Composer bash mode's delivery into a scratch shell pane. Unlike
+    /// `agent.prompt` this never appends Enter unless asked.
+    func sendPaneInput(_ params: PaneSendInputParams) async throws
+
     /// Starts a new Agent: the new-agent flow (#12, User Story 8 — dispatch
     /// work from the road). Creates a fresh herdr tab in the chosen workspace,
     /// starts the requested agent in its root pane, and returns the Agent once
@@ -216,6 +221,18 @@ protocol Transport: Sendable {
     /// as `listSkills`.
     func readSkillFile(atPath path: String) async throws -> String
 
+    /// Reads one whole transcript file (the initial load). `path` is an
+    /// absolute POSIX path on the Host. Transports without a Host-side
+    /// readable filesystem throw by default.
+    func readTranscriptFile(atPath path: String) async throws -> Data
+
+    /// Reads up to `length` bytes of a transcript file starting at `offset`
+    /// (append-poll and loadOlder paging). Empty `Data` means the offset is
+    /// at or past EOF. Same transport caveat as `readTranscriptFile`.
+    func readTranscriptFileChunk(
+        atPath path: String, offset: UInt64, length: Int
+    ) async throws -> Data
+
     /// Whether the underlying connection to the Host is still alive. The
     /// reconnect machinery (#18) decides "re-subscribe on this connection or
     /// re-establish it" from this flag.
@@ -249,6 +266,23 @@ extension Transport {
     func readSkillFile(atPath path: String) async throws -> String {
         throw TransportError.channelFailed(
             detail: "This transport cannot read skill files.")
+    }
+
+    func readTranscriptFile(atPath path: String) async throws -> Data {
+        throw TransportError.channelFailed(
+            detail: "This transport cannot read transcript files.")
+    }
+
+    func readTranscriptFileChunk(
+        atPath path: String, offset: UInt64, length: Int
+    ) async throws -> Data {
+        throw TransportError.channelFailed(
+            detail: "This transport cannot read transcript file chunks.")
+    }
+
+    func sendPaneInput(_ params: PaneSendInputParams) async throws {
+        throw TransportError.channelFailed(
+            detail: "This transport cannot send pane input.")
     }
 
     /// Non-SSH test doubles and alternative transports can state that SFTP is
@@ -579,6 +613,10 @@ struct Agent: Sendable, Equatable {
     let terminalTitleStripped: String?
     /// Pane presentation/manual title (`AgentInfo.title`), not a pane id.
     let paneTitle: String?
+    /// The agent's session reference (`agent_session`). A `.path` kind
+    /// carries the transcript file's absolute POSIX location, which the
+    /// chat surface reads; every other shape (or nil) means no transcript.
+    let agentSession: AgentSessionInfo?
     let tokens: [String: String]
     let stateLabels: [String: String]
     /// Snapshot ordering metadata for Agent panel sort consumers.
@@ -603,7 +641,8 @@ struct Agent: Sendable, Equatable {
         name: String? = nil,
         terminalTitle: String? = nil, terminalTitleStripped: String? = nil,
         paneTitle: String? = nil, tokens: [String: String] = [:],
-        stateLabels: [String: String] = [:], stateChangeSeq: Int? = nil
+        stateLabels: [String: String] = [:], stateChangeSeq: Int? = nil,
+        agentSession: AgentSessionInfo? = nil
     ) {
         self.terminalID = terminalID
         self.kind = kind
@@ -613,6 +652,7 @@ struct Agent: Sendable, Equatable {
         self.terminalTitleStripped = terminalTitleStripped
             ?? terminalTitle.map(Self.strippedSidebarTitle)
         self.paneTitle = paneTitle
+        self.agentSession = agentSession
         self.tokens = tokens
         self.stateLabels = stateLabels
         self.stateChangeSeq = stateChangeSeq
@@ -645,8 +685,8 @@ struct Agent: Sendable, Equatable {
             paneTitle: info.title,
             tokens: info.tokens ?? [:],
             stateLabels: info.stateLabels ?? [:],
-            stateChangeSeq: info.stateChangeSeq
-        )
+            stateChangeSeq: info.stateChangeSeq,
+            agentSession: info.agentSession)
     }
 
     /// herdr 0.8.2 removes one activity glyph only when followed by whitespace
