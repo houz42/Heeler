@@ -34,6 +34,46 @@ struct AgentRowLayoutStoreTests {
         #expect(reloaded.catalogLoadError == nil)
     }
 
+    /// The global default lives at the fixed `globalLayoutHostID` catalog
+    /// entry: Host overrides beat it, it beats plugin rows and the built-in
+    /// default, and nil removes it. An untouched install never has one.
+    @Test func globalDefaultResolvesBetweenHostOverrideAndBuiltin() throws {
+        let (defaults, cleanup) = try makeDefaults()
+        defer { cleanup() }
+        let host = UUID()
+        let plugin = AgentRowLayoutSnapshot(layout: AgentRowLayout(rows: [[.init(.agent)]]))
+        let global = AgentRowLayout(rows: [[.init(.host)], [.init(.session)]], rowGap: 5)
+        let hostOverride = AgentRowLayout(rows: [[.init(.pane)]])
+        let store = AgentRowLayoutStore(defaults: defaults)
+
+        // Untouched install: no global default, the built-in path resolves.
+        #expect(store.globalLayout == nil)
+        #expect(store.resolvedLayout(for: host, pluginSnapshot: nil) == .consoleDefault)
+
+        try store.setGlobalLayout(global)
+        #expect(store.globalLayout == global)
+        #expect(store.resolvedLayout(for: host, pluginSnapshot: plugin) == global)
+        #expect(store.resolvedLayout(for: host, pluginSnapshot: nil) == global)
+
+        // A Host override still wins.
+        try store.setLayout(hostOverride, for: host)
+        #expect(store.resolvedLayout(for: host, pluginSnapshot: plugin) == hostOverride)
+
+        // Round-trip: the global default persists alongside Host overrides.
+        let reloaded = AgentRowLayoutStore(defaults: defaults)
+        #expect(reloaded.globalLayout == global)
+        #expect(reloaded.hostLayouts[host] == hostOverride)
+        #expect(reloaded.resolvedLayout(for: host, pluginSnapshot: plugin) == hostOverride)
+        #expect(reloaded.resolvedLayout(for: UUID(), pluginSnapshot: nil) == global)
+
+        // nil removes the global default; Hosts follow plugin/built-in again.
+        try reloaded.setGlobalLayout(nil)
+        #expect(reloaded.globalLayout == nil)
+        #expect(reloaded.resolvedLayout(for: UUID(), pluginSnapshot: plugin)
+            == plugin.layout.withHeelerRow())
+        #expect(reloaded.resolvedLayout(for: UUID(), pluginSnapshot: nil) == .consoleDefault)
+    }
+
     @Test func batchWritesAreAtomicAndNilRestoresInheritance() throws {
         let (defaults, cleanup) = try makeDefaults()
         defer { cleanup() }

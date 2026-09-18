@@ -86,6 +86,44 @@ struct AgentListFieldsEditorTests {
         #expect(AgentRowLayoutStore(defaults: defaults).hostLayouts.count == 2)
     }
 
+    /// The Settings screen edits the global default through the same editor
+    /// under the fixed catalog identity: committed changes persist at once,
+    /// every Host without its own choice follows them, and a Host override
+    /// still wins.
+    @Test func globalDefaultEditsPersistAndApplyToHostsWithoutOverrides() throws {
+        let (defaults, cleanup) = try makeDefaults()
+        defer { cleanup() }
+        let layouts = AgentRowLayoutStore(defaults: defaults)
+        let editor = AgentListFieldsEditor(
+            layouts: layouts, snapshots: HerdrSidebarSnapshotStore(), fetch: { _ in nil })
+        let globalID = AgentRowLayoutStore.globalLayoutHostID
+        let host = UUID()
+
+        // Nothing configured: the built-in default resolves everywhere.
+        #expect(editor.underlyingSource(for: globalID) == .unavailable)
+        #expect(editor.layout(for: globalID) == .consoleDefault)
+        #expect(editor.layout(for: host) == .consoleDefault)
+
+        // One committed global edit applies to the unconfigured Host.
+        let committed = editor.commit(globalID) { $0.rows = [[.init(.host)], [.init(.session)]] }
+        #expect(committed)
+        #expect(layouts.globalLayout?.rows == [[.init(.host)], [.init(.session)]])
+        #expect(editor.underlyingSource(for: globalID) == .saved)
+        #expect(editor.layout(for: host).rows == [[.init(.host)], [.init(.session)]])
+        #expect(layouts.resolvedLayout(for: host, pluginSnapshot: nil).rows
+            == [[.init(.host)], [.init(.session)]])
+
+        // A Host override still wins over the global default.
+        try layouts.setLayout(AgentRowLayout(rows: [[.init(.pane)]]), for: host)
+        #expect(layouts.resolvedLayout(for: host, pluginSnapshot: nil).rows == [[.init(.pane)]])
+
+        // The chat header path (ConsoleStore.rowLayout) follows the same
+        // resolution: an override-free Host inherits the global default.
+        let other = UUID()
+        #expect(layouts.resolvedLayout(for: other, pluginSnapshot: nil).rows
+            == [[.init(.host)], [.init(.session)]])
+    }
+
     @Test func syncFromPluginFillsTheDraftAndReportsFailures() async throws {
         let (defaults, cleanup) = try makeDefaults()
         defer { cleanup() }

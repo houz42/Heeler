@@ -8,12 +8,20 @@
     enum DemoScreenshotMode {
         static let launchArgument = "--demo-screenshots"
 
+        /// Opens the Settings sheet on launch so a headless run can capture
+        /// it without touch injection. Requires `launchArgument` too.
+        static let settingsLaunchArgument = "--demo-screenshots-settings"
+
         static var isEnabled: Bool {
             isEnabled(arguments: ProcessInfo.processInfo.arguments)
         }
 
         static func isEnabled(arguments: [String]) -> Bool {
             arguments.contains(launchArgument)
+        }
+
+        static var presentsSettings: Bool {
+            ProcessInfo.processInfo.arguments.contains(settingsLaunchArgument)
         }
     }
 
@@ -75,6 +83,7 @@
                 relaySettings: relaySettings,
                 notificationRouter: notificationRouter,
                 bannerStore: bannerStore,
+                presentsSettingsOnAppear: DemoScreenshotMode.presentsSettings,
                 liveActivities: liveActivities,
                 activity: activity
             )
@@ -292,10 +301,13 @@
         @MainActor
         static func makeConsoleStore() -> ConsoleStore {
             let defaults = makeDefaults()
-            return ConsoleStore(
+            let layouts = AgentRowLayoutStore(defaults: defaults)
+            // Both demo Hosts follow the seeded global default so the
+            // Agents list screenshots exercise the All Hosts (default) path.
+            let console = ConsoleStore(
                 snapshotRetryDelay: .seconds(30),
                 pins: PinnedAgentsStore(defaults: defaults),
-                rowLayouts: AgentRowLayoutStore(defaults: defaults)
+                rowLayouts: layouts
             ) { host, subscriptions in
                 EventsSession(
                     subscriptions: subscriptions,
@@ -310,7 +322,18 @@
                         initialDelay: .seconds(30), multiplier: 1, maxDelay: .seconds(30)),
                     keepalive: nil)
             }
+            try? layouts.setGlobalLayout(globalLayout)
+            return console
         }
+
+        /// The demo's global default layout: workspace + agent + directory
+        /// in one dense Row 1, so a card reads at a glance and the seeded
+        /// All Hosts (default) choice is visibly different from the
+        /// per-Host herdr rows.
+        static let globalLayout = AgentRowLayout(rows: [
+            [.init(.workspace), .init(.agent), .init(.tab)],
+            [.init(.directory, dim: true)],
+        ])
 
         private static func snapshot(
             agents: [AgentInfo], workspaces: [WorkspaceInfo]

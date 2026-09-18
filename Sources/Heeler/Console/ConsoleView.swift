@@ -17,6 +17,11 @@ struct ConsoleView: View {
     @Bindable var notificationRouter: AgentNotificationRouter
     /// Announces foreground Blocked/Done transitions in-app (#77).
     let bannerStore: AgentNotificationBannerStore
+    /// Demo-screenshot lever only: present the Settings sheet on first
+    /// appear so a headless run can capture the Agent List Fields page
+    /// (Settings → Agent List Fields, pushed to its root) without touch
+    /// injection. Production callers never pass it.
+    var presentsSettingsOnAppear = false
     /// Per-Host Live Activity start/update/end and the Settings toggle.
     let liveActivities: HostLiveActivityCoordinator
     /// Scene phase widened by the background grace period; an Attach screen
@@ -24,6 +29,9 @@ struct ConsoleView: View {
     let activity: AppActivityCoordinator
     @State private var hostSheet: HostSheet?
     @State private var isStartingAgent = false
+    /// Demo-screenshot lever: presents the Agent List Fields page once on
+    /// first appear when `presentsSettingsOnAppear` is set.
+    @State private var isShowingDemoSettings = false
     @State private var isShowingSettings = false
     /// Hosts whose Host-detail Reconnect request is in flight, including the
     /// 1.2 s visual-feedback hold after `retryHost` returns. Distinct from
@@ -201,6 +209,21 @@ struct ConsoleView: View {
             .modifier(ConsoleSheetPresentationModifier(
                 presentation: ConsoleSheetPresentation(
                     horizontalSizeClass: horizontalSizeClass)))
+        }
+        .sheet(isPresented: $isShowingDemoSettings) {
+            // Demo-screenshot capture surface only: the Agent List Fields
+            // page behind Settings → Agent List Fields, so a headless run
+            // can capture it without touch injection.
+            NavigationStack {
+                SettingsView.agentListDestination.destinationView(
+                    console: console, hosts: hosts.hosts)
+            }
+            .modifier(ConsoleSheetPresentationModifier(
+                presentation: ConsoleSheetPresentation(
+                    horizontalSizeClass: horizontalSizeClass)))
+        }
+        .onAppear {
+            if presentsSettingsOnAppear { isShowingDemoSettings = true }
         }
         .modifier(
             ConsoleStatusBarModifier(

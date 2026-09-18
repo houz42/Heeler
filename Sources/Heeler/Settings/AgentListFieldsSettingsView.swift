@@ -34,6 +34,7 @@ struct AgentListFieldsSettingsView: View {
     private var hostList: some View {
         List {
             sessionSection
+            globalRow
             ForEach(hosts) { host in
                 hostRow(host)
             }
@@ -48,6 +49,45 @@ struct AgentListFieldsSettingsView: View {
         .refreshable {
             await console.refreshSidebarLayouts()
         }
+    }
+
+    /// The global default layout: one choice covering every Host without a
+    /// per-Host override. Same editing surface as a Host, under the fixed
+    /// catalog identity `AgentRowLayoutStore.globalLayoutHostID`.
+    private var globalRow: some View {
+        Section {
+            NavigationLink {
+                AgentListFieldsTargetDetailView(
+                    target: AgentListFieldsEditTarget.globalDefault(
+                        isConfigured: editor.underlyingSource(
+                            for: AgentRowLayoutStore.globalLayoutHostID) == .saved),
+                    console: console, hosts: hosts, editor: editor)
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "globe")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("All Hosts (default)")
+                            .font(.body)
+                            .foregroundStyle(.primary)
+                        Text(verbatim: globalRowCaption)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .listRowInsets(AgentListFieldsChrome.headerInsets)
+            .agentListHostSurface(isFirst: true, isLast: true)
+            .accessibilityIdentifier("settings.agentList.global")
+        }
+        .listSectionSeparator(.hidden)
+    }
+
+    private var globalRowCaption: String {
+        editor.underlyingSource(for: AgentRowLayoutStore.globalLayoutHostID) == .saved
+            ? "Used by every Host without its own fields"
+            : "Not configured — Hosts follow their herdr fields"
     }
 
     private var sessionSection: some View {
@@ -67,7 +107,10 @@ struct AgentListFieldsSettingsView: View {
     private func hostRow(_ host: Host) -> some View {
         Section {
             NavigationLink {
-                AgentListFieldsHostDetailView(host: host, console: console, hosts: hosts, editor: editor)
+                AgentListFieldsTargetDetailView(
+                    target: AgentListFieldsEditTarget.host(
+                        host, underlyingSource: editor.underlyingSource(for: host.id)),
+                    console: console, hosts: hosts, editor: editor)
             } label: {
                 Text(verbatim: host.displayName)
                     .font(.body)
@@ -81,13 +124,43 @@ struct AgentListFieldsSettingsView: View {
     }
 }
 
-/// One Host's rows as three fixed slots, edited in place. Row 1 and Row 2
+/// One editing target on the Agent List Fields screen: a Host's own rows or
+/// the global default. Carries the fixed catalog identity, the display
+/// name, and the per-Target capabilities (the global default has no plugin
+/// to Sync from), so the detail surface stays one implementation.
+@MainActor
+struct AgentListFieldsEditTarget {
+    let hostID: Host.ID
+    let name: String
+    let canSyncFromPlugin: Bool
+    let source: AgentListFieldsEditor.LayoutSource
+
+    /// A real Host: its rows, its plugin snapshot, its Sync.
+    static func host(_ host: Host, underlyingSource: AgentListFieldsEditor.LayoutSource) -> Self {
+        Self(hostID: host.id, name: host.displayName, canSyncFromPlugin: true,
+              source: underlyingSource)
+    }
+
+    /// The global default: every Host without its own choice follows it.
+    /// There is no plugin to read, so Sync is absent, not disabled.
+    static func globalDefault(
+        isConfigured: Bool
+    ) -> Self {
+        Self(
+            hostID: AgentRowLayoutStore.globalLayoutHostID,
+            name: "All Hosts (default)",
+            canSyncFromPlugin: false,
+            source: isConfigured ? .saved : .unavailable)
+    }
+}
+
+/// One Target's rows as three fixed slots, edited in place. Row 1 and Row 2
 /// start from herdr's sidebar fields; Row 3 is Heeler's own row. Slots are never
 /// added, moved, or deleted, so a row's index is its identity everywhere on
 /// this screen. Every change saves immediately through the editor. Every
-/// Agent on the Host shares these rows; there are no per-kind overrides.
-struct AgentListFieldsHostDetailView: View {
-    let host: Host
+/// Agent on the Target shares these rows; there are no per-kind overrides.
+struct AgentListFieldsTargetDetailView: View {
+    let target: AgentListFieldsEditTarget
     let console: ConsoleStore
     let hosts: [Host]
     var editor: AgentListFieldsEditor
@@ -95,10 +168,10 @@ struct AgentListFieldsHostDetailView: View {
     @State private var confirmingSync = false
 
     var body: some View {
-        hostList
+        targetList
             .frame(maxWidth: AgentListFieldsCopy.readableWidth)
             .frame(maxWidth: .infinity)
-            .navigationTitle(host.displayName)
+            .navigationTitle(target.name)
             .navigationBarTitleDisplayMode(.large)
             .confirmationDialog(
                 "Replace rows with herdr's fields?", isPresented: $confirmingSync, titleVisibility: .visible
@@ -110,21 +183,21 @@ struct AgentListFieldsHostDetailView: View {
             }
             .sheet(item: $addingField) { destination in
                 AgentListFieldsAddFieldSheet(
-                    editor: editor, destination: destination, hostName: host.displayName)
+                    editor: editor, destination: destination, hostName: target.name)
             }
     }
 
-    private var layout: AgentRowLayout { editor.layout(for: host.id) }
-    private var isSyncing: Bool { editor.syncStates[host.id] == .syncing }
+    private var layout: AgentRowLayout { editor.layout(for: target.hostID) }
+    private var isSyncing: Bool { editor.syncStates[target.hostID] == .syncing }
 
-    private var hostList: some View {
+    private var targetList: some View {
         List {
             sessionSection
             Section {
                 previewRow
-                hostRows
+                targetRows
                 slotsNote
-                syncRow
+                if target.canSyncFromPlugin { syncRow }
             }
             .listSectionSeparator(.hidden)
             AgentLayoutErrorView(editor: editor)
@@ -143,7 +216,11 @@ struct AgentListFieldsHostDetailView: View {
     private var sessionSection: some View {
         Section {
             VStack(alignment: .leading, spacing: 8) {
-                Text(verbatim: AgentListFieldsSourceCaption.text(editor.underlyingSource(for: host.id)))
+                Text(verbatim: AgentListFieldsSourceCaption.text(
+                    target.canSyncFromPlugin
+                        ? target.source
+                        : (editor.underlyingSource(for: target.hostID) == .saved
+                            ? .saved : .unavailable)))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Text(AgentListFieldsCopy.detailIntro)
@@ -165,7 +242,7 @@ struct AgentListFieldsHostDetailView: View {
                 .tracking(0.5)
                 .foregroundStyle(.tertiary)
                 .textCase(.uppercase)
-            AgentListFieldsPreview(layout: layout, hostName: host.displayName)
+            AgentListFieldsPreview(layout: layout, hostName: target.name)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .listRowInsets(AgentListFieldsChrome.previewInsets)
@@ -174,13 +251,13 @@ struct AgentListFieldsHostDetailView: View {
     }
 
     @ViewBuilder
-    private var hostRows: some View {
+    private var targetRows: some View {
         let slotRows = AgentRowSlot.slotRows(layout.rows)
         ForEach(Array(slotRows.enumerated()), id: \.offset) { index, row in
             AgentListFieldsRowEditor(
                 index: index, row: row, isEnabled: !isSyncing && !editor.isCatalogUnreadable,
                 onAdd: {
-                    addingField = AgentListFieldsEditorDestination(hostID: host.id, rowIndex: index)
+                    addingField = AgentListFieldsEditorDestination(hostID: target.hostID, rowIndex: index)
                 },
                 onToggleStyle: { fieldIndex in toggleStyle(fieldIndex, rowIndex: index) },
                 onShift: { fieldIndex, delta in shift(fieldIndex, by: delta, rowIndex: index) },
@@ -198,19 +275,19 @@ struct AgentListFieldsHostDetailView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .listRowInsets(AgentListFieldsChrome.slotsNoteInsets)
             .listRowSeparator(.hidden)
-            .agentListHostSurface(isFirst: false, isLast: false)
+            .agentListHostSurface(isFirst: false, isLast: target.canSyncFromPlugin ? false : true)
     }
 
     @ViewBuilder
     private var syncRow: some View {
-        let identifier = "settings.agentList.sync.\(host.id.uuidString)"
-        let tipIdentifier = "settings.agentList.syncTip.\(host.id.uuidString)"
+        let identifier = "settings.agentList.sync.\(target.hostID.uuidString)"
+        let tipIdentifier = "settings.agentList.syncTip.\(target.hostID.uuidString)"
         VStack(alignment: .leading, spacing: 8) {
             Rectangle()
                 .fill(Color(uiColor: .separator))
                 .frame(height: 0.5)
             Group {
-                switch editor.syncStates[host.id] {
+                switch editor.syncStates[target.hostID] {
                 case .syncing:
                     HStack(spacing: 9) {
                         ProgressView()
@@ -272,7 +349,7 @@ struct AgentListFieldsHostDetailView: View {
     }
 
     private func sync() async {
-        await editor.replaceWithPluginFields(host.id, hostName: host.displayName)
+        await editor.replaceWithPluginFields(target.hostID, hostName: target.name)
     }
 
     private func toggleStyle(_ fieldIndex: Int, rowIndex: Int) {
@@ -280,17 +357,17 @@ struct AgentListFieldsHostDetailView: View {
         guard row.indices.contains(fieldIndex) else { return }
         let next = AgentLayoutTokensEditing.style(of: row[fieldIndex]).toggled
         AgentLayoutTokensEditing.setStyle(
-            next, at: fieldIndex, editor: editor, hostID: host.id, rowIndex: rowIndex)
+            next, at: fieldIndex, editor: editor, hostID: target.hostID, rowIndex: rowIndex)
     }
 
     private func shift(_ fieldIndex: Int, by delta: Int, rowIndex: Int) {
         AgentLayoutTokensEditing.shift(
-            fieldIndex, by: delta, editor: editor, hostID: host.id, rowIndex: rowIndex)
+            fieldIndex, by: delta, editor: editor, hostID: target.hostID, rowIndex: rowIndex)
     }
 
     private func remove(_ fieldIndex: Int, rowIndex: Int) {
         AgentLayoutTokensEditing.delete(
-            IndexSet(integer: fieldIndex), editor: editor, hostID: host.id, rowIndex: rowIndex)
+            IndexSet(integer: fieldIndex), editor: editor, hostID: target.hostID, rowIndex: rowIndex)
     }
 }
 
@@ -531,7 +608,9 @@ enum AgentListFieldsCopy {
     static let readableWidth: CGFloat = 640
     static let noHosts = "Add a Host to configure its Agent rows."
     static let listIntro =
-        "Each Host decides which fields appear on its Agent rows in Console. Open a Host to change them."
+        "Open a Host to change its fields, or set a global default every Host follows. "
+        + "Every Host without its own fields follows the global default; a Host with its "
+        + "own fields ignores it. Hosts follow their herdr fields when neither is set."
     static let detailIntro =
         "Tap a field to change its style, move it, or remove it. Tap + to add one. Changes save right away."
     static let syncConfirmation =
