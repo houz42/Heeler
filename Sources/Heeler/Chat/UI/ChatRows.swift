@@ -326,16 +326,21 @@ struct ChatLinkText: View {
     let text: String
     let style: ChatBlockText.Style
     let router: OpenRouterCore?
+    /// Overrides the style's text color when non-nil (iMessage user
+    /// bubbles: saturated blue fill needs white text).
+    var foregroundOverride: Color? = nil
 
     @Environment(\.openURL) private var openURL
     @Environment(\.colorScheme) private var colorScheme
     private var isDark: Bool { colorScheme == .dark }
     init(
-        _ text: String, style: ChatBlockText.Style, router: OpenRouterCore?
+        _ text: String, style: ChatBlockText.Style, router: OpenRouterCore?,
+        foregroundOverride: Color? = nil
     ) {
         self.text = text
         self.style = style
         self.router = router
+        self.foregroundOverride = foregroundOverride
     }
 
     var body: some View {
@@ -357,7 +362,7 @@ struct ChatLinkText: View {
             }
         }
         .font(style.font)
-        .foregroundStyle(style.color)
+        .foregroundStyle(foregroundOverride ?? style.color)
         .frame(maxWidth: .infinity, alignment: alignment)
         .environment(
             \.openURL,
@@ -376,8 +381,11 @@ struct ChatLinkText: View {
         if style.mono {
             Text(text)
                 .textSelection(.enabled)
+                .foregroundStyle(foregroundOverride ?? style.color)
         } else {
-            ChatMarkdownView(markdown: ChatMarkdownText(text).rewritten)
+            ChatMarkdownView(
+                markdown: ChatMarkdownText(text).rewritten,
+                textColor: foregroundOverride)
         }
     }
 
@@ -423,6 +431,271 @@ struct LinkifiedChatRow: View {
         case .assistant: .assistant
         case .toolResult, .bashExecution: .output
         }
+    }
+}
+
+// MARK: - Bubbles (per-message affordances)
+
+/// The iMessage-style bubble silhouette: ~18pt corners with a small
+/// curved tail nub hugging the bottom corner — bottom-left for agent
+/// bubbles, bottom-right (mirrored) for user bubbles. The nub is a few
+/// points tall and lands flush on the corner; content pads the bottom
+/// so text never rides into it. The path is drawn clockwise from the
+/// top edge, and the tail is inserted at whichever bottom corner the
+/// traversal reaches LAST — so the closing edge never crosses the
+/// shape (the mirrored user-side tail must not be drawn where the
+/// traversal has already passed).
+struct ChatBubbleShape: Shape {
+    static let tailDepth: CGFloat = 5
+    /// True when the tail sits at the bottom-right (user side).
+    let userSide: Bool
+
+    func path(in rect: CGRect) -> Path {
+        let radius: CGFloat = 18
+        let tailRun: CGFloat = 12
+        let bodyBottom = rect.maxY - Self.tailDepth
+        var p = Path()
+        p.move(to: CGPoint(x: rect.minX + radius, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.minY))
+        p.addQuadCurve(
+            to: CGPoint(x: rect.maxX, y: rect.minY + radius),
+            control: CGPoint(x: rect.maxX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX, y: bodyBottom - radius))
+        p.addQuadCurve(
+            to: CGPoint(x: rect.maxX - radius, y: bodyBottom),
+            control: CGPoint(x: rect.maxX, y: bodyBottom))
+
+        if userSide {
+            // Bottom-right tail: the traversal just rounded into the
+            // bottom edge at the right corner, so the nub comes first.
+            // It hugs the corner: a short run out, a tight curve that
+            // dips `tailDepth` and lands back on the bottom edge.
+            p.addQuadCurve(
+                to: CGPoint(x: rect.maxX - tailRun, y: bodyBottom),
+                control: CGPoint(
+                    x: rect.maxX - tailRun * 0.3,
+                    y: rect.maxY))
+            p.addLine(to: CGPoint(x: rect.minX + radius, y: bodyBottom))
+            p.addQuadCurve(
+                to: CGPoint(x: rect.minX, y: bodyBottom - radius),
+                control: CGPoint(x: rect.minX, y: bodyBottom))
+        } else {
+            // Bottom-left tail: the bottom edge runs left first, then
+            // the nub hugs the left corner before the edge turns up.
+            p.addLine(to: CGPoint(x: rect.minX + radius + tailRun, y: bodyBottom))
+            p.addQuadCurve(
+                to: CGPoint(x: rect.minX, y: bodyBottom - radius),
+                control: CGPoint(x: rect.minX + tailRun * 0.3, y: rect.maxY))
+        }
+
+        p.addLine(to: CGPoint(x: rect.minX, y: rect.minY + radius))
+        p.addQuadCurve(
+            to: CGPoint(x: rect.minX + radius, y: rect.minY),
+            control: CGPoint(x: rect.minX, y: rect.minY))
+        p.closeSubpath()
+        return p
+    }
+}
+
+/// The bubble interior both presentations share: the message's text in
+/// the iMessage-style silhouette — one markdown document (a bubble's rows
+/// all belong to one message), agent fill or user tint by speaker, tail
+/// at the speaker's bottom corner. `selectable` swaps the markdown for
+/// plain selectable text (the Select affordance): MarkdownUI's view tree
+/// does not support UIKit drag-selection.
+struct ChatBubbleBody: View {
+    let bubble: ChatBubble
+    let router: OpenRouterCore
+    var selectable: Bool = false
+
+    @Environment(\.colorScheme) private var colorScheme
+    private var isDark: Bool { colorScheme == .dark }
+    private var isUser: Bool { bubble.role == .user }
+
+    var body: some View {
+        Group {
+            if selectable {
+                Text(bubble.text)
+                    .font(.system(.subheadline))
+                    .foregroundStyle(isUser ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                    .textSelection(.enabled)
+            } else {
+                ChatLinkText(
+                    bubble.text,
+                    style: .assistant,
+                    router: router,
+                    // iMessage outgoing convention: saturated blue fill,
+                    // white text (the markdown body inherits the color).
+                    foregroundOverride: isUser ? .white : nil)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .padding(.bottom, ChatBubbleShape.tailDepth)
+        .background(fill, in: ChatBubbleShape(userSide: isUser))
+    }
+
+    private var fill: some ShapeStyle {
+        isUser
+            ? AnyShapeStyle(Color.blue)
+            : AnyShapeStyle(.fill.tertiary)
+    }
+}
+
+/// One conversation bubble in the transcript: the message's visible text
+/// run as one iMessage-style unit — agent prose leading-aligned in a gray
+/// bubble with the tail at bottom-left, user prose trailing-aligned in an
+/// accent-tinted bubble with the tail at bottom-right, capped at ~78% of
+/// the row width. Long-press hands the bubble to the focus layer; while
+/// focused the in-place copy hides (the focus layer's lifted copy is the
+/// message, so nothing duplicates behind the dim).
+struct ChatBubbleView: View {
+    let bubble: ChatBubble
+    let router: OpenRouterCore
+    var isFocused: Bool = false
+    var onLongPress: (() -> Void)? = nil
+
+    @State private var rowWidth: CGFloat = 320
+    private var isUser: Bool { bubble.role == .user }
+
+    var body: some View {
+        ChatBubbleBody(bubble: bubble, router: router)
+            .frame(maxWidth: rowWidth * 0.78, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { _, w in
+                rowWidth = w
+            }
+            .opacity(isFocused ? 0 : 1)
+            .onLongPressGesture { onLongPress?() }
+    }
+}
+
+/// The iMessage long-press focus state: the transcript blurs and dims
+/// behind a light veil, the selected bubble lifts above it with the
+/// Tapback pill near-kissing above (reactions only) and the action menu
+/// card below (Quote / Copy / Select rows). Tapping the veil dismisses.
+/// Reactions deliver as the emoji plus a block-quoted reference to this
+/// message; Quote prefills the composer with the quoted draft (caret
+/// after the quote); Copy puts the plain text on the pasteboard; Select
+/// swaps the lifted bubble to selectable plain text.
+struct ChatBubbleFocusLayer: View {
+    let bubble: ChatBubble
+    let router: OpenRouterCore
+    /// Sends one quick reaction's composed message. Nil hides the pill.
+    var react: ((String) -> Void)? = nil
+    /// Prefills the composer with the quoted text. Nil hides Quote.
+    var quote: ((String) -> Void)? = nil
+    /// Puts the text on the pasteboard. Nil hides Copy.
+    var copy: ((String) -> Void)? = nil
+    let dismiss: () -> Void
+
+    @State private var selectsText = false
+    @Environment(\.colorScheme) private var colorScheme
+    private var isDark: Bool { colorScheme == .dark }
+    private var isUser: Bool { bubble.role == .user }
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                veil
+                VStack(alignment: isUser ? .trailing : .leading, spacing: 8) {
+                    reactionPill
+                    ChatBubbleBody(
+                        bubble: bubble, router: router, selectable: selectsText)
+                        .frame(
+                            maxWidth: geo.size.width * 0.78, alignment: .leading)
+                        .scaleEffect(1.03)
+                        .shadow(color: .black.opacity(0.25), radius: 18, y: 8)
+                    actionMenu
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .ignoresSafeArea()
+    }
+
+    /// The blurred, dimmed backdrop. A light veil in light mode (iMessage
+    /// whites the background out), a dark one in dark mode. Taps dismiss.
+    private var veil: some View {
+        Rectangle()
+            .fill(.ultraThinMaterial)
+            .overlay(
+                Rectangle().fill(
+                    Color(white: isDark ? 0 : 1)
+                        .opacity(isDark ? 0.55 : 0.35)))
+            .onTapGesture(perform: dismiss)
+    }
+
+    /// iMessage's Tapback pill: only the reactions, generous glyph
+    /// circles on a fully-rounded capsule, near-kissing above the bubble.
+    private var reactionPill: some View {
+        HStack(spacing: 10) {
+            ForEach(ChatReaction.allCases, id: \.rawValue) { reaction in
+                Button {
+                    react?(reaction.message(for: bubble.text))
+                    dismiss()
+                } label: {
+                    Text(reaction.rawValue)
+                        .font(.system(.title3))
+                        .frame(width: 34, height: 34)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(react == nil)
+                .accessibilityLabel(reaction.accessibilityLabel)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(.regularMaterial, in: Capsule())
+        .shadow(color: .black.opacity(0.2), radius: 10, y: 4)
+    }
+
+    /// iMessage's text-action menu: Quote / Copy / Select as context-menu
+    /// rows (SF-symbol icon left, label right) in a compact card sized to
+    /// its rows — never the full transcript width — below the bubble,
+    /// its edge flush with the bubble's (leading under agent bubbles,
+    /// trailing under user bubbles, via the VStack's alignment).
+    private var actionMenu: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            menuRow("text.quote", label: "Quote") {
+                quote?(bubble.text)
+                dismiss()
+            }
+            .disabled(quote == nil)
+            menuRow("doc.on.doc", label: "Copy") {
+                copy?(bubble.text)
+                dismiss()
+            }
+            .disabled(copy == nil)
+            menuRow("textformat", label: "Select") {
+                selectsText = true
+            }
+        }
+        .frame(width: 220)
+        .padding(6)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .shadow(color: .black.opacity(0.2), radius: 10, y: 4)
+    }
+
+    private func menuRow(
+        _ systemImage: String, label: String, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 15, weight: .medium))
+                    .frame(width: 24)
+                Text(label)
+                    .font(.system(.body))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 11)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 }
 
