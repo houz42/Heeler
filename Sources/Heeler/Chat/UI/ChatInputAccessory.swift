@@ -179,6 +179,15 @@ final class ChatInputUITextView: UITextView {
     /// the menu open Return accepts instead of inserting "\n". Nil keeps
     /// the stock newline behavior.
     var onReturnKey: (() -> Bool)?
+    /// Paste arbitration for the attachment flow: consulted before the
+    /// pasteboard payload lands in the text. Returns true when the
+    /// paste was consumed — the pasteboard holds an image and the
+    /// attachment flow took it, so no text lands. Returning false keeps
+    /// the stock text paste. Nil keeps the stock paste entirely.
+    /// Consulted both from the system paste menu (`paste(_:)` below) and
+    /// from a hardware keyboard Cmd+V, which arrives through the
+    /// responder-chain `paste:` action too — one seam covers both.
+    var onPaste: (() -> Bool)?
     /// A caret position (UTF-16) the next `updateUIView` text sync must
     /// apply after an external draft rewrite (suggestion accept). The
     /// representable distinguishes "preserve the caret" (typical
@@ -199,6 +208,14 @@ final class ChatInputUITextView: UITextView {
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         installPrefixBar()
+    }
+
+    /// The system paste command (paste menu, Cmd+V): when the paste
+    /// arbitration consumes the payload (pasteboard image → attach), no
+    /// text lands; otherwise the stock UIKit paste runs.
+    override func paste(_ sender: Any?) {
+        if onPaste?() == true { return }
+        super.paste(sender)
     }
 
     private func installPrefixBar() {
@@ -300,6 +317,13 @@ struct ChatInputTextView: UIViewRepresentable {
     /// suggestion, or the menu is stale and must not leak a newline.
     /// Nil keeps the stock newline behavior.
     let onReturnKey: (() -> Bool)?
+    /// Paste arbitration for the attachment flow: consulted when the
+    /// user pastes (system paste menu or hardware Cmd+V, both the
+    /// `paste:` responder action). True consumes the paste — the
+    /// pasteboard holds an image and the attachment flow took it, no
+    /// text lands. False keeps the stock text paste. Nil keeps the
+    /// stock paste entirely (previews, unwired hosts).
+    var onPaste: (() -> Bool)? = nil
     /// An accepted suggestion waiting to apply: the new draft plus the
     /// caret the accept leaves (end of the insertion). Applied on the
     /// text view directly — text and caret together — instead of relying
@@ -332,6 +356,7 @@ struct ChatInputTextView: UIViewRepresentable {
         // current one.
         textView.onPrefixInsert = onEdit
         textView.onReturnKey = onReturnKey
+        textView.onPaste = onPaste
         if let accept = pendingAccept {
             // The suggestion-accept path: text and caret land together,
             // so the caret follows the end of the insertion (after the

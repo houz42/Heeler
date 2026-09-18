@@ -27,6 +27,11 @@ struct AgentDetailView: View {
     /// The chat input's submit router (/ # @ ! routing). Built with the
     /// same per-agent task as the chat store.
     @State private var chatRouter: ComposerRouterStore?
+    /// The chat input's attachment flow (+ menu, pickers, paste): the
+    /// same `ComposerStagingStore` upload pipeline the terminal
+    /// Composer uses, with the chat surface's own draft seam. Built
+    /// with the chat store.
+    @State private var chatAttachments: ChatAttachments?
     /// Which surface the detail shows. Set on first appearance from the
     /// agent's session shape; the picker is the only other writer.
     @State private var surface: AgentDetailSurface?
@@ -286,6 +291,16 @@ struct AgentDetailView: View {
             paneID: agent.agent.paneID,
             reader: .console(console, hostID: agent.hostID))
         chat = store
+        // The chat input's attachment bundle: the same staging pipeline
+        // the terminal Composer rides (ImagePreparer → SFTP upload →
+        // path reference), with the chat surface's own draft seam.
+        let draftStore = ChatAttachmentDraftStore()
+        chatAttachments = ChatAttachments(
+            staging: ComposerStagingStore(
+                stageImage: console.imageStager(for: agent.hostID),
+                stageFile: console.fileStager(for: agent.hostID),
+                composer: draftStore),
+            draftStore: draftStore)
         // The chat input's router: / # @ ! classification + plain delivery
         // through agent.prompt. The scratch-shell pane for ! is created
         // lazily on first use by the store.
@@ -334,6 +349,7 @@ struct AgentDetailView: View {
                 isLoadingOlder: chat.isLoadingOlder,
                 loadOlder: { [weak chat] in await chat?.loadOlder() },
                 router: chatRouter,
+                attachments: chatAttachments,
                 deliver: { text in
                     try await console.promptAgent(
                         AgentPromptParams(target: agent.agent.paneID, text: text),
@@ -449,9 +465,14 @@ struct AgentDetailView: View {
         .onDisappear {
             hasAppeared = false
             focus.leave()
-            // The chat store's poll loop must not outlive the detail view.
+            // The chat store's poll loop must not outlive the detail view;
+            // neither must an in-flight attachment upload.
             chat = nil
             chatRouter = nil
+            if let chatAttachments {
+                Task { await chatAttachments.staging.leave() }
+            }
+            chatAttachments = nil
         }
         .onChange(of: console.hostConnectionGenerations[agent.hostID]) { _, generation in
             openTerminal.transportGenerationDidChange(generation)
