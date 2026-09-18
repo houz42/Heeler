@@ -691,6 +691,12 @@ private struct AgentComposerTextEditor: UIViewRepresentable {
         textView.adjustsFontForContentSizeCategory = true
         textView.textContainerInset = UIEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
         textView.textContainer.lineFragmentPadding = 0
+        // A terminal never autocorrects, and neither does the Composer
+        // that shares its first responder: the correction traits are
+        // pinned in AgentComposerUITextView's initializers so both
+        // surfaces carry identical no-correction traits across the
+        // Direct Input responder transfer (de36399's keyboard-context
+        // stability, without the QuickType bar that double-sends Space).
         textView.accessibilityLabel = "Message the Agent"
         textView.onKeyboardHandoffSettled = onKeyboardHandoffSettled
         textView.onComposerPress = onComposerPress
@@ -827,12 +833,31 @@ final class AgentComposerUITextView: UITextView {
 
     override init(frame: CGRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
+        applyTerminalMatchedInputTraits()
         installKeyboardObservers()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
+        applyTerminalMatchedInputTraits()
         installKeyboardObservers()
+    }
+
+    /// The Composer's no-correction contract, in one place. The terminal
+    /// surface it shares first responder with pins the whole correction
+    /// stack to `.no` (a terminal must never autocorrect: QuickType makes
+    /// Space both accept the suggestion and send the raw key, delivering
+    /// double input to the PTY). Matching traits on both sides is what
+    /// keeps UIKit on one keyboard context across the Direct Input
+    /// responder transfer (de36399) — with suggestions off everywhere,
+    /// the QuickType bar never rises on either surface.
+    private func applyTerminalMatchedInputTraits() {
+        autocorrectionType = .no
+        spellCheckingType = .no
+        smartQuotesType = .no
+        smartDashesType = .no
+        smartInsertDeleteType = .no
+        inlinePredictionType = .no
     }
 
     private func installKeyboardObservers() {
