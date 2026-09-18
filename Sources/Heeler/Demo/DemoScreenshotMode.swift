@@ -15,6 +15,16 @@
         static func isEnabled(arguments: [String]) -> Bool {
             arguments.contains(launchArgument)
         }
+
+        /// Screenshot-route argument: opens the Add-Host form directly, for
+        /// capturing the Host form (including the additional-addresses
+        /// field) without scriptable taps. Implies ``launchArgument``.
+        static let hostFormLaunchArgument = "--demo-host-form"
+
+        /// Whether the demo run should show the Host form.
+        static var showsHostForm: Bool {
+            ProcessInfo.processInfo.arguments.contains(hostFormLaunchArgument)
+        }
     }
 
     /// A safe composition root for screenshot runs. It reuses the production
@@ -22,6 +32,7 @@
     /// Hosts, secrets, settings, notifications, and SSH fully process-local.
     @MainActor
     struct DemoScreenshotRootView: View {
+        @State private var isShowingHostForm = false
         @State private var hosts: HostStore
         @State private var console: ConsoleStore
         @State private var terminalThemes: TerminalThemeSettings
@@ -79,7 +90,16 @@
                 activity: activity
             )
             .preferredColorScheme(appearance.preferredColorScheme)
+            .sheet(isPresented: $isShowingHostForm) {
+                HostFormView(store: hosts)
+            }
             .task {
+                // Presenting a sheet in the same runloop turn as the first
+                // render silently fails; give the window a beat to settle.
+                if DemoScreenshotMode.showsHostForm {
+                    try? await Task.sleep(for: .milliseconds(500))
+                    isShowingHostForm = true
+                }
                 console.setHosts(hosts.hosts)
                 notificationPreferences.setHosts(hosts.hosts)
                 await console.resume()

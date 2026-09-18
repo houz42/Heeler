@@ -29,6 +29,10 @@ final class HostOnboardingStore {
     private(set) var pendingHostKeyReplacement: HostKeyReplacement?
     private(set) var report: PreflightReport?
     private(set) var serverInfo: ServerInfo?
+    /// Which candidate address the preflight connection succeeded on. nil
+    /// until a connect succeeds (or when the Host has one address, which is
+    /// every connect — the value still names the dialed address).
+    private(set) var workingAddress: CandidateDialResult?
     private(set) var availableSessions: [HerdrSession] = []
     private(set) var sessionDiscoveryError: String?
 
@@ -63,6 +67,7 @@ final class HostOnboardingStore {
         phase = .running
         report = nil
         serverInfo = nil
+        workingAddress = nil
         availableSessions = []
         sessionDiscoveryError = nil
         pendingHostKeyReplacement = nil
@@ -92,7 +97,10 @@ final class HostOnboardingStore {
         let settings = SSHTransportSettings(
             host: host, credentials: resolved, hostKeyPolicy: policy)
         do {
-            let transport = try await connector.connect(settings: settings)
+            // The connector reports which candidate address answered;
+            // single-address Hosts report their one address.
+            let transport = try await connectWithCandidateReporting(
+                settings: settings)
             do {
                 availableSessions = try await transport.listSessions()
             } catch {
@@ -134,6 +142,21 @@ final class HostOnboardingStore {
         await knownHosts.setFingerprint(replacement.presented, host: host.address, port: host.port)
         pendingHostKeyReplacement = nil
         await runChecks()
+    }
+
+    /// Connects through the connector seam, recording which candidate
+    /// address answered. Only `SSHTransportConnector` reports candidates;
+    /// other connectors (tests, previews) connect without reporting, and
+    /// the working address simply stays nil.
+    private func connectWithCandidateReporting(
+        settings: SSHTransportSettings
+    ) async throws -> any Transport {
+        if let sshConnector = connector as? SSHTransportConnector {
+            return try await sshConnector.connect(settings: settings) { [weak self] result in
+                Task { @MainActor in self?.workingAddress = result }
+            }
+        }
+        return try await connector.connect(settings: settings)
     }
 
     private func captureHostKeyReplacement(_ error: any Error) {

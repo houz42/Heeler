@@ -38,6 +38,14 @@ struct HostOnboardingView: View {
         List {
             Section {
                 LabeledContent("Address", value: addressLine)
+                if let working = store.workingAddress {
+                    LabeledContent(
+                        "Connected via",
+                        value: working.failedAttempts == 0
+                            ? working.address
+                            : "\(working.address) (after \(working.failedAttempts) "
+                                + "unreachable path\(working.failedAttempts == 1 ? "" : "s"))")
+                }
                 LabeledContent("Session", value: sessionLine)
                 LabeledContent(
                     "Auth",

@@ -12,6 +12,9 @@ struct HostDraft: Equatable, Sendable {
     /// Blank means "keep the stored password" when editing.
     var password = ""
     var sessionName = ""
+    /// Comma-separated alternative addresses for the same machine, dialed in
+    /// order after Address when it does not answer. Blank means single-path.
+    var additionalAddresses = ""
     /// Blank means a direct connection. When set, Address/Port above are
     /// resolved from the Jump Host, not from this device.
     var jumpAddress = ""
@@ -31,6 +34,7 @@ struct HostDraft: Equatable, Sendable {
         username = host.username
         authMethod = host.authMethod
         sessionName = host.sessionName
+        additionalAddresses = host.additionalAddresses.joined(separator: ", ")
         jumpAddress = host.jumpAddress
         jumpPort = String(host.jumpPort)
         jumpUsername = host.jumpUsername
@@ -85,10 +89,21 @@ struct HostDraft: Equatable, Sendable {
             username: username.trimmingCharacters(in: .whitespaces),
             authMethod: authMethod,
             sessionName: sessionName.trimmingCharacters(in: .whitespaces),
+            additionalAddresses: parsedAdditionalAddresses,
             jumpAddress: jumpAddress.trimmingCharacters(in: .whitespaces),
             jumpPort: jumpPortNumber ?? 22,
             jumpUsername: jumpUsername.trimmingCharacters(in: .whitespaces),
             alias: trimmedAlias)
+    }
+
+    /// The additional-addresses field is comma-separated: split on commas,
+    /// trim each, drop empties. Everything (decode, the form, the dialer)
+    /// sees the same candidate list.
+    var parsedAdditionalAddresses: [String] {
+        additionalAddresses
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
     }
 
     /// A whitespace-only alias is no alias: trimmed, and nil when blank, so

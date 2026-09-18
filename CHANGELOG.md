@@ -8,6 +8,10 @@ Entries reference the issue that motivated them.
 ## [Unreleased]
 
 ### Added
+- A Host can carry additional addresses for the same machine (home LAN and
+  VPN, for example): connections dial each path in order and use the first
+  one that answers, preflight reports which address worked, and existing
+  single-address Hosts are unchanged.
 - Configure the in-Agent header (the title area on the chat and terminal
   screens) independently from the Agent list: a Same as agent list toggle
   keeps the current behavior, and turning it off offers a custom global
