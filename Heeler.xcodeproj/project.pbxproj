@@ -192,6 +192,7 @@
 		637B8BBB6F06AD8290874101 /* SnippetStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17F006C341136811D0496E6 /* SnippetStore.swift */; };
 		63ADBED637BEA84B045BE9FC /* DeviceKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D24E7FB55E1DF14C8353ABDE /* DeviceKeyStore.swift */; };
 		643F48FDD0DDD0D67888F7C5 /* OpenerAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E5EC73C5FED2E99BF4EE8BC /* OpenerAction.swift */; };
+		66A35ED9C618994905B0FE43 /* ChatSuggestionAcceptTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0048F7AACDCA69F7D371F592 /* ChatSuggestionAcceptTests.swift */; };
 		67D10ACCFB418C6351F34010 /* AgentRowLayoutResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16EE4454BBBF8D354C1360DF /* AgentRowLayoutResolver.swift */; };
 		68425C9847310965EF452E3B /* SSHPairingConnector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88062AE11DDF93EB77A63D6B /* SSHPairingConnector.swift */; };
 		693D650A778BAC6F2189F32A /* AcknowledgementsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2782D0CCB8DD0CC97AF6932C /* AcknowledgementsView.swift */; };
@@ -512,6 +513,7 @@
 
 /* Begin PBXFileReference section */
 		0014CA92DE868782F085801C /* ConsoleEmptyDetailPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsoleEmptyDetailPresentation.swift; sourceTree = "<group>"; };
+		0048F7AACDCA69F7D371F592 /* ChatSuggestionAcceptTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSuggestionAcceptTests.swift; sourceTree = "<group>"; };
 		00807A3942817BEE9800534F /* ConsoleStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsoleStoreTests.swift; sourceTree = "<group>"; };
 		00BABBDEFEDCB3D11EF1EFA7 /* AgentNotificationCenterDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentNotificationCenterDelegate.swift; sourceTree = "<group>"; };
 		0123607D5AA9F2DD3E26902A /* WorktreeDetailStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeDetailStore.swift; sourceTree = "<group>"; };
@@ -1042,6 +1044,7 @@
 				2B4A34A48EBD1D581CA70270 /* ChatScrollPagingTests.swift */,
 				2E78A5ECD73C1D1A3EA65A53 /* ChatSlashProviderTests.swift */,
 				EE5CA92C9062577ED5BB5F25 /* ChatStoreTests.swift */,
+				0048F7AACDCA69F7D371F592 /* ChatSuggestionAcceptTests.swift */,
 				0EBADA7B772C9DD4BEC161A8 /* ChatTranscriptTests.swift */,
 				E8CD0501198B52E3CE31568D /* ChatTransportSFTPTests.swift */,
 				9C6790802B275AA9D530F379 /* ChatUITests.swift */,
@@ -2236,6 +2239,7 @@
 				017F94AB54A52779120C2AB5 /* ChatScrollPagingTests.swift in Sources */,
 				C7FD899B8B0F5126EF518313 /* ChatSlashProviderTests.swift in Sources */,
 				E625A29883FB3568B2274651 /* ChatStoreTests.swift in Sources */,
+				66A35ED9C618994905B0FE43 /* ChatSuggestionAcceptTests.swift in Sources */,
 				422EF7877A58B6529C3747BE /* ChatTranscriptTests.swift in Sources */,
 				E9438902E18150B4EB54F589 /* ChatTransportSFTPTests.swift in Sources */,
 				05B3B715BE5D1509BA3A9A14 /* ChatUITests.swift in Sources */,

@@ -174,6 +174,22 @@ final class ChatInputUITextView: UITextView {
     /// Reports a prefix-key insert the same way a typed edit reports, so
     /// the owner's draft binding and the router's suggestion pass see it.
     var onPrefixInsert: ((String, Int) -> Void)?
+    /// Return-key arbitration for the suggestion menu: consulted before
+    /// a newline is inserted. Returning true consumes the key, so with
+    /// the menu open Return accepts instead of inserting "\n". Nil keeps
+    /// the stock newline behavior.
+    var onReturnKey: (() -> Bool)?
+    /// A caret position (UTF-16) the next `updateUIView` text sync must
+    /// apply after an external draft rewrite (suggestion accept). The
+    /// representable distinguishes "preserve the caret" (typical
+    /// SwiftUI-side rewrite, e.g. rejected-draft restore) from "place
+    /// the caret at the accept's insertion end".
+    var pendingCaretLocation: Int?
+    /// One gate for caret placement: `textViewDidChangeSelection` fires
+    /// for programmatic selectedRange changes too, and without this the
+    /// accept path and the delegate callback would fight over the caret
+    /// within the same update cycle.
+    var isApplyingExternalCaret = false
 
     override init(frame: CGRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
@@ -187,8 +203,8 @@ final class ChatInputUITextView: UITextView {
 
     private func installPrefixBar() {
         inputAccessoryView = prefixBar
-        prefixBar.onInsert = { [weak self] key in
-            self?.insertPrefix(key)
+        prefixBar.onInsert = { [weak self] in
+            self?.insertPrefix($0)
         }
     }
 
@@ -204,11 +220,24 @@ final class ChatInputUITextView: UITextView {
         onPrefixInsert?(newDraft, newSelection)
     }
 
+    /// Applies an externally-computed draft with an explicit caret
+    /// (suggestion accept): the text and selection land together, so the
+    /// caret sits at the end of the insertion — after the trailing space
+    /// "/agents " carries — and reports as an edit so the owner's
+    /// binding and the router's suggestion pass both see it.
+    func applyExternalDraft(_ newDraft: String, caret: Int) {
+        isApplyingExternalCaret = true
+        text = newDraft
+        selectedRange = NSRange(
+            location: min(max(caret, 0), newDraft.utf16.count), length: 0)
+        isApplyingExternalCaret = false
+        onPrefixInsert?(newDraft, selectedRange.location)
+    }
     /// The chat-input text configuration, in one place: the one-bar
     /// contract (autocorrection/spell-check off hides QuickType), literal
-    /// ASCII typing, and the zero inset the frame's height measurement
-    /// assumes. `makeUIView` applies it; tests apply the same method so
-    /// they measure the production configuration, not UIKit defaults.
+    /// ASCII typing, and the composer's return-key arbitration. `makeUIView`
+    /// applies it; tests apply the same method so they measure the
+    /// production configuration, not UIKit defaults.
     func applyChatInputConfiguration() {
         backgroundColor = .clear
         font = .preferredFont(forTextStyle: .body)
@@ -252,9 +281,23 @@ struct ChatInputTextView: UIViewRepresentable {
     /// The draft placeholder (the frame's hint line).
     let placeholder: String
     /// Reports every draft/selection change, including the prefix-key
-    /// inserts below. The owner updates its binding and re-runs the
-    /// router's suggestion pass.
+    /// inserts and the suggestion accepts below. The owner updates its
+    /// binding and re-runs the router's suggestion pass.
     let onEdit: (String, Int) -> Void
+    /// Return-key arbitration for the suggestion menu: consulted when
+    /// the user presses Return, before the newline lands. True consumes
+    /// the key — the menu is open and the key accepted the highlighted
+    /// suggestion, or the menu is stale and must not leak a newline.
+    /// Nil keeps the stock newline behavior.
+    let onReturnKey: (() -> Bool)?
+    /// An accepted suggestion waiting to apply: the new draft plus the
+    /// caret the accept leaves (end of the insertion). Applied on the
+    /// text view directly — text and caret together — instead of relying
+    /// on the updateUIView text sync, which preserves the old (stale)
+    /// caret on external rewrites. A binding so applying consumes it:
+    /// the next update pass (an ordinary edit) must not re-apply a
+    /// settled accept over the user's newer typing.
+    @Binding var pendingAccept: (draft: String, caret: Int)?
     @Binding var isFocused: Bool
 
     func makeCoordinator() -> Coordinator {
@@ -278,11 +321,20 @@ struct ChatInputTextView: UIViewRepresentable {
         // text view's insert path must keep reporting through the
         // current one.
         textView.onPrefixInsert = onEdit
-        context.coordinator.setPlaceholder(placeholder)
-        if textView.text != text {
+        textView.onReturnKey = onReturnKey
+        if let accept = pendingAccept {
+            // The suggestion-accept path: text and caret land together,
+            // so the caret follows the end of the insertion (after the
+            // trailing space "/agents " carries). The accept reports
+            // through onEdit, so the owner's binding and the router's
+            // suggestion pass both see the new draft. Consumed here: a
+            // settled accept must not re-apply over the next edit.
+            textView.applyExternalDraft(accept.draft, caret: accept.caret)
+            pendingAccept = nil
+        } else if textView.text != text {
             // Preserve the caret when the SwiftUI side rewrote the draft
-            // (suggestion accept, rejected-draft restore): a plain text
-            // assignment would drop it to the end.
+            // (rejected-draft restore): a plain text assignment would
+            // drop it to the end.
             let selection = textView.selectedRange
             textView.text = text
             textView.selectedRange = selection
@@ -373,7 +425,34 @@ struct ChatInputTextView: UIViewRepresentable {
             placeholderLabel?.text = placeholder
         }
 
+        func textView(
+            _ textView: UITextView, shouldChangeTextIn range: NSRange,
+            replacementText replacement: String
+        ) -> Bool {
+            // Return with the suggestion menu open accepts the highlighted
+            // suggestion (the router consumes the key); with it closed the
+            // stock newline insert is unchanged. The arbitration runs
+            // before the newline lands, so an accept can never leave a
+            // stray "\n" between the prefix and the command name.
+            if replacement == "\n" || replacement == "\r",
+                let chatTextView = textView as? ChatInputUITextView,
+                chatTextView.onReturnKey?() == true
+            {
+                return false
+            }
+            return true
+        }
+
         func textViewDidChange(_ textView: UITextView) {
+            // A suggestion accept applies the text and then the caret;
+            // the intermediate change-notification would report the new
+            // draft with the stale caret. Suppressed — the accept reports
+            // once, with the final caret, through onEdit.
+            if let chatTextView = textView as? ChatInputUITextView,
+                chatTextView.isApplyingExternalCaret
+            {
+                return
+            }
             syncPlaceholderVisibility(for: textView)
             // Re-measure so a draft that grows past the 5-line cap starts
             // scrolling instead of stretching the frame (and vice versa).
@@ -382,6 +461,16 @@ struct ChatInputTextView: UIViewRepresentable {
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
+            // A suggestion accept places the caret programmatically right
+            // after changing the text; that callback is ours, not the
+            // user's, and the accept already reported the new draft with
+            // its caret through onEdit. Re-reporting here would push the
+            // pre-accept caret back into the owner's state.
+            if let chatTextView = textView as? ChatInputUITextView,
+                chatTextView.isApplyingExternalCaret
+            {
+                return
+            }
             onEdit(textView.text, textView.selectedRange.location)
         }
 
