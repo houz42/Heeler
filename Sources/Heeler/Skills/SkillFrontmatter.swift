@@ -7,6 +7,17 @@ import Foundation
 struct SkillFrontmatter: Equatable, Sendable {
     var name: String?
     var description: String?
+    /// omp's `enabled: false` opt-out: the skill is not loaded at all, so
+    /// the composer's dynamic menu must not advertise it either.
+    var enabled: Bool?
+
+    init(
+        name: String? = nil, description: String? = nil, enabled: Bool? = nil
+    ) {
+        self.name = name
+        self.description = description
+        self.enabled = enabled
+    }
 
     /// Parses the frontmatter block of `content`: the lines between the
     /// leading `---` fence and the next `---`/`...` fence. Handles the shapes
@@ -76,7 +87,8 @@ struct SkillFrontmatter: Equatable, Sendable {
 
         return SkillFrontmatter(
             name: nonEmpty(fields["name"]),
-            description: nonEmpty(fields["description"]))
+            description: nonEmpty(fields["description"]),
+            enabled: boolean(fields["enabled"]))
     }
 
     private enum BlockStyle: Equatable {
@@ -121,6 +133,16 @@ struct SkillFrontmatter: Equatable, Sendable {
                 .replacingOccurrences(of: "''", with: "'")
         }
         return value
+    }
+
+    /// The YAML truthy/falsy spellings a frontmatter `enabled` field uses.
+    private static func boolean(_ value: String?) -> Bool? {
+        switch value?.trimmingCharacters(in: .whitespaces).lowercased() {
+        case "true", "yes", "on": true
+        case "false", "no", "off", "": false
+        case nil: nil
+        default: nil
+        }
     }
 
     private static func nonEmpty(_ value: String?) -> String? {

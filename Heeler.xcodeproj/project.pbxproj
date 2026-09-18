@@ -418,6 +418,7 @@
 		E379C1AD65B445D4E08614CF /* AgentNameTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64D3B8E2EB97A8376B333914 /* AgentNameTests.swift */; };
 		E40D1C6F825ABCD68AA5F196 /* AttachTerminalStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C5A562F5A01AE08691B8479 /* AttachTerminalStoreTests.swift */; };
 		E521D6779F4C453B6E098F14 /* TerminalFontSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 427512344847A84699F819A0 /* TerminalFontSettingsTests.swift */; };
+		E55E86E93B1922284323425A /* AgentDynamicCommandProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA8452472C545FC167D2C510 /* AgentDynamicCommandProvider.swift */; };
 		E563373DB446DBEF8B1701E3 /* DeviceKeyStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FCA00B5F2A05A599D74FCCE /* DeviceKeyStoreTests.swift */; };
 		E625A29883FB3568B2274651 /* ChatStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE5CA92C9062577ED5BB5F25 /* ChatStoreTests.swift */; };
 		E68A1DDFA6C5F618BBB79AB7 /* AgentLayoutErrorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66B70100FB78F319E7136652 /* AgentLayoutErrorView.swift */; };
@@ -456,6 +457,7 @@
 		FB48FE055F392DA233A7BBB3 /* ChatPagingGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39925FB51288D9FAD0C780B8 /* ChatPagingGate.swift */; };
 		FBC2F27922BF5A627A27C339 /* EventsSessionLatencyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F565A5BE8CC4ABA3FA10D57 /* EventsSessionLatencyTests.swift */; };
 		FC3565466275E3A63ED59687 /* PairingCeremony.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4CA687285B470E3968D1DB6 /* PairingCeremony.swift */; };
+		FC79B89ED0AF82F1EE83DA16 /* ChatDynamicSlashCommandTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E0219C038FE62FAF8C2A479 /* ChatDynamicSlashCommandTests.swift */; };
 		FCC374190EE36E254109D6AD /* HerdrHostPathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB90BB1A82BAAD178E1258F3 /* HerdrHostPathTests.swift */; };
 		FCCE1492C64201FF221B64A3 /* AgentActivityEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69EBBC2C99AA84420FDF600A /* AgentActivityEnvelope.swift */; };
 		FCD98A152DD66F79CA9E1D91 /* WindowReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = D36183A0ED703C88B9D16031 /* WindowReader.swift */; };
@@ -782,6 +784,7 @@
 		9D55C5296892657D59171DFE /* NotificationKeyMirrorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationKeyMirrorTests.swift; sourceTree = "<group>"; };
 		9D5CBA3E14F186170A2EF2CA /* AgentNotificationRendererTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentNotificationRendererTests.swift; sourceTree = "<group>"; };
 		9DA84C4B51C260DD5CE80ECE /* TerminalBackspaceButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalBackspaceButton.swift; sourceTree = "<group>"; };
+		9E0219C038FE62FAF8C2A479 /* ChatDynamicSlashCommandTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatDynamicSlashCommandTests.swift; sourceTree = "<group>"; };
 		9E5EC73C5FED2E99BF4EE8BC /* OpenerAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenerAction.swift; sourceTree = "<group>"; };
 		9E60C702A9C03AEDEE77EC2A /* PrefixSwipeRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrefixSwipeRecognizer.swift; sourceTree = "<group>"; };
 		9ED544C5E701A1ACD12C6F79 /* live-activity-content-v1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "live-activity-content-v1.json"; sourceTree = "<group>"; };
@@ -937,6 +940,7 @@
 		F7E3DCBFDF3ED4A63CBC1B3C /* AgentActivityEnvelopeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentActivityEnvelopeTests.swift; sourceTree = "<group>"; };
 		F9D664871CA1A56418C106BC /* HostDraftTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostDraftTests.swift; sourceTree = "<group>"; };
 		F9EF9F515ABC98C4B0B483C0 /* pairing-code-v1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "pairing-code-v1.json"; sourceTree = "<group>"; };
+		FA8452472C545FC167D2C510 /* AgentDynamicCommandProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentDynamicCommandProvider.swift; sourceTree = "<group>"; };
 		FAF5D79337402EF6FA70F9CA /* ImagePreparer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImagePreparer.swift; sourceTree = "<group>"; };
 		FB37CBDC9DE0CE539FC476A0 /* AgentNotificationRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentNotificationRenderer.swift; sourceTree = "<group>"; };
 		FB43ADC71539AC324F155DD0 /* HeelerWidgetsBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeelerWidgetsBundle.swift; sourceTree = "<group>"; };
@@ -993,6 +997,7 @@
 			isa = PBXGroup;
 			children = (
 				1BB429F8246934769F2CD9DF /* AgentCommandProvider.swift */,
+				FA8452472C545FC167D2C510 /* AgentDynamicCommandProvider.swift */,
 				3D59A41B6D776AFD3F2B4D41 /* ComposerRouter.swift */,
 				ABFAB20E38A23C2A552AA2BE /* ComposerRouterStore.swift */,
 				C5CCB69652586493626A4AEF /* ComposerSuggestionRow.swift */,
@@ -1038,6 +1043,7 @@
 				8C5A562F5A01AE08691B8479 /* AttachTerminalStoreTests.swift */,
 				AE9AF5C6F7066900959E7E10 /* AttachUserMessageIndexTests.swift */,
 				BC1284CD14F74A0CD63AEE89 /* ChatComposerRouterTests.swift */,
+				9E0219C038FE62FAF8C2A479 /* ChatDynamicSlashCommandTests.swift */,
 				B7F661B5D2153414B59FF899 /* ChatMarkdownTests.swift */,
 				5681D3B605C9C7BED8B5167B /* ChatOpenersTests.swift */,
 				B6741B590F4B3D8E144F37EF /* ChatPrefixKeysTests.swift */,
@@ -1960,6 +1966,7 @@
 				E1C95FE0F5AC6271001DBF60 /* AgentDetailView.swift in Sources */,
 				785A44749D305DC59153D679 /* AgentDirectInputChrome.swift in Sources */,
 				FA4096D59D2F576F860238B6 /* AgentDirectInputPresentation.swift in Sources */,
+				E55E86E93B1922284323425A /* AgentDynamicCommandProvider.swift in Sources */,
 				A6747734905576A8861C945A /* AgentFocusCoordinator.swift in Sources */,
 				390E9313FFE9AA540C6B6113 /* AgentInputModeSettings.swift in Sources */,
 				E68A1DDFA6C5F618BBB79AB7 /* AgentLayoutErrorView.swift in Sources */,
@@ -2233,6 +2240,7 @@
 				5150B659FACE9AFD9ECF9F6D /* AuthorizedKeysTestLock.swift in Sources */,
 				C3D2936548DD57036A1FB254 /* CancellablePhaseGate.swift in Sources */,
 				A41D798FC3640FB9AB6959C8 /* ChatComposerRouterTests.swift in Sources */,
+				FC79B89ED0AF82F1EE83DA16 /* ChatDynamicSlashCommandTests.swift in Sources */,
 				4B9F81B5CFE0B356BBC2B200 /* ChatMarkdownTests.swift in Sources */,
 				BE7F1598AD630194B9CAFE0B /* ChatOpenersTests.swift in Sources */,
 				3C906CD7BA81746ACC65905B /* ChatPrefixKeysTests.swift in Sources */,

@@ -90,6 +90,19 @@ public final class SSHSFTPClient: Sendable {
             timeout: timeout)
     }
 
+    /// Lists every entry of one remote directory (files and directories,
+    /// dot-entries excluded) without exposing a native directory handle.
+    /// A missing directory surfaces as a path-free `SSHError.sftpFailure`.
+    public func listDirectoryEntries(
+        at path: String,
+        timeout: Duration
+    ) async throws -> SSHSFTPDirectoryContents {
+        try await driver.listSFTPEntries(
+            id: id,
+            path: path,
+            timeout: timeout)
+    }
+
     public func openFileForWriting(
         at path: String,
         permissions: UInt32,

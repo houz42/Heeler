@@ -291,6 +291,22 @@ final class ConsoleStore {
         }
     }
 
+    /// Lists one absolute remote path's full contents (files and
+    /// subdirectories) for the composer's dynamic slash-command discovery.
+    /// SSH transports only; alternative transports fail honestly rather
+    /// than emulating SFTP.
+    func listRemoteDirectoryContents(
+        at path: String, on hostID: Host.ID
+    ) async throws -> RemoteDirectoryContents {
+        try await projection(for: hostID).session.withTransport { transport in
+            guard let ssh = transport as? HeelerSSHTransport else {
+                throw TransportError.sshUnreachable(
+                    detail: "This Host cannot list remote directory contents.")
+            }
+            return try await ssh.listDirectoryEntries(at: path)
+        }
+    }
+
     private struct SkillsCacheKey: Hashable {
         let hostID: Host.ID
         let generation: UInt64

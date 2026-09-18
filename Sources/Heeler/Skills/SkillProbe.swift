@@ -181,15 +181,19 @@ enum SkillProbe {
 
     /// A name becomes terminal input, so it must survive as one word:
     /// non-empty, reasonably short, no whitespace, no control characters.
-    private static func isUsableName(_ name: String) -> Bool {
+    /// Shared with the composer's dynamic slash-command discovery, which
+    /// builds the same kind of insertable text from the same kind of files.
+    static func isUsableName(_ name: String) -> Bool {
         !name.isEmpty && name.count <= 100
             && !name.contains(where: \.isWhitespace)
             && TerminalTextSafety.containsOnlySafeScalars(name)
     }
 
     /// Descriptions are display-only; control characters are dropped rather
-    /// than trusted, and an empty result reads as "no description".
-    private static func safeDescription(_ description: String?) -> String? {
+    /// than trusted, and an empty result reads as "no description". Shared
+    /// with the composer's dynamic slash-command discovery for the same
+    /// reason as ``isUsableName``.
+    static func safeDescription(_ description: String?) -> String? {
         guard let description else { return nil }
         var scalars = String.UnicodeScalarView()
         scalars.append(

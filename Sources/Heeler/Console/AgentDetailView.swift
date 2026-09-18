@@ -307,7 +307,9 @@ struct AgentDetailView: View {
                     readPaneText: { hostID, paneID in
                         try await console.readPaneOutput(
                             paneID, lines: 200, on: hostID).text
-                    })))
+                    }),
+                commandFileIO: AgentCommandFileIO.console(
+                    console, hostID: agent.hostID)))
         await store.start(
             agentSession: agent.agent.agentSession,
             statusUpdates: console.agentStatusUpdates(for: agent.id))

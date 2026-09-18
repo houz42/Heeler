@@ -533,13 +533,32 @@ extension ComposerRouterStore {
         console: ConsoleStore,
         agent: ConsoleAgent,
         bashIO: ComposerBashIO,
-        agentKind: String = "omp"
+        agentKind: String = "omp",
+        commandFileIO: AgentCommandFileIO? = nil
     ) -> Dependencies {
         let hostID = agent.hostID
+        let paneID = agent.agent.paneID
         let commandProvider = AgentCommandRegistry.provider(forKind: agentKind)
+        let dynamicStore = AgentDynamicCommandStore.shared
+        // The chat surface's opening refresh of the Host's file-borne
+        // commands (skills + project command files). The menu reads the
+        // cache synchronously, so it shows the static table first and
+        // the discovered commands appear as soon as the refresh lands.
+        if let commandFileIO {
+            let kind = agentKind
+            let cwd = agent.agent.cwd
+            Task { @MainActor in
+                await dynamicStore.refresh(
+                    hostID: hostID,
+                    paneID: paneID,
+                    kind: kind,
+                    cwd: cwd,
+                    io: commandFileIO)
+            }
+        }
         return Dependencies(
             hostID: hostID,
-            paneID: agent.agent.paneID,
+            paneID: paneID,
             levelStore: .shared,
             resolveAgent: { name in
                 Self.resolveAgent(name, in: console.agents)
@@ -550,7 +569,10 @@ extension ComposerRouterStore {
                     on: resolved.hostID)
             },
             bashIO: bashIO,
-            agentCommands: { commandProvider.slashCommands() },
+            agentCommands: {
+                commandProvider.slashCommands()
+                    + dynamicStore.cachedCommands(hostID: hostID, paneID: paneID)
+            },
             workspaces: {
                 var seen = Set<String>()
                 return console.agents

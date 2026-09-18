@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -36,6 +37,12 @@ struct AgentSlashCommand: Equatable, Sendable {
         /// Reserved: no such surface exists at protocol 22 (see the file
         /// header), so no provider marks commands `.probed` yet.
         case probed
+        /// Discovered from the agent's on-disk skill files over the SFTP
+        /// read path (omp's `skill:` source).
+        case skillFile
+        /// Discovered from the agent's per-project command files over the
+        /// SFTP read path (omp's `file` source).
+        case commandFile
     }
 
     let name: String
@@ -230,4 +237,19 @@ struct OmpCommandProvider: AgentCommandProvider {
             summary: "Show provider usage and limits",
             usage: "[show|reset [account|active]]", source: .builtinTable),
     ]
+}
+
+extension OmpCommandProvider: HostFileCommandDiscovery {
+    /// omp's on-disk surfaces: `~/.agents/skills/*/SKILL.md` (gated by
+    /// `skills.enableSkillCommands`) and the per-project
+    /// `.omp|.agents|.claude|.codex/commands/*.md` walk-up. See
+    /// `OmpHostCommandDiscovery` for the upstream rules this mirrors.
+    func discoverCommands(
+        cwd: String, io: AgentCommandFileIO
+    ) async -> [AgentSlashCommand] {
+        await OmpHostCommandDiscovery.commands(
+            cwd: cwd,
+            io: io,
+            log: Logger(subsystem: "dev.bybee.heeler", category: "AgentCommands"))
+    }
 }
