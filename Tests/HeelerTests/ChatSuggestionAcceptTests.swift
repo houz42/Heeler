@@ -98,10 +98,14 @@ struct ChatSuggestionAcceptTests {
             coordinator.onEdit = { newText, _ in field.draft = newText }
             textView.delegate = coordinator
             textView.onPrefixInsert = { newText, _ in field.draft = newText }
-            // ChatScreen.inputFrame's onReturnKey, verbatim.
+            // ChatScreen.inputFrame's onReturnKey, verbatim: the owner's
+            // draft updates IN THE ACTION — a @State write during the
+            // representable's update pass is dropped, which is exactly
+            // the send-disabled regression.
             textView.onReturnKey = {
                 let result = field.router.handleReturnKey(into: field.draft)
                 if let accepted = result.accepted {
+                    field.draft = accepted.draft
                     field.pendingAccept = accepted
                 }
                 return result.consumedKey
@@ -154,6 +158,46 @@ struct ChatSuggestionAcceptTests {
             field.textView.selectedRange.location
                 == (field.textView.text as NSString).length)
         #expect(field.pendingAccept == nil, "the accept is consumed")
+        // The owner's draft updated in the action, so Send's disabled
+        // gate (draft trimmed non-empty) is open by the time the text
+        // view shows the accepted draft.
+        #expect(
+            field.draft == highlighted.insertion,
+            "the owner's draft must carry the accepted text")
+        #expect(
+            !field.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty,
+            "Send must be enabled after an accept")
+    }
+
+    @Test func tapAcceptUpdatesTheOwnerDraftSoSendEnables() {
+        // The device-verified regression: after tapping a suggestion the
+        // text rendered in the field while the owner's draft stayed "",
+        // so the send button never enabled. The tap action (what
+        // ChatScreen passes as ComposerSuggestionRow's applyDraft) must
+        // assign the draft there — a @State write during the
+        // representable's update pass is dropped.
+        let field = WiredField()
+        field.type("/")
+        let agentsIndex = field.router.suggestions.firstIndex(
+            where: { $0.title == "agents" })!
+        field.router.selectSuggestion(at: agentsIndex)
+
+        // The tap action, verbatim from ChatScreen.inputFrame.
+        let newDraft = field.router.acceptSelectedSuggestion(into: field.draft)!
+        field.draft = newDraft
+        field.pendingAccept = (newDraft, newDraft.utf16.count)
+
+        #expect(field.draft == "/agents ")
+        #expect(
+            !field.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty,
+            "Send must be enabled after a tap accept")
+        field.applyPendingAccept()
+        #expect(field.textView.text == "/agents ")
+        #expect(
+            field.textView.selectedRange.location
+                == (field.textView.text as NSString).length)
     }
 
     @Test func returnWithOpenSuggestionsAppliesTheHighlightNotTheFirstRow() {
@@ -207,6 +251,40 @@ struct ChatSuggestionAcceptTests {
         textView.selectedRange = NSRange(location: 12, length: 0)
         #expect(textView.text == "/agents list")
         #expect(textView.selectedRange.location == 12)
+    }
+
+    // -- the placeholder follows an external apply (device regression) --
+
+    @Test func placeholderHidesAfterAnAcceptAndReturnsWhenEmptied() {
+        // The accept path suppresses the intermediate change-notification
+        // to avoid reporting the stale caret; the placeholder's visibility
+        // toggle used to fire only in that suppressed branch, so the
+        // placeholder stayed visible UNDER the accepted draft. It must
+        // track the text in the accept branch too.
+        let textView = ChatInputUITextView()
+        let coordinator = ChatInputTextView.Coordinator(
+            onEdit: { _, _ in }, isFocused: .constant(false))
+        textView.delegate = coordinator
+        coordinator.attachPlaceholder(
+            to: textView, placeholder: "Message — / # @ ! for commands")
+        let placeholder =
+            textView.subviews.compactMap { $0 as? UILabel }.first
+        #expect(placeholder != nil)
+
+        // Empty draft: the placeholder is visible.
+        #expect(placeholder!.isHidden == false)
+
+        // The accept applies the draft through the delegate-suppressed
+        // path; the placeholder must hide with the text.
+        textView.applyExternalDraft("/agents ", caret: 8)
+        #expect(textView.text == "/agents ")
+        #expect(placeholder!.isHidden == true)
+
+        // Back to an empty draft (a handled submit clears it): the
+        // placeholder returns.
+        textView.applyExternalDraft("", caret: 0)
+        #expect(textView.text.isEmpty)
+        #expect(placeholder!.isHidden == false)
     }
 }
 

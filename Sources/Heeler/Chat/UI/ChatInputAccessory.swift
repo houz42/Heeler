@@ -225,14 +225,24 @@ final class ChatInputUITextView: UITextView {
     /// caret sits at the end of the insertion — after the trailing space
     /// "/agents " carries — and reports as an edit so the owner's
     /// binding and the router's suggestion pass both see it.
+    ///
+    /// A programmatic `.text` assignment does NOT fire the delegate's
+    /// `textViewDidChange` (UIKit only calls it for user edits), so this
+    /// drives the delegate's text-state work directly: the placeholder's
+    /// visibility toggle and the height re-measure. Without it the
+    /// placeholder stayed visible under the accepted draft — a
+    /// device-verified regression. `delegate` is `@objc optional`, hence
+    /// the optional-chain call.
     func applyExternalDraft(_ newDraft: String, caret: Int) {
         isApplyingExternalCaret = true
         text = newDraft
         selectedRange = NSRange(
             location: min(max(caret, 0), newDraft.utf16.count), length: 0)
         isApplyingExternalCaret = false
+        delegate?.textViewDidChange?(self)
         onPrefixInsert?(newDraft, selectedRange.location)
     }
+
     /// The chat-input text configuration, in one place: the one-bar
     /// contract (autocorrection/spell-check off hides QuickType), literal
     /// ASCII typing, and the composer's return-key arbitration. `makeUIView`
@@ -465,10 +475,16 @@ struct ChatInputTextView: UIViewRepresentable {
             // A suggestion accept applies the text and then the caret;
             // the intermediate change-notification would report the new
             // draft with the stale caret. Suppressed — the accept reports
-            // once, with the final caret, through onEdit.
+            // once, with the final caret, through onEdit. The placeholder
+            // toggle and the height re-measure are NOT suppressible: they
+            // react to the text itself, and skipping them left the
+            // placeholder visible under the accepted draft (a
+            // device-verified regression).
             if let chatTextView = textView as? ChatInputUITextView,
                 chatTextView.isApplyingExternalCaret
             {
+                syncPlaceholderVisibility(for: textView)
+                textView.invalidateIntrinsicContentSize()
                 return
             }
             syncPlaceholderVisibility(for: textView)
