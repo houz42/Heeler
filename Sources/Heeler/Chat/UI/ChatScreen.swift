@@ -24,6 +24,75 @@ internal struct ChatContent: Sendable, Equatable {
     }
 }
 
+/// The pending-question answer seam: one store per chat surface, holding
+/// the locally chosen answers (optimistic state until the transcript's
+/// own `ask` result record lands) and delivering a chosen option's label
+/// to the agent exactly once.
+///
+/// Pure @MainActor class with injected dependencies — no network, no
+/// SwiftUI — so the tap → deliver → answered transition is unit-testable
+/// with stubs, exactly like `ComposerRouterStore`.
+@MainActor
+@Observable
+final class PendingAnswerDelivery {
+    /// How one answer attempt ended.
+    enum Outcome: Equatable {
+        /// The option's label was delivered to the agent; the interaction
+        /// is now answered (locally optimistic — the transcript's `ask`
+        /// result record confirms it on the next poll).
+        case delivered
+        /// Delivery threw: the interaction stays answerable and the card
+        /// stays loud so the user can retry.
+        case failed(String)
+        /// The question is already answered (locally or by the
+        /// transcript) or the same tap is still in flight; ignored.
+        case alreadyAnswered
+    }
+
+    private(set) var localAnswers: [String: String] = [:]
+    private var inFlight: Set<String> = []
+    private let deliver: (String) async throws -> Void
+    private let describeError: (any Error) -> String
+
+    init(
+        deliver: @escaping (String) async throws -> Void,
+        describeError: @escaping (any Error) -> String = {
+            ($0 as? LocalizedError)?.errorDescription ?? String(describing: $0)
+        }
+    ) {
+        self.deliver = deliver
+        self.describeError = describeError
+    }
+
+    /// The answer for a pending interaction, if any: the local choice
+    /// wins over the transcript's (they agree by construction once the
+    /// result record arrives).
+    func answer(for interaction: PendingInteraction) -> String? {
+        localAnswers[interaction.id] ?? interaction.answer
+    }
+
+    /// Tapping an option: delivers the option's label once. A second tap
+    /// (or a tap on an already-answered question) is a no-op; a failed
+    /// delivery rolls back so the question stays answerable.
+    @discardableResult
+    func choose(
+        _ option: PendingInteraction.Option, for interaction: PendingInteraction
+    ) async -> Outcome {
+        guard answer(for: interaction) == nil, !inFlight.contains(interaction.id) else {
+            return .alreadyAnswered
+        }
+        inFlight.insert(interaction.id)
+        defer { inFlight.remove(interaction.id) }
+        do {
+            try await deliver(option.label)
+            localAnswers[interaction.id] = option.label
+            return .delivered
+        } catch {
+            return .failed(describeError(error))
+        }
+    }
+}
+
 /// Full chat surface for one agent pane. Owns nothing: transcript and level
 /// both arrive; level changes flow back out through `changeLevel` so the
 /// owner persists them per pane. Scroll paging (Phase 5): a sentinel row
@@ -82,6 +151,10 @@ struct ChatScreen: View {
         self.deliver = deliver
         self._level = State(initialValue: initialLevel)
     }
+
+    /// The pending-question answer store: one per screen, built from the
+    /// injected `deliver` closure (nil deliver = read-only, previews).
+    @State private var pendingAnswers: PendingAnswerDelivery?
 
     /// The pane's link-open router (Phase 4 openers): every detected
     /// target in chat text routes through it. One instance per screen.
@@ -190,6 +263,7 @@ struct ChatScreen: View {
         .overlay { bubbleFocusOverlay }
         // The input affordance floats bottom-trailing and only while the
         // input frame is closed; the frame's own chevron closes it.
+        .task { ensurePendingAnswers() }
         .overlay {
             if !inputPresented, router != nil && deliver != nil { inputOverlay }
         }
@@ -287,6 +361,11 @@ struct ChatScreen: View {
                 router: openRouter,
                 isFocused: focusedBubble == bubble,
                 onLongPress: { enterBubbleFocus(bubble) })
+        case .row(.pending(let interaction)):
+            // The ask question card rides at its call's transcript position
+            // (ChatFiltering places it inline); wired form when the answer
+            // channel is available, read-only otherwise.
+            pendingCard(interaction)
         case .row(let row):
             LinkifiedChatRow(row: row, router: openRouter)
         }
@@ -352,6 +431,30 @@ struct ChatScreen: View {
         }
     }
 
+    /// The blocked-question card as the transcript renders it: the wired
+    /// form when delivery is available, the read-only form otherwise
+    /// (previews, unwired hosts).
+    @ViewBuilder
+    private func pendingCard(_ interaction: PendingInteraction) -> some View {
+        if let pendingAnswers {
+            ChatPendingRow(
+                interaction: interaction,
+                answer: pendingAnswers.answer(for: interaction),
+                choose: { option in
+                    Task { await pendingAnswers.choose(option, for: interaction) }
+                })
+        } else {
+            ChatPendingRow(interaction: interaction, answer: nil, choose: { _ in })
+        }
+    }
+
+    /// Builds the pending-answer store once, from the injected `deliver`
+    /// closure; no-op on re-renders. A nil `deliver` keeps the card in its
+    /// read-only form.
+    private func ensurePendingAnswers() {
+        guard pendingAnswers == nil, let deliver else { return }
+        pendingAnswers = PendingAnswerDelivery(deliver: deliver)
+    }
     // MARK: - Floating input
 
     /// The lower-right input affordance: one floating button that opens the

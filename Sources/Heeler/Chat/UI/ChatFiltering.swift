@@ -11,14 +11,38 @@ import Foundation
 /// empty `options` list renders the question alone (free-text answers go
 /// through the composer, not this row).
 internal struct PendingInteraction: Sendable, Equatable, Identifiable {
+    /// One tappable answer choice. omp's `ask` tool carries label +
+    /// description pairs (verified against live session records: the call's
+    /// arguments hold `options: [{label, description}]`).
+    struct Option: Sendable, Equatable {
+        let label: String
+        var description: String? = nil
+
+        init(label: String, description: String? = nil) {
+            self.label = label
+            self.description = description
+        }
+    }
+
     let id: String
     let question: String
-    let options: [String]
+    let options: [Option]
+    /// The chosen option's label once answered; nil while the question
+    /// blocks the run. The transcript's own answer (the `ask` result
+    /// record) is set by the parser; a locally made choice lives in
+    /// `PendingAnswerDelivery` until that record lands.
+    var answer: String?
 
-    init(id: String = UUID().uuidString, question: String, options: [String]) {
+    init(
+        id: String = UUID().uuidString,
+        question: String,
+        options: [Option],
+        answer: String? = nil
+    ) {
         self.id = id
         self.question = question
         self.options = options
+        self.answer = answer
     }
 }
 
