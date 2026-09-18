@@ -208,6 +208,40 @@ struct ChatSuggestionAcceptTests {
         #expect(textView.text == "/agents list")
         #expect(textView.selectedRange.location == 12)
     }
+
+    // -- the placeholder follows an external apply (device regression) --
+
+    @Test func placeholderHidesAfterAnAcceptAndReturnsWhenEmptied() {
+        // The accept path suppresses the intermediate change-notification
+        // to avoid reporting the stale caret; the placeholder's visibility
+        // toggle used to fire only in that suppressed branch, so the
+        // placeholder stayed visible UNDER the accepted draft. It must
+        // track the text in the accept branch too.
+        let textView = ChatInputUITextView()
+        let coordinator = ChatInputTextView.Coordinator(
+            onEdit: { _, _ in }, isFocused: .constant(false))
+        textView.delegate = coordinator
+        coordinator.attachPlaceholder(
+            to: textView, placeholder: "Message — / # @ ! for commands")
+        let placeholder =
+            textView.subviews.compactMap { $0 as? UILabel }.first
+        #expect(placeholder != nil)
+
+        // Empty draft: the placeholder is visible.
+        #expect(placeholder!.isHidden == false)
+
+        // The accept applies the draft through the delegate-suppressed
+        // path; the placeholder must hide with the text.
+        textView.applyExternalDraft("/agents ", caret: 8)
+        #expect(textView.text == "/agents ")
+        #expect(placeholder!.isHidden == true)
+
+        // Back to an empty draft (a handled submit clears it): the
+        // placeholder returns.
+        textView.applyExternalDraft("", caret: 0)
+        #expect(textView.text.isEmpty)
+        #expect(placeholder!.isHidden == false)
+    }
 }
 
 /// Thread-safe capture for closures that cross isolation boundaries.
