@@ -315,13 +315,21 @@ struct ChatScreen: View {
                     ComposerSuggestionRow(
                         router: router, draft: draft,
                         applyDraft: { newDraft in
-                            // Every token case lands the insertion at the
-                            // applied draft's end (slash tokens are
-                            // trailing, a tag replaces the whole draft, a
-                            // mention's remainder is empty while the menu
-                            // is open), so the accept's caret — end of the
-                            // insertion, after its trailing space — is the
-                            // new draft's end.
+                            // The owner's draft updates HERE, in the
+                            // action — not inside the representable's
+                            // update pass, where a @State write is
+                            // dropped (the device-verified regression:
+                            // the accepted text rendered in the field
+                            // while draft stayed "", so Send stayed
+                            // disabled). Every token case lands the
+                            // insertion at the applied draft's end
+                            // (slash tokens are trailing, a tag replaces
+                            // the whole draft, a mention's remainder is
+                            // empty while the menu is open), so the
+                            // accept's caret — end of the insertion,
+                            // after its trailing space — is the new
+                            // draft's end.
+                            draft = newDraft
                             pendingAccept = (newDraft, newDraft.utf16.count)
                         })
                 }
@@ -355,9 +363,14 @@ struct ChatScreen: View {
                             // Return with the menu open accepts the
                             // highlighted suggestion (no newline); with
                             // it closed the stock newline insert keeps
-                            // working, matching the Composer.
+                            // working, matching the Composer. The owner's
+                            // draft updates here in the action — the
+                            // representable's update-pass report is not
+                            // enough (a @State write during view update
+                            // is dropped).
                             let result = router.handleReturnKey(into: draft)
                             if let accepted = result.accepted {
+                                draft = accepted.draft
                                 pendingAccept = accepted
                             }
                             return result.consumedKey
