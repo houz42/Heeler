@@ -106,6 +106,106 @@ enum OmpTranscriptParser {
         parse(lines: lines.map { String($0) })
     }
 
+    // MARK: - Pending interactions (blocked-agent `ask` questions)
+
+    /// Derives the blocked-agent pending interactions from a parsed turn
+    /// set: an `ask` tool call is the question carrier (call → question,
+    /// one `arguments.questions` entry → one interaction), and the tool
+    /// result that pairs with the call is the answer. Pure, over already
+    /// parsed records, so both the store's merge seams and tests share one
+    /// derivation.
+    ///
+    /// Wire shapes (verbatim from live omp sessions):
+    ///   call: {"type":"toolCall","id":"ask_0_5de86e6b","name":"ask",
+    ///          "arguments":{"questions":[{"id":"app_state",
+    ///          "question":"…","options":[{"label":"…","description":"…"}],
+    ///          "recommended":4}]}}
+    ///   result: {"role":"toolResult","toolCallId":"ask_0_5de86e6b",
+    ///          "toolName":"ask","content":[{"type":"text",
+    ///          "text":"User selected: Scanned, error shown"}]}
+    static func askPendingInteractions(
+        messages: [ChatMessage], toolResults: [ToolResult]
+    ) -> [PendingInteraction] {
+        var answers = [String: String]()
+        for result in toolResults where result.toolName == "ask" {
+            // First record wins if a call somehow produced duplicate
+            // results — deterministic, matching result pairing.
+            if answers[result.toolCallId] == nil {
+                answers[result.toolCallId] = Self.answerLabel(in: result.content)
+            }
+        }
+
+        var interactions: [PendingInteraction] = []
+        for message in messages {
+            for block in message.blocks {
+                guard case .toolCall(let call) = block, call.name == "ask" else {
+                    continue
+                }
+                interactions.append(
+                    contentsOf: Self.pendingInteractions(from: call, answer: answers[call.id]))
+            }
+        }
+        return interactions
+    }
+
+    /// One call's `arguments.questions` entries → interactions, in wire
+    /// order. Interaction ids are `callId#questionId` so they are stable
+    /// across polls. A question without an id (unobserved live) falls back
+    /// to the call id, keeping ids unique and non-empty.
+    private static func pendingInteractions(
+        from call: ToolCall, answer: String?
+    ) -> [PendingInteraction] {
+        guard case .array(let questions) = call.arguments["questions"] else {
+            return []
+        }
+        var interactions: [PendingInteraction] = []
+        for (index, question) in questions.enumerated() {
+            guard case .object(let fields) = question,
+                let questionText = fields["question"]?.stringValue,
+                !questionText.isEmpty
+            else { continue }
+            let questionID = fields["id"]?.stringValue ?? String(index)
+            let options = Self.pendingOptions(from: fields["options"])
+            interactions.append(PendingInteraction(
+                id: "\(call.id)#\(questionID)",
+                question: questionText,
+                options: options,
+                answer: answer))
+        }
+        return interactions
+    }
+
+    /// `options` accepts both live shapes: omp's `ask` carries label +
+    /// description pairs; a bare-string list (any future/older spelling)
+    /// reads as label-only. Non-string entries are dropped.
+    private static func pendingOptions(from value: JSONValue?) -> [PendingInteraction.Option] {
+        guard case .array(let options)? = value else { return [] }
+        return options.compactMap { option in
+            switch option {
+            case .object(let fields):
+                guard let label = fields["label"]?.stringValue, !label.isEmpty else {
+                    return nil
+                }
+                return PendingInteraction.Option(
+                    label: label, description: fields["description"]?.stringValue)
+            case .string(let label):
+                return PendingInteraction.Option(label: label)
+            default:
+                return nil
+            }
+        }
+    }
+
+    /// Extracts the chosen option's label from an answered `ask` result's
+    /// content: "User selected: <label>" → "<label>" (the "User selected: "
+    /// prefix is omp's own; anything unprefixed is kept whole so a future
+    /// wording still reads).
+    private static func answerLabel(in content: String) -> String {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefix = "User selected: "
+        return trimmed.hasPrefix(prefix) ? String(trimmed.dropFirst(prefix.count)) : trimmed
+    }
+
     /// Walks a user/assistant message's content blocks in order, emitting one
     /// ChatBlock per user-visible block. An empty or missing `content` array
     /// yields no message. Adjacent text blocks are not merged (omp has not

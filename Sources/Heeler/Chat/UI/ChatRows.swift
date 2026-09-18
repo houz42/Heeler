@@ -15,6 +15,8 @@ fileprivate enum ChatWash {
     static func turn(isDark: Bool) -> Double { isDark ? 0.16 : 0.07 }
     /// The orange wash behind the blocked-agent pending card.
     static func pending(isDark: Bool) -> Double { isDark ? 0.12 : 0.06 }
+    /// The dimmed orange wash behind an answered pending card.
+    static func pendingAnswered(isDark: Bool) -> Double { isDark ? 0.05 : 0.03 }
 }
 
 /// One full-width chat row. Rows are plain (no bubbles, no avatars) — the
@@ -43,7 +45,7 @@ struct ChatRowView: View {
                 ChatResultBody(result: result)
             }
         case .pending(let interaction):
-            ChatPendingRow(interaction: interaction, choose: { _ in })
+            ChatPendingRow(interaction: interaction, answer: interaction.answer, choose: { _ in })
         }
     }
 }
@@ -272,44 +274,97 @@ struct ChatCollapsibleRow<Content: View>: View {
 
 /// The blocked-agent affordance: the raw question plus one tappable button
 /// per option. Visible at every detail level — it is the conversation's live
-/// edge.
+/// edge. While unanswered it is loud (orange wash, full-width buttons); the
+/// answered form dims to history, marks the chosen option, and drops the
+/// tap targets.
 struct ChatPendingRow: View {
     let interaction: PendingInteraction
-    let choose: (String) -> Void
+    /// The effective answer (local choice or the transcript's own record);
+    /// non-nil renders the answered form.
+    let answer: String?
+    let choose: (PendingInteraction.Option) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
     private var isDark: Bool { colorScheme == .dark }
 
+    private var isAnswered: Bool { answer != nil }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("Waiting for your answer", systemImage: "questionmark.circle")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.orange)
+            Label(
+                isAnswered ? "Answered" : "Waiting for your answer",
+                systemImage: isAnswered ? "checkmark.circle" : "questionmark.circle"
+            )
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(isAnswered ? Color.secondary : Color.orange)
             ChatBlockText(interaction.question, style: .assistant)
             if !interaction.options.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
-                    ForEach(interaction.options, id: \.self) { option in
-                        Button {
-                            choose(option)
-                        } label: {
-                            Text(option)
-                                .font(.subheadline)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 8))
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.primary)
-                        .accessibilityLabel("Answer: \(option)")
+                    ForEach(interaction.options, id: \.label) { option in
+                        optionButton(option)
                     }
                 }
             }
         }
         .padding(12)
         .background(
-            .orange.opacity(ChatWash.pending(isDark: isDark)),
+            .orange.opacity(
+                isAnswered ? ChatWash.pendingAnswered(isDark: isDark)
+                    : ChatWash.pending(isDark: isDark)),
             in: RoundedRectangle(cornerRadius: 10))
+        .opacity(isAnswered ? 0.6 : 1)
+    }
+
+    /// One option: a full-width rounded button while the question blocks,
+    /// a dimmed marked line once answered. Descriptions (omp's `ask`
+    /// options carry them) ride as secondary text inside the target.
+    @ViewBuilder
+    private func optionButton(_ option: PendingInteraction.Option) -> some View {
+        if isAnswered {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(
+                    systemName: option.label == answer
+                        ? "checkmark.circle.fill" : "circle"
+                )
+                .imageScale(.small)
+                .foregroundStyle(option.label == answer ? .orange : .secondary)
+                optionText(option)
+            }
+        } else {
+            Button {
+                choose(option)
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(option.label)
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if let description = option.description {
+                        Text(description)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.primary)
+            .accessibilityLabel("Answer: \(option.label)")
+        }
+    }
+
+    @ViewBuilder
+    private func optionText(_ option: PendingInteraction.Option) -> some View {
+        Text(option.label)
+            .font(.subheadline)
+            .strikethrough(false)
+        if let description = option.description {
+            Text(description)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -483,7 +538,19 @@ private enum ChatRowPreviewFixture {
         let pending = [
             PendingInteraction(
                 question: "Run the full CheckoutFlowTests suite before committing?",
-                options: ["Run the tests", "Commit without tests"]),
+                options: [
+                    PendingInteraction.Option(
+                        label: "Run the tests",
+                        description: "About 40s; catches regressions before they land."),
+                    PendingInteraction.Option(label: "Commit without tests"),
+                ]),
+            PendingInteraction(
+                question: "Squash the two fixup commits before pushing?",
+                options: [
+                    PendingInteraction.Option(label: "Squash"),
+                    PendingInteraction.Option(label: "Keep separate"),
+                ],
+                answer: "Squash"),
         ]
         return ChatContent(
             messages: messages, toolResults: results, pending: pending)

@@ -222,17 +222,20 @@ struct ChatUITests {
     // MARK: pending interactions
 
     @Test func pendingInteractionsRenderAtEveryLevel() {
-        let pending = PendingInteraction(question: "Deploy to prod?", options: ["yes", "no"])
+        let pending = PendingInteraction(question: "Deploy to prod?", options: [
+            PendingInteraction.Option(label: "yes"),
+            PendingInteraction.Option(label: "no"),
+        ])
         for level in DetailLevel.allCases {
             let rows = ChatFiltering.visibleRows(
                 messages: [assistantTurn()], toolResults: [], pending: [pending], level: level)
             let pendingRows = rows.filter {
                 if case .pending = $0 { return true } else { return false }
             }
-            #expect(pendingRows.count == 1)
             guard case .pending(let shown)? = pendingRows.first else { return }
             #expect(shown.question == "Deploy to prod?")
-            #expect(shown.options == ["yes", "no"])
+            #expect(shown.options.map(\.label) == ["yes", "no"])
+            #expect(shown.options.allSatisfy { $0.description == nil })
         }
     }
 

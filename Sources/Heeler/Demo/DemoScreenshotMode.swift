@@ -229,7 +229,7 @@
                             workspaceID: "checkout", kind: "claude",
                             name: "reviewer", title: "Checkout review",
                             cwd: "/workspace/storefront",
-                            transcriptPath: chatTranscriptPath),
+                            transcriptPath: blockedTranscriptPath),
                         agent(
                             paneID: "api:p7", status: .working,
                             workspaceID: "api", kind: "opencode",
@@ -248,7 +248,7 @@
                     "checkout:p3": terminalOutput,
                     "api:p7": terminalOutput,
                 ],
-                transcripts: [chatTranscriptPath: chatTranscript]),
+                transcripts: [chatTranscriptPath: chatTranscript, blockedTranscriptPath: blockedTranscript]),
         ]
 
         /// The absolute path every demo agent's `.path` session points at;
@@ -268,6 +268,20 @@
             """
 
         static let chatTranscript = Data(chatTranscriptJSON.utf8)
+
+        /// The blocked demo agent's transcript path: the checkout review
+        /// session, carrying a live `ask` question the chat renders as the
+        /// tappable pending card (the simulator screenshot fixture).
+        static let blockedTranscriptPath = "/home/demo/.local/share/omp/checkout-review.jsonl"
+
+        /// The blocked agent's transcript: the shared chat turns plus an
+        /// unanswered `ask` tool call whose wire shape is verbatim from a
+        /// real omp session record (two questions, so the queue — answer
+        /// first, next appears — is visible in the same screenshot).
+        private static let blockedTranscriptJSON = chatTranscriptJSON + "\n" + """
+            {"type":"message","id":"demo-5","timestamp":1789292125000,"message":{"role":"assistant","content":[{"type":"text","text":"Before I commit the retry fix, I need two decisions from you:"},{"type":"toolCall","id":"ask_0_demo","name":"ask","arguments":{"questions":[{"id":"tests","question":"Run the full CheckoutFlowTests suite before committing?","options":[{"label":"Run the tests","description":"About 40s; catches regressions before they land."},{"label":"Commit without tests","description":"Fastest path; CI still runs the suite later."}],"recommended":0},{"id":"squash","question":"Squash the two fixup commits before pushing?","options":[{"label":"Squash","description":"One clean commit on the branch."},{"label":"Keep separate","description":"Preserves the fixup history."}],"recommended":0}]},"streamIndex":0}],"timestamp":1789292125000}}
+            """
+        static let blockedTranscript = Data(blockedTranscriptJSON.utf8)
 
         static let terminalOutput = """
             \u{001B}[2J\u{001B}[H\u{001B}[1;36mHERDR  •  CLAUDE CODE\u{001B}[0m\r
