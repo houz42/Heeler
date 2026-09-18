@@ -779,39 +779,26 @@ final class HeelerTerminalView: UITerminalView, TerminalByteSink {
         terminalInputView
     }
 
-    override var autocorrectionType: UITextAutocorrectionType {
-        get { textInputStyle == .naturalLanguage ? .default : .no }
-        set {}
-    }
+    // A terminal never autocorrects, spell-checks, smart-inserts, or
+    // predicts — in any text-input style. The QuickType/inline-prediction
+    // stack turns Space into "accept the suggestion AND send the raw
+    // key", so a terminal surface with suggestions enabled delivers double
+    // input to the PTY (both the suggested word and the keystroke). These
+    // six traits once varied with `textInputStyle` so Direct Input could
+    // match the Composer's UIKit-default correction stack and keep one
+    // keyboard context across the responder transfer (de36399); the
+    // Composer now pins the same `.no` values (see
+    // `AgentComposerUITextView`), so matching no-correction traits gives
+    // the same stable context without ever raising the suggestion bar.
+    // Deleting the overrides leaves the hardened `.no` implementations
+    // from UITerminalView+UITextInput in force, setter-proof on both
+    // sides of the handoff.
 
+    // Autocapitalization is the one style-dependent trait left: agent
+    // prose matches the Composer's sentence case so the responder
+    // transfer keeps one keyboard context; Shell stays literal.
     override var autocapitalizationType: UITextAutocapitalizationType {
         get { textInputStyle == .naturalLanguage ? .sentences : .none }
-        set {}
-    }
-
-    override var spellCheckingType: UITextSpellCheckingType {
-        get { textInputStyle == .naturalLanguage ? .default : .no }
-        set {}
-    }
-
-    override var smartQuotesType: UITextSmartQuotesType {
-        get { textInputStyle == .naturalLanguage ? .default : .no }
-        set {}
-    }
-
-    override var smartDashesType: UITextSmartDashesType {
-        get { textInputStyle == .naturalLanguage ? .default : .no }
-        set {}
-    }
-
-    override var smartInsertDeleteType: UITextSmartInsertDeleteType {
-        get { textInputStyle == .naturalLanguage ? .default : .no }
-        set {}
-    }
-
-    @available(iOS 17.0, *)
-    override var inlinePredictionType: UITextInlinePredictionType {
-        get { textInputStyle == .naturalLanguage ? .default : .no }
         set {}
     }
 
