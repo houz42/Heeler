@@ -24,6 +24,16 @@ Entries reference the issue that motivated them.
 
 ### Fixed
 
+- Agents tree follows the herdr window's pane order: workspaces, tabs,
+  and panes read the way the user arranged them (the snapshot's
+  collection order, and pane geometry within a tab), instead of
+  alphabetical labels.
+- Agents tree collapses single-Agent chains at every grouping level, not
+  just tabs: a workspace holding exactly one Agent absorbs into that
+  Agent's row the same way a one-Agent tab always has, so the same shape
+  renders identically on every Host (the devbox's one-agent workspaces
+  no longer render a group row over a single leaf).
+
 - Chat now reads correctly in Dark Mode: user-turn and blocked-question
   accent washes lift their opacity against dark backgrounds, and the
   detail-level control keeps a visible edge over the status bar.

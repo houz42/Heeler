@@ -674,6 +674,22 @@ final class HostConsoleProjection {
             tabCounts[tab.workspaceID, default: 0] += 1
             tabPositions[tab.tabID] = tabCounts[tab.workspaceID]
         }
+        // Pane reading order inside each tab, from the pane layouts: rows
+        // top-to-bottom, then left-to-right (a full-width row reads as
+        // one line, so y alone suffices; x breaks same-row ties). The
+        // tree's leaf order follows this geometry, not creation order.
+        // Panes unique per session, so the first layout to name a pane
+        // wins any duplicate.
+        var paneOrders: [String: Int] = [:]
+        for layout in snapshot.layouts {
+            for (index, pane) in layout.panes.sorted(by: { lhs, rhs in
+                (lhs.rect.y, lhs.rect.x) < (rhs.rect.y, rhs.rect.x)
+            }).enumerated() {
+                if paneOrders[pane.paneID] == nil {
+                    paneOrders[pane.paneID] = index
+                }
+            }
+        }
         var nextAgents: [String: ConsoleAgent] = [:]
         for (snapshotOrder, info) in snapshot.agents.enumerated() {
             let agent = Agent(info)
@@ -696,7 +712,8 @@ final class HostConsoleProjection {
                 snapshotOrder: snapshotOrder,
                 paneLabel: paneByID[agent.paneID].flatMap {
                     $0.tabID == agent.tabID && $0.workspaceID == agent.workspaceID ? $0.label : nil
-                })
+                },
+                paneOrder: paneOrders[agent.paneID])
         }
         for (paneID, change) in latestStatusChanges
         where change.revision > snapshotStartRevision {

@@ -27,7 +27,9 @@ struct AgentTreeTests {
         workspaceTabCount: Int = 0,
         tabPosition: Int? = nil,
         kind: String = "claude",
-        name: String? = nil
+        name: String? = nil,
+        snapshotOrder: Int? = nil,
+        paneOrder: Int? = nil
     ) -> ConsoleAgent {
         ConsoleAgent(
             hostID: host.id,
@@ -41,7 +43,9 @@ struct AgentTreeTests {
             hostSessionName: session,
             tabLabel: tab,
             tabPosition: tabPosition,
-            workspaceTabCount: workspaceTabCount)
+            workspaceTabCount: workspaceTabCount,
+            snapshotOrder: snapshotOrder,
+            paneOrder: paneOrder)
     }
 
     private func makeHost(_ name: String) -> Host {
@@ -171,20 +175,28 @@ struct AgentTreeTests {
         #expect(AgentTree.hostID(ofGroupID: id) == host.id)
     }
 
-    /// A level with multiple children is never swallowed by the merge.
+    /// A level with multiple children is never swallowed by the merge,
+    /// and a workspace whose whole subtree is one Agent now absorbs into
+    /// that Agent's row — the same rule the tab level always had, so the
+    /// one-Agent-workspace shape renders identically on every Host.
     @Test func multiChildLevelsBlockTheMerge() {
         let host = makeHost("box")
         let agents = [
-            agent(host: host, paneID: "a", status: .idle, workspace: "alpha", tab: "1"),
-            agent(host: host, paneID: "b", status: .idle, workspace: "beta", tab: "1"),
+            agent(host: host, paneID: "a", status: .idle, workspace: "alpha", tab: "1",
+                  workspaceTabCount: 1, tabPosition: 1),
+            agent(host: host, paneID: "b", status: .idle, workspace: "beta", tab: "1",
+                  workspaceTabCount: 1, tabPosition: 1),
         ]
         let rows = AgentTree.rows(agents: agents, foldedIDs: [])
         // The host row merges only with "default" (single session); the
-        // two workspaces stop the chain, so each renders its own depth-1
-        // row, and each single-Agent tab absorbs into its Agent's row.
-        #expect(groupLabels(rows) == ["box · default", "alpha", "beta"])
-        #expect(depths(rows) == [0, 1, 2, 1, 2])
-        #expect(rows.compactMap(\.tabLabel) == ["1", "1"])
+        // two workspaces stop the chain. Each workspace holds exactly
+        // one Agent, so each absorbs into its Agent's depth-1 row —
+        // no workspace group rows remain.
+        #expect(groupLabels(rows) == ["box · default"])
+        #expect(depths(rows) == [0, 1, 1])
+        // The automatic tab label (position) still rides nothing:
+        // both leaves carry no tab label.
+        #expect(rows.compactMap(\.tabLabel).isEmpty)
     }
 
     /// Two sessions under one Host also stop the merge at the Host row.
@@ -271,35 +283,137 @@ struct AgentTreeTests {
         #expect(depths(rows) == [0, 1, 2, 1, 2])
     }
 
-    /// Groups sort alphabetically by label (with the unique id as the
-    /// stable tiebreaker); leaves keep the supplied order, which is the
-    /// Console's `agent_panel_sort` sequence.
-    @Test func groupsSortAlphabeticallyWhileLeavesKeepSuppliedOrder() {
+    /// Below a Host, groups and leaves keep the herdr window's pane
+    /// order — the snapshot enumerates workspaces, tabs, and panes the
+    /// way the user arranged them — not alphabetical label order. The
+    /// user reads the herdr panes left-to-right as canonical; the tree
+    /// follows it. Agents without snapshot order (legacy/test shapes)
+    /// keep the supplied sequence.
+    @Test func groupsKeepTheHerdWindowPaneOrderNotAlphabetical() {
         let host = makeHost("box")
         let agents = [
-            agent(host: host, paneID: "z", status: .idle, workspace: "beta", tab: "2"),
-            agent(host: host, paneID: "y", status: .working, workspace: "beta", tab: "1"),
-            agent(host: host, paneID: "x", status: .idle, workspace: "alpha", tab: "1"),
-            agent(host: host, paneID: "w", status: .blocked, workspace: "beta", tab: "1"),
+            agent(host: host, paneID: "z", status: .idle, workspace: "beta", tab: "2",
+                  snapshotOrder: 3),
+            agent(host: host, paneID: "y", status: .working, workspace: "beta", tab: "1",
+                  snapshotOrder: 1),
+            agent(host: host, paneID: "x", status: .idle, workspace: "alpha", tab: "1",
+                  snapshotOrder: 2),
+            agent(host: host, paneID: "w", status: .blocked, workspace: "beta", tab: "1",
+                  snapshotOrder: 0),
         ]
 
         let rows = AgentTree.rows(agents: agents, foldedIDs: [])
-        // The host row merges with "default" only; workspaces alpha < beta
-        // render as depth-1 rows. alpha's single-Agent tab absorbs into
-        // its Agent's row; beta's tab "1" holds two Agents and keeps its
-        // group row, while beta's single-Agent tab "2" absorbs.
-        #expect(groupLabels(rows) == ["box · default", "alpha", "beta", "1"])
-        #expect(depths(rows) == [0, 1, 2, 1, 2, 3, 3, 2])
-        // alpha's leaf (x) precedes beta's cluster; within beta's tab 1 the
-        // supplied order (y then w) survives — the Console sort owns it —
-        // and beta's tab 2 keeps z after them.
-        let leaves = rows.compactMap { row -> (paneID: String, tabLabel: String)? in
+        // The host row merges with "default" only; the workspaces keep
+        // window order (beta first — w's pane came first in the snapshot)
+        // instead of alphabetical (alpha < beta). beta's tab "1" holds
+        // two Agents and keeps its group row; beta's single-Agent tab
+        // "2" and alpha's single-Agent workspace absorb into their
+        // Agent's rows.
+        #expect(groupLabels(rows) == ["box · default", "beta", "1"])
+        // Merged depth-0 row; beta (depth 1); beta's tab "1" group row
+        // (depth 2) with its leaves (depth 3) in pane order — w's pane
+        // preceded y's, so w leads; beta's tab "2" leaf replaces its tab
+        // row at depth 2; alpha's absorbed leaf replaces its workspace
+        // row at depth 1.
+        #expect(depths(rows) == [0, 1, 2, 3, 3, 2, 1])
+        let leaves: [(paneID: String, tabLabel: String?)] = rows.compactMap { row in
             guard let agent = row.agent else { return nil }
-            return (agent.agent.paneID, row.tabLabel ?? "")
+            return (paneID: agent.agent.paneID, tabLabel: row.tabLabel)
         }
-        #expect(leaves.map(\.paneID) == ["x", "y", "w", "z"])
-        // Only the single-Agent tabs' leaves carry their tab label.
-        #expect(leaves.map(\.tabLabel) == ["1", "", "", "2"])
+        #expect(leaves.map(\.paneID) == ["w", "y", "z", "x"])
+        // The single-Agent tab's leaf carries its tab label ("2"); the
+        // absorbed alpha workspace's leaf carries its named tab ("1").
+        // beta's two-Agent tab names itself in its group row.
+        #expect(leaves.map(\.tabLabel) == [nil, nil, "2", "1"])
+    }
+
+    /// Leaves within one tab follow the pane's reading position — rows
+    /// top-to-bottom, then left-to-right — exactly the way the herdr
+    /// window lays its panes out. The snapshot's collection order follows
+    /// pane CREATION order, which diverges once the user splits: p7
+    /// (created first, bottom-left) must render after p1 (created later,
+    /// top-left). This pins the bug where the tree showed agents in
+    /// snapshot/creation order instead of window order.
+    @Test func leavesFollowPaneGeometryNotSnapshotOrderWithinATab() {
+        let host = makeHost("devbox")
+        let agents = [
+            agent(host: host, paneID: "wA:p7", status: .done, workspace: "SS",
+                  tab: "Dynamic States", workspaceTabCount: 2, tabPosition: 1,
+                  snapshotOrder: 0, paneOrder: 1),
+            agent(host: host, paneID: "wA:p1", status: .idle, workspace: "SS",
+                  tab: "Dynamic States", workspaceTabCount: 2, tabPosition: 1,
+                  snapshotOrder: 1, paneOrder: 0),
+        ]
+
+        let rows = AgentTree.rows(agents: agents, foldedIDs: [])
+        // Both agents share the session, workspace, and tab, so the tree
+        // is the merged host row plus the tab's two leaves — and p1 (the
+        // top-left pane) precedes p7 (bottom-left) despite p7 coming
+        // first in the snapshot's agent collection.
+        #expect(groupLabels(rows) == ["devbox · default · SS · Dynamic States"])
+        #expect(
+            rows.compactMap(\.agent).map(\.agent.paneID) == ["wA:p1", "wA:p7"])
+    }
+
+    /// The real devbox shape (captured from `herdr api snapshot` on
+    /// jhou-pc): one default session, four workspaces — "SS" and
+    /// "Review" holding multiple one-agent tabs, "Omarchy" and "Inbox"
+    /// holding exactly one agent each. The single-agent workspaces
+    /// rendered as separate group rows over one leaf (the reported
+    /// "chain collapse not engaging on the devbox host"), while the Mac
+    /// host — whose workspaces all hold multiple tabs — collapsed fine.
+    /// The absorption of a single-visible-leaf chain must apply at any
+    /// grouping level, so identical shapes collapse identically
+    /// regardless of host.
+    @Test func devboxSingleAgentWorkspacesCollapseLikeSingleAgentTabs() {
+        let host = makeHost("jhou-pc")
+        let agents = [
+            // wA "SS": five one-agent tabs; two suffice to prove the
+            // multi-tab workspace keeps its group row and its tabs
+            // absorb into their Agent rows in window order.
+            agent(host: host, paneID: "wA:p7", status: .done, workspace: "SS",
+                  tab: "Dynamic States", workspaceTabCount: 5, tabPosition: 1,
+                  snapshotOrder: 0),
+            agent(host: host, paneID: "wA:pM", status: .idle, workspace: "SS",
+                  tab: "Eval error", workspaceTabCount: 5, tabPosition: 2,
+                  snapshotOrder: 1),
+            // wD "Omarchy": exactly one agent — the no-collapse shape.
+            agent(host: host, paneID: "wD:pA", status: .idle, workspace: "Omarchy",
+                  tab: "Omaice", workspaceTabCount: 1, tabPosition: 1,
+                  snapshotOrder: 7),
+            // wE "Inbox": exactly one agent — same shape again.
+            agent(host: host, paneID: "wE:p1", status: .idle, workspace: "Inbox",
+                  tab: "Inbox", workspaceTabCount: 1, tabPosition: 1,
+                  snapshotOrder: 8),
+        ]
+        let rows = AgentTree.rows(agents: agents, foldedIDs: [])
+        // Depth-0 merged host row ("default" session), then the three
+        // workspaces in window order: SS keeps its group row (multiple
+        // tabs), while Omarchy and Inbox — one visible leaf each —
+        // absorb into their Agent's rows at workspace depth, exactly
+        // like a one-agent tab always has. No group row may stand over
+        // a single leaf.
+        #expect(groupLabels(rows) == ["jhou-pc · default", "SS"])
+        #expect(depths(rows) == [0, 1, 2, 2, 1, 1])
+        // SS's two one-agent tabs absorb into their Agent rows (depth
+        // 2) in window order; Omarchy's and Inbox's absorbed leaves sit
+        // at workspace depth (1), replacing the group rows that used to
+        // stand over them.
+        let leaves: [(paneID: String, tabLabel: String?)] = rows.compactMap { row in
+            guard let agent = row.agent else { return nil }
+            return (paneID: agent.agent.paneID, tabLabel: row.tabLabel)
+        }
+        #expect(leaves.map(\.paneID) == ["wA:p7", "wA:pM", "wD:pA", "wE:p1"])
+        // The absorbed workspace leaves keep their named tab labels —
+        // "Omaice" and "Inbox" still ride the rows.
+        #expect(leaves.map(\.tabLabel) == [
+            "Dynamic States", "Eval error", "Omaice", "Inbox"])
+        // No group row stands over a single leaf.
+        for row in rows {
+            if case .group(_, _, _, let count, _, _) = row {
+                #expect(count >= 2)
+            }
+        }
     }
 
     /// Empty hosts render as foldable depth-0 stubs; the stub keeps the
