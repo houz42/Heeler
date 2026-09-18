@@ -591,6 +591,21 @@ struct RemoteDirectoryListing: Sendable, Equatable {
     let truncated: Bool
 }
 
+/// One entry of a full remote directory listing.
+struct RemoteDirectoryEntry: Sendable, Equatable {
+    let name: String
+    let isDirectory: Bool
+}
+
+/// Full-contents listing of one remote directory: regular files and
+/// subdirectories alike, each tagged, for the composer's dynamic
+/// slash-command discovery (skills are directories, command files are
+/// markdown files, so a directories-only listing cannot serve both).
+struct RemoteDirectoryContents: Sendable, Equatable {
+    let entries: [RemoteDirectoryEntry]
+    let truncated: Bool
+}
+
 /// A coding agent process running inside a herdr Pane.
 ///
 /// The domain view of the generated wire type `AgentInfo`: only the fields

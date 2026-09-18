@@ -111,3 +111,42 @@ public struct SSHSFTPDirectoryListing: Sendable, Equatable {
         self.truncated = truncated
     }
 }
+
+/// Full-contents result of listing one remote directory: directories and
+/// regular files alike, each tagged. The composer's dynamic slash-command
+/// discovery needs file names (commands are `<name>.md` files, not
+/// directories), which `SSHSFTPDirectoryListing` deliberately drops.
+public struct SSHSFTPDirectoryContents: Sendable, Equatable {
+    /// Hard cap on surfaced entries: bounded command/skill discovery, not
+    /// an unbounded remote walk.
+    public static let maximumEntries = 500
+
+    public let entries: [SSHSFTPDirectoryEntry]
+    public let truncated: Bool
+
+    public init(entries: [SSHSFTPDirectoryEntry], truncated: Bool) {
+        self.entries = entries
+        self.truncated = truncated
+    }
+
+    /// Keeps every entry except `.` and `..`, sorts by name, and caps at
+    /// `maximumEntries`. Unlike `SSHSFTPDirectoryListing`'s filter this
+    /// keeps regular files and dot-directories alike; callers apply their
+    /// own name filters.
+    public init(rawEntries: [(name: String, isDirectory: Bool)]) {
+        var kept: [SSHSFTPDirectoryEntry] = []
+        var truncated = false
+        for raw in rawEntries {
+            guard raw.name != ".", raw.name != ".." else { continue }
+            if kept.count == Self.maximumEntries {
+                truncated = true
+                break
+            }
+            kept.append(
+                SSHSFTPDirectoryEntry(
+                    name: raw.name, isDirectory: raw.isDirectory))
+        }
+        self.entries = kept.sorted { $0.name < $1.name }
+        self.truncated = truncated
+    }
+}

@@ -1498,6 +1498,54 @@ actor SessionDriver {
         }
     }
 
+    /// Lists every entry of one remote directory (files included), for the
+    /// composer's dynamic slash-command discovery. A missing directory
+    /// surfaces as a path-free `SSHError.sftpFailure` (the no-such-file
+    /// status). Same readdir loop as `listSFTPDirectories`, differing only
+    /// in what the surfaced listing keeps.
+    func listSFTPEntries(
+        id: UInt64,
+        path: String,
+        timeout: Duration
+    ) async throws -> SSHSFTPDirectoryContents {
+        guard Self.isValidSFTPPath(path) else { throw SSHError.channelFailed }
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        return try await withSFTPUse(id: id, deadline: deadline) {
+            guard
+                let dirID = try await openSFTPDirIfPresent(
+                    sftpID: id,
+                    path: path,
+                    deadline: deadline)
+            else {
+                throw SSHError.sftpFailure(
+                    status: UInt64(LIBSSH2_FX_NO_SUCH_FILE))
+            }
+            do {
+                var rawEntries: [(name: String, isDirectory: Bool)] = []
+                while
+                    let entry = try await readSFTPDirEntry(
+                        sftpID: id,
+                        fileID: dirID,
+                        deadline: deadline)
+                {
+                    rawEntries.append((entry.name, entry.isDirectory))
+                }
+                try await closeSFTPFileWithinUse(
+                    sftpID: id,
+                    fileID: dirID,
+                    timeout: timeout)
+                return SSHSFTPDirectoryContents(rawEntries: rawEntries)
+            } catch {
+                try? await closeSFTPFileWithinUse(
+                    sftpID: id,
+                    fileID: dirID,
+                    timeout: .seconds(2))
+                throw normalize(error)
+            }
+        }
+    }
+
+
     private func openSFTPDirIfPresent(
         sftpID: UInt64,
         path: String,

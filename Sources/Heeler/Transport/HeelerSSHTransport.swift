@@ -1184,6 +1184,36 @@ actor HeelerSSHTransport: Transport {
         }
     }
 
+    /// Full-contents listing of one absolute quotable remote path (files
+    /// and directories), for the composer's dynamic slash-command
+    /// discovery: skills are `<name>/SKILL.md` directories and commands
+    /// are `<name>.md` files, so a directories-only listing cannot see
+    /// either surface. Same path rule and per-call SFTP channel lifecycle
+    /// as `listDirectories`.
+    func listDirectoryEntries(at path: String) async throws -> RemoteDirectoryContents {
+        guard Self.validatedDirectoryPath(path) != nil else {
+            throw TransportError.invalidDirectoryPath(path: path)
+        }
+        return try await channelAdmission.withChannel(.ordinarySession) {
+            let sftp = try await self.connection.openSFTP(
+                timeout: self.requestTimeout)
+            do {
+                let contents = try await sftp.listDirectoryEntries(
+                    at: path,
+                    timeout: self.requestTimeout)
+                try? await sftp.close(timeout: .seconds(2))
+                return RemoteDirectoryContents(
+                    entries: contents.entries.map {
+                        RemoteDirectoryEntry(name: $0.name, isDirectory: $0.isDirectory)
+                    },
+                    truncated: contents.truncated)
+            } catch {
+                try? await sftp.close(timeout: .seconds(2))
+                throw error
+            }
+        }
+    }
+
     /// The path when it is absolute and quotable for the Host's login
     /// shell, nil otherwise. `RemoteShellPath` refuses empty and relative
     /// paths plus quote, backslash, and control characters; NUL (`\0`)
