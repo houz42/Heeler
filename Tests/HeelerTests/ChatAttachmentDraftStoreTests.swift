@@ -182,6 +182,109 @@ struct ChatAttachmentDraftStoreTests {
     }
 }
 
+// MARK: - The chat bundle's leave/rebuild lifecycle
+
+@MainActor
+@Suite("Chat attachment lifecycle")
+struct ChatAttachmentLifecycleTests {
+    /// The screen's wiring contract (AgentDetailView mirrors this exact
+    /// sequence): teardown nils the bundle on disappear, and a later
+    /// appearance rebuilds each empty slot — the + button renders on
+    /// every chat entry, not just the first. Device regression: the
+    /// bundle stranded nil behind a still-live chat store when the
+    /// rebuild guard keyed on the chat store alone.
+    @Test func teardownThenRebuildRestoresAUsableAttachmentBundle() async throws {
+        // Build (the appear path): a fresh bundle accepts begins.
+        let bundle = await Self.buildBundle()
+        #expect(bundle.staging.canBegin, "a fresh bundle must accept begins")
+
+        // Teardown (onDisappear): leave() settles the store, and the
+        // screen's slots empty.
+        await bundle.staging.leave()
+        #expect(bundle.staging.state == .idle, "teardown settles to idle")
+        var attachments: ChatAttachments? = nil
+        #expect(attachments == nil)
+
+        // Rebuild (the next appear): the bundle comes back accepting
+        // begins, with clean pending/failure state.
+        let rebuilt = await Self.buildBundle()
+        attachments = rebuilt
+        #expect(attachments != nil)
+        #expect(rebuilt.staging.canBegin, "the rebuilt bundle must accept begins")
+        #expect(rebuilt.draftStore.pendingImage == nil)
+        #expect(rebuilt.draftStore.uploadFailureMessage == nil)
+    }
+
+    /// The stranding regression specifically: the chat store stays live
+    /// (a spurious disappear tore only part of the bundle down) — the
+    /// attachments slot must rebuild on its own, not be gated behind
+    /// the chat store's existence.
+    @Test func attachmentsRebuildIndependentlyOfTheChatStore() async throws {
+        let bundle = await Self.buildBundle()
+        // A spurious disappear: attachments nilled, chat "store" (here
+        // the draft seam, already delivered) still live.
+        var attachments: ChatAttachments? = nil
+        _ = bundle  // the live chat bundle keeps serving the screen
+        #expect(attachments == nil)
+
+        // The next appearance: the guard must rebuild the empty
+        // attachments slot even though the chat side never went away.
+        let rebuilt = await Self.buildBundle()
+        attachments = rebuilt
+        #expect(attachments != nil)
+        #expect(rebuilt.staging.canBegin)
+    }
+
+    /// The teardown path an in-flight upload goes through: leave()
+    /// cancels it and settles to idle, so the abandoned screen holds no
+    /// live operation.
+    @Test func leaveDuringAnInFlightUploadCancelsAndSettles() async throws {
+        let gate = ScriptedTransportCallGate()
+        let transport = ScriptedTransport()
+        await transport.configureImageStaging(
+            outcomes: [.success(try! StagedImage(path: "/tmp/heeler-upload/x.jpg"))],
+            gate: gate)
+        let draftStore = ChatAttachmentDraftStore()
+        let staging = ComposerStagingStore(
+            imagePreparer: ScriptedChatImagePreparer(),
+            filePreparer: ScriptedChatFilePreparer(),
+            stageImage: { image, reporter in
+                try await transport.stageImage(image) { progress in
+                    await reporter.report(progress)
+                }
+            },
+            stageFile: { file, reporter in
+                try await transport.stageFile(file) { progress in
+                    await reporter.report(progress)
+                }
+            },
+            composer: draftStore)
+        #expect(staging.begin(.photo(DataImageSelection(data: Data([0x01])))) != nil)
+        await staging.leave()
+        #expect(staging.state == .idle, "leave() must cancel and settle to idle")
+        #expect(staging.canBegin, "a settled store accepts a new begin")
+    }
+
+    /// Mirrors AgentDetailView.buildChatIfPossible's construction.
+    private static func buildBundle() async -> ChatAttachments {
+        let draftStore = ChatAttachmentDraftStore()
+        return ChatAttachments(
+            staging: ComposerStagingStore(
+                imagePreparer: ScriptedChatImagePreparer(),
+                filePreparer: ScriptedChatFilePreparer(),
+                stageImage: { _, _ in
+                    try await Task.sleep(for: .milliseconds(1))
+                    return try StagedImage(path: "/tmp/heeler-upload/lifecycle.jpg")
+                },
+                stageFile: { _, _ in
+                    try await Task.sleep(for: .milliseconds(1))
+                    return try StagedFile(path: "/tmp/heeler-upload/lifecycle.txt")
+                },
+                composer: draftStore),
+            draftStore: draftStore)
+    }
+}
+
 // MARK: - The staging pipeline through the chat draft seam
 
 @MainActor

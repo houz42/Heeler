@@ -278,29 +278,36 @@ struct AgentDetailView: View {
 
     /// Builds and starts the chat store + input router when the agent's
     /// session is a readable transcript path. Idempotent: re-entry with a
-    /// live store is a no-op. Called from the agent-identity task and from
-    /// late arrival of the session path / a manual switch to the chat
-    /// surface, so agents whose integration registers after first render
-    //  still get a chat.
+    /// live store is a no-op. Called from the agent-identity task, the
+    /// appear hook (a spurious onDisappear can strand a torn-down bundle
+    /// while the view stays mounted — the rebuild must not depend on the
+    /// .task identity race), and from late arrival of the session path /
+    /// a manual switch to the chat surface, so agents whose integration
+    /// registers after first render still get a chat.
     private func buildChatIfPossible() async {
-        guard chat == nil,
-            agent.agent.agentSession?.kind == AgentSessionRefKind.path
-        else { return }
+        guard agent.agent.agentSession?.kind == AgentSessionRefKind.path else { return }
+        // Self-healing: `onDisappear` tears the chat bundle down (its
+        // poll loop and any in-flight upload must not outlive the
+        // detail view), and a later appearance rebuilds ALL of it. A
+        // guard on `chat == nil` alone could strand a nilled
+        // attachments bundle behind a still-live chat store if the
+        // disappear was spurious; each piece rebuilds when its own
+        // slot is empty.
+        if chatAttachments == nil {
+            let draftStore = ChatAttachmentDraftStore()
+            chatAttachments = ChatAttachments(
+                staging: ComposerStagingStore(
+                    stageImage: console.imageStager(for: agent.hostID),
+                    stageFile: console.fileStager(for: agent.hostID),
+                    composer: draftStore),
+                draftStore: draftStore)
+        }
+        guard chat == nil else { return }
         let store = ChatStore(
             hostID: agent.hostID,
             paneID: agent.agent.paneID,
             reader: .console(console, hostID: agent.hostID))
         chat = store
-        // The chat input's attachment bundle: the same staging pipeline
-        // the terminal Composer rides (ImagePreparer → SFTP upload →
-        // path reference), with the chat surface's own draft seam.
-        let draftStore = ChatAttachmentDraftStore()
-        chatAttachments = ChatAttachments(
-            staging: ComposerStagingStore(
-                stageImage: console.imageStager(for: agent.hostID),
-                stageFile: console.fileStager(for: agent.hostID),
-                composer: draftStore),
-            draftStore: draftStore)
         // The chat input's router: / # @ ! classification + plain delivery
         // through agent.prompt. The scratch-shell pane for ! is created
         // lazily on first use by the store.
@@ -458,6 +465,11 @@ struct AgentDetailView: View {
         .onAppear {
             hasAppeared = true
             updateFocus()
+            // Re-entry rebuild: onDisappear tore the chat bundle down
+            // (spurious or not), and a remounted view's .task can race
+            // identity reuse — the appear hook is the reliable trigger.
+            // Idempotent: live pieces stay.
+            Task { await buildChatIfPossible() }
         }
         .onChange(of: focusViewingState) {
             updateFocus()
