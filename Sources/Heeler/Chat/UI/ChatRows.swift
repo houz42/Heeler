@@ -558,25 +558,37 @@ struct ChatBubbleFocusLayer: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
+                // The veil covers edge to edge (its own ignore of the
+                // safe areas); the content column respects them, so the
+                // pill and menu sit inside the reachable screen.
                 veil
                 VStack(alignment: isUser ? .trailing : .leading, spacing: 8) {
                     reactionPill
-                    ChatBubbleBody(
-                        bubble: bubble, router: router, selectable: selectsText)
-                        .frame(
-                            maxWidth: geo.size.width * 0.78, alignment: .leading)
-                        .scaleEffect(1.03)
-                        .shadow(color: .black.opacity(0.25), radius: 18, y: 8)
+                    // The lifted bubble clamps to the space the pill and
+                    // menu leave, and scrolls when it is taller than
+                    // that — so the pill stays pinned under the top
+                    // inset and the menu above the bottom, reachable
+                    // regardless of message height (iMessage behavior).
+                    ScrollView {
+                        ChatBubbleBody(
+                            bubble: bubble, router: router,
+                            selectable: selectsText)
+                            .frame(
+                                maxWidth: geo.size.width * 0.78,
+                                alignment: .leading)
+                            .scaleEffect(1.03)
+                            .shadow(color: .black.opacity(0.25), radius: 18, y: 8)
+                    }
+                    .scrollBounceBehavior(.basedOnSize)
+                    .frame(maxHeight: .infinity)
                     actionMenu
                 }
+                .padding(12)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .ignoresSafeArea()
     }
 
-    /// The blurred, dimmed backdrop. A light veil in light mode (iMessage
-    /// whites the background out), a dark one in dark mode. Taps dismiss.
     private var veil: some View {
         Rectangle()
             .fill(.ultraThinMaterial)
@@ -584,6 +596,7 @@ struct ChatBubbleFocusLayer: View {
                 Rectangle().fill(
                     Color(white: isDark ? 0 : 1)
                         .opacity(isDark ? 0.55 : 0.35)))
+            .ignoresSafeArea()
             .onTapGesture(perform: dismiss)
     }
 
