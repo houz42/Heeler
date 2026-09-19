@@ -180,6 +180,76 @@ struct ChatAttachmentDraftStoreTests {
         #expect(intent.attachesImage)
         #expect(intent.imageData == Data([0x01]))
     }
+
+    // MARK: - The Send composition contract (ChatScreen.sendDraft mirrors this)
+
+    @Test func sendComposesThePathAheadOfTheDraftBeforeRouting() async throws {
+        // Device regression (11d32f2): the router saw the RAW draft,
+        // so an image-only paste submitted "" — an empty prompt
+        // delivered, no message arrived, and the UI cleared as if
+        // success. The send must compose the full message text
+        // BEFORE routing and deliver exactly what was composed.
+        let store = ChatAttachmentDraftStore()
+        store.holdPendingImage(path: "/tmp/heeler.k1/stage-u/pic.jpg")
+
+        // The image-only paste: draft emptied by removePathFromDraft.
+        let composed = store.messageText(forDraft: "")
+        #expect(composed == "/tmp/heeler.k1/stage-u/pic.jpg ")
+
+        // The router must classify the COMPOSED text: a leading path
+        // is not a chat slash command the user typed. "tmp/heeler.k1/
+        // stage-u/pic.jpg" is not a known command, so an omp passthrough
+        // is expected — but the classification must never see "".
+        #expect(!composed.isEmpty)
+        let router = ComposerRouterStore(dependencies: makeChatDependencies())
+        let outcome = await router.submit(composed)
+        #expect(outcome == .passthrough, "a path-only message routes as plain delivery")
+        #expect(composed == store.messageText(forDraft: ""))
+    }
+
+    @Test func aDeliveryFailureSurfacesAndRetainsDraftAndChip() {
+        // The other half of the device regression: the catch swallowed
+        // delivery errors, clearing the draft as if success. The
+        // contract: a failed delivery keeps the draft AND the pending
+        // image, and the error lands in the same row staging failures
+        // use.
+        let store = ChatAttachmentDraftStore()
+        store.applyEditorDraft("what is this?", selection: NSRange(location: 13, length: 0))
+        store.holdPendingImage(path: "/tmp/heeler.k1/stage-u/pic.jpg")
+
+        // A delivery failure (the screen records it; nothing clears).
+        store.recordUploadFailure("Couldn't send the message: The Host is not connected.")
+        #expect(
+            store.uploadFailureMessage?.contains("not connected") == true)
+        // The retry payload is intact: draft, chip, and composition.
+        #expect(store.draft == "what is this?")
+        #expect(store.pendingImage?.remotePath == "/tmp/heeler.k1/stage-u/pic.jpg")
+        #expect(
+            store.messageText(forDraft: store.draft)
+                == "/tmp/heeler.k1/stage-u/pic.jpg what is this?")
+
+        // A successful retry clears the failure and the chip together.
+        store.clearUploadFailure()
+        store.clearPendingImage()
+        store.replaceDraft(with: "")
+        #expect(store.uploadFailureMessage == nil)
+        #expect(store.messageText(forDraft: "") == "")
+    }
+}
+
+private func makeChatDependencies() -> ComposerRouterStore.Dependencies {
+    ComposerRouterStore.Dependencies(
+        hostID: UUID(),
+        paneID: "wA:p1",
+        levelStore: ChatDetailLevelStore(
+            defaults: UserDefaults(suiteName: "ChatAttachmentDraftStoreTests.\(UUID().uuidString)")
+                ?? .standard),
+        resolveAgent: { _ in nil },
+        deliverMention: { _, _ in },
+        bashIO: ComposerBashIO(
+            createScratchPane: { _ in "scratch" },
+            sendText: { _, _, _ in },
+            readPaneText: { _, _ in "" }))
 }
 
 // MARK: - The chat bundle's leave/rebuild lifecycle
