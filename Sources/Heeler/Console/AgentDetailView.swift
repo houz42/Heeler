@@ -336,6 +336,14 @@ struct AgentDetailView: View {
                     try await console.promptAgent(
                         AgentPromptParams(target: agent.agent.paneID, text: text),
                         on: agent.hostID)
+                },
+                // The pending-question answer channel: a blocked agent
+                // refuses agent.prompt (`agent_blocked`), and omp's ask
+                // dialog is arrow-key driven — the card's taps send the
+                // selection keys (down × steps, enter) via agent.send_keys.
+                sendAnswerKey: { key in
+                    try await console.sendAgentKeys(
+                        agent.agent.paneID, key: key, on: agent.hostID)
                 })
         } else {
             ChatUnavailablePlaceholder()
