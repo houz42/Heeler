@@ -138,7 +138,12 @@ struct HostListView: View {
                                     host: host,
                                     connectionStatus: connectionStatuses[host.id],
                                     standingFailure: standingFailures[host.id],
-                                    latency: latencies[host.id])
+                                    latency: latencies[host.id],
+                                    isRetryInFlight: manualReconnectInFlightHostIDs
+                                        .contains(host.id),
+                                    retryConnection: retryConnection.map { retry in
+                                        { await retry(host.id) }
+                                    })
                             }
                         }
                         .onDelete(perform: removeHosts)
@@ -335,6 +340,34 @@ private struct HostRow: View {
     let connectionStatus: EventsSessionStatus?
     let standingFailure: TransportError?
     let latency: Duration?
+    let isRetryInFlight: Bool
+    let retryConnection: (@MainActor @Sendable () async -> Void)?
+
+    init(
+        host: Host,
+        connectionStatus: EventsSessionStatus?,
+        standingFailure: TransportError?,
+        latency: Duration?,
+        isRetryInFlight: Bool = false,
+        retryConnection: (@MainActor @Sendable () async -> Void)? = nil
+    ) {
+        self.host = host
+        self.connectionStatus = connectionStatus
+        self.standingFailure = standingFailure
+        self.latency = latency
+        self.isRetryInFlight = isRetryInFlight
+        self.retryConnection = retryConnection
+    }
+
+    /// Terminal stopped-auto-retry state: failed, or connecting while a
+    /// standing failure is being served. Retry offers exactly one dial.
+    private var isRetryable: Bool {
+        switch connectionStatus {
+        case .failed: retryConnection != nil
+        case .connecting: standingFailure != nil && retryConnection != nil
+        default: false
+        }
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -347,6 +380,24 @@ private struct HostRow: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
+            if isRetryable {
+                Button {
+                    Task { await retryConnection?() }
+                } label: {
+                    if isRetryInFlight {
+                        ProgressView()
+                    } else {
+                        Label("Retry", systemImage: "arrow.clockwise")
+                            .labelStyle(.titleAndIcon)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .tint(.orange)
+                .disabled(isRetryInFlight)
+                .accessibilityLabel("Retry connecting to \(host.displayAliasName)")
+            }
             HostConnectionIndicator(
                 presentation: HostConnectionPresentation(
                     status: connectionStatus,
