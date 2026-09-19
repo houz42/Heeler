@@ -418,6 +418,16 @@ final class ConsoleStore {
         }
     }
 
+    /// Sends one key name to an Agent (`agent.send_keys`) — the answer
+    /// channel for a blocked agent's ask dialog, which refuses
+    /// `agent.prompt` input.
+    func sendAgentKeys(_ paneID: String, key: String, on hostID: Host.ID) async throws {
+        try await projection(for: hostID).session.withTransport { transport in
+            try await transport.sendAgentKeys(
+                AgentSendKeysParams(keys: [key], target: paneID))
+        }
+    }
+
     /// Sessions/Hosts blending (Phase 5): the local herdr sessions visible
     /// on a Host's machine, read over its live Console connection. A
     /// connected Host that fails the probe reports the error; an

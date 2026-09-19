@@ -79,6 +79,10 @@ final actor ScriptedTransport: Transport {
     private var nextPaneReadGate: ScriptedTransportCallGate?
     private var agentPromptFailure: (any Error)?
     private var nextAgentPromptGate: ScriptedTransportCallGate?
+    /// Every `agent.send_keys` received, in order; the pending-answer
+    /// delivery tests assert on the key sequences the card sent.
+    private(set) var agentKeyParams: [AgentSendKeysParams] = []
+    private var agentKeyFailure: (any Error)?
     private var missingPaneIDs: Set<String> = []
     private var nextStreamID: UInt64 = 0
     private var liveStreamID: UInt64?
@@ -164,6 +168,11 @@ final actor ScriptedTransport: Transport {
     /// Makes every subsequent `promptAgent` throw `failure`.
     func setAgentPromptFailure(_ failure: (any Error)?) {
         agentPromptFailure = failure
+    }
+
+    /// Makes every subsequent `agent.send_keys` throw `failure`.
+    func setAgentKeyFailure(_ failure: (any Error)?) {
+        agentKeyFailure = failure
     }
 
     /// Pauses the next Agent prompt after recording its params.
@@ -462,7 +471,11 @@ final actor ScriptedTransport: Transport {
         return Agent(.fixture(paneID: params.target, status: .working))
     }
 
-    func sendAgentKeys(_: AgentSendKeysParams) async throws {}
+    func sendAgentKeys(_ params: AgentSendKeysParams) async throws {
+        agentKeyParams.append(params)
+        if let agentKeyFailure { throw agentKeyFailure }
+    }
+
 
     func startAgent(_ request: AgentLaunchRequest) async throws -> Agent {
         agentStarts.append(request)

@@ -26,8 +26,16 @@ internal struct ChatContent: Sendable, Equatable {
 
 /// The pending-question answer seam: one store per chat surface, holding
 /// the locally chosen answers (optimistic state until the transcript's
-/// own `ask` result record lands) and delivering a chosen option's label
-/// to the agent exactly once.
+/// own `ask` result record lands) and delivering a chosen option to the
+/// agent's terminal dialog exactly once.
+///
+/// The delivery channel is KEYS, not agent.prompt: a blocked agent is
+/// blocked precisely because it waits on the ask dialog, and herdr's
+/// agent.prompt REFUSES blocked agents (`agent_blocked`). omp's dialog is
+/// arrow-key driven (verified against a live blocked agent: plain typed
+/// text opens a NOTE for the highlighted option; ↓ + Enter selects), so
+/// an answer is the question's `selectionKeys` sequence, one key per
+/// send, through the pane/agent key channel.
 ///
 /// Pure @MainActor class with injected dependencies — no network, no
 /// SwiftUI — so the tap → deliver → answered transition is unit-testable
@@ -37,9 +45,9 @@ internal struct ChatContent: Sendable, Equatable {
 final class PendingAnswerDelivery {
     /// How one answer attempt ended.
     enum Outcome: Equatable {
-        /// The option's label was delivered to the agent; the interaction
-        /// is now answered (locally optimistic — the transcript's `ask`
-        /// result record confirms it on the next poll).
+        /// The option's keys were delivered to the agent's dialog; the
+        /// interaction is now answered (locally optimistic — the
+        /// transcript's `ask` result record confirms it on the next poll).
         case delivered
         /// Delivery threw: the interaction stays answerable and the card
         /// stays loud so the user can retry.
@@ -54,16 +62,17 @@ final class PendingAnswerDelivery {
     private(set) var deliveryErrors: [String: String] = [:]
     private(set) var localAnswers: [String: String] = [:]
     private var inFlight: Set<String> = []
-    private let deliver: (String) async throws -> Void
+    /// Sends one key name (e.g. "down", "enter") to the agent's pane.
+    private let sendKey: (_ key: String) async throws -> Void
     private let describeError: (any Error) -> String
 
     init(
-        deliver: @escaping (String) async throws -> Void,
+        sendKey: @escaping (_ key: String) async throws -> Void,
         describeError: @escaping (any Error) -> String = {
             ($0 as? LocalizedError)?.errorDescription ?? String(describing: $0)
         }
     ) {
-        self.deliver = deliver
+        self.sendKey = sendKey
         self.describeError = describeError
     }
 
@@ -87,10 +96,11 @@ final class PendingAnswerDelivery {
         deliveryErrors[interaction.id]
     }
 
-    /// Tapping an option: delivers the option's label once. A second tap
-    /// (or a tap on an already-answered question) is a no-op; a failed
-    /// delivery records the failure for the card to show and keeps the
-    /// question answerable.
+    /// Tapping an option: delivers the question's selection keys once,
+    /// one key at a time (the dialog moves its highlight per press). A
+    /// second tap (or a tap on an already-answered question) is a no-op;
+    /// a failed delivery records the failure for the card to show and
+    /// keeps the question answerable.
     @discardableResult
     func choose(
         _ option: PendingInteraction.Option, for interaction: PendingInteraction
@@ -102,7 +112,9 @@ final class PendingAnswerDelivery {
         deliveryErrors[interaction.id] = nil
         defer { inFlight.remove(interaction.id) }
         do {
-            try await deliver(option.label)
+            for key in interaction.selectionKeys(for: option) {
+                try await sendKey(key)
+            }
             localAnswers[interaction.id] = option.label
             return .delivered
         } catch {
@@ -141,6 +153,11 @@ struct ChatScreen: View {
     /// Delivers plain text to the agent (`agent.prompt` equivalent). Called
     /// only when the router returns `.passthrough`.
     var deliver: ((String) async throws -> Void)? = nil
+    /// Sends one key name (e.g. "down", "enter") to the agent's pane —
+    /// the pending-question answer channel (blocked agents refuse
+    /// agent.prompt; the ask dialog is arrow-key driven). nil = the
+    /// question card renders read-only.
+    var sendAnswerKey: ((_ key: String) async throws -> Void)? = nil
 
     @State private var level: DetailLevel
     init(
@@ -155,7 +172,8 @@ struct ChatScreen: View {
         loadOlder: (@Sendable () async -> Void)? = nil,
         stripAccessory: AnyView? = nil,
         router: ComposerRouterStore? = nil,
-        deliver: ((String) async throws -> Void)? = nil
+        deliver: ((String) async throws -> Void)? = nil,
+        sendAnswerKey: ((_ key: String) async throws -> Void)? = nil
     ) {
         self.paneID = paneID
         self.agentName = agentName
@@ -168,19 +186,20 @@ struct ChatScreen: View {
         self.stripAccessory = stripAccessory
         self.router = router
         self.deliver = deliver
+        self.sendAnswerKey = sendAnswerKey
         self._level = State(initialValue: initialLevel)
-        // Built in init, not on appear: the deliver closure is fixed at
- // construction (AgentDetailView passes console.promptAgent directly), so a
-        // tap on first render is already wired — no read-only window, and no
-        // dependence on a .task firing before the first tap.
-        if let deliver {
+        // Built in init, not on appear: the closures are fixed at
+        // construction, so a tap on first render is already wired — no
+        // read-only window, and no dependence on a .task firing before
+        // the first tap.
+        if let sendAnswerKey {
             _pendingAnswers = State(
-                initialValue: PendingAnswerDelivery(deliver: deliver))
+                initialValue: PendingAnswerDelivery(sendKey: sendAnswerKey))
         }
     }
 
     /// The pending-question answer store, built from the injected
-    /// `deliver` closure in init (nil deliver = read-only, previews).
+    /// `sendAnswerKey` closure in init (nil = read-only, previews).
     @State private var pendingAnswers: PendingAnswerDelivery?
 
     /// The pane's link-open router (Phase 4 openers): every detected

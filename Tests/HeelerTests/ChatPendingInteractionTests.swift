@@ -53,10 +53,22 @@ struct ChatPendingParserTests {
         #expect(interaction.question == "Run the tests?")
         #expect(
             interaction.options == [
-                PendingInteraction.Option(label: "Run them", description: "Runs the suite now."),
-                PendingInteraction.Option(label: "Skip", description: "Defers to CI."),
+                PendingInteraction.Option(label: "Run them", description: "Runs the suite now.", index: 0),
+                PendingInteraction.Option(label: "Skip", description: "Defers to CI.", index: 1),
             ])
+        #expect(interaction.recommendedIndex == 0)
         #expect(interaction.answer == nil)
+    }
+
+    @Test func recommendedIndexIsCarriedFromTheWire() throws {
+        // The live record's `recommended: 4` — the dialog's starting
+        // highlight — must survive parsing; answers key off it.
+        let line = askCallLine()
+            .replacingOccurrences(of: #""recommended":0"#, with: #""recommended":1"#)
+        let (messages, results) = OmpTranscriptParser.parse(lines: [line])
+        let pending = OmpTranscriptParser.askPendingInteractions(
+            messages: messages, toolResults: results)
+        #expect(try #require(pending.first).recommendedIndex == 1)
     }
 
     @Test func pairedAskResultAnswersTheInteraction() throws {
@@ -195,59 +207,94 @@ struct ChatPendingStoreTests {
 @Suite("Pending interactions: delivery seam")
 @MainActor
 struct ChatPendingDeliveryTests {
-    /// A deliver stub that records every delivered text, optionally
+    /// A key-channel stub that records every key sent, optionally
     /// throwing on demand. @unchecked Sendable under the @MainActor
     /// test isolation.
-    private final class DeliverSpy: @unchecked Sendable {
-        var delivered: [String] = []
+    private final class KeySpy: @unchecked Sendable {
+        var sent: [String] = []
         var error: (any Error)?
-        func deliver(_ text: String) async throws {
+        func send(_ key: String) async throws {
             if let error { throw error }
-            delivered.append(text)
+            sent.append(key)
         }
     }
 
-    private func interaction(
-        options: [PendingInteraction.Option] = [
-            PendingInteraction.Option(label: "Run them"),
-            PendingInteraction.Option(label: "Skip"),
-        ]
-    ) -> PendingInteraction {
-        PendingInteraction(id: "ask_0#q", question: "Run the tests?", options: options)
+    /// A question whose dialog highlights index 1 ("Skip") — exercising
+    /// the down-key arithmetic in both directions.
+    private func interaction() -> PendingInteraction {
+        PendingInteraction(
+            id: "ask_0#q", question: "Run the tests?",
+            options: [
+                PendingInteraction.Option(label: "Run them", index: 0),
+                PendingInteraction.Option(label: "Skip", index: 1),
+                PendingInteraction.Option(label: "Later", index: 2),
+            ],
+            recommendedIndex: 1)
     }
 
-    @Test func optionTapSendsTheOptionLabelExactlyOnce() async throws {
-        let spy = DeliverSpy()
-        let store = PendingAnswerDelivery(deliver: { text in try await spy.deliver(text) })
+    @Test func optionTapSendsTheSelectionKeySequenceExactlyOnce() async throws {
+        let spy = KeySpy()
+        let store = PendingAnswerDelivery(sendKey: { key in try await spy.send(key) })
         let pending = interaction()
-        let option = try #require(pending.options.first)
+
+        // An option ABOVE the highlight selects with Enter alone.
+        let top = try #require(pending.options.first)
+        let topOutcome = await store.choose(top, for: pending)
+        #expect(topOutcome == .delivered)
+        #expect(spy.sent == ["enter"])
+        #expect(store.answer(for: pending) == "Run them")
+
+        // A second tap on the answered question is a no-op — one
+        // selection per question, ever.
+        let second = await store.choose(top, for: pending)
+        #expect(second == .alreadyAnswered)
+        #expect(spy.sent == ["enter"])
+    }
+
+    @Test func optionBelowTheHighlightStepsDownThenEnters() async throws {
+        let spy = KeySpy()
+        let store = PendingAnswerDelivery(sendKey: { key in try await spy.send(key) })
+        let pending = interaction()
+
+        // "Later" is one step below the highlighted "Skip": down, enter.
+        try await store.choose(try #require(pending.options.last), for: pending)
+        #expect(spy.sent == ["down", "enter"])
+    }
+
+    @Test func selectionKeysMatchTheLiveDialogArithmetic() {
+        // Pinned against the live-verified behavior: the dialog opens
+        // highlighting `recommended`; N steps below needs exactly N
+        // downs before Enter, at-or-above needs Enter alone.
+        let pending = interaction()
+        #expect(pending.selectionKeys(for: pending.options[0]) == ["enter"])
+        #expect(pending.selectionKeys(for: pending.options[1]) == ["enter"])
+        #expect(pending.selectionKeys(for: pending.options[2]) == ["down", "enter"])
+    }
+
+    @Test func failedKeySendRollsBackSoTheQuestionStaysAnswerable() async throws {
+        let spy = KeySpy()
+        spy.error = CocoaError(.fileNoSuchFile)
+        let store = PendingAnswerDelivery(
+            sendKey: { key in try await spy.send(key) },
+            describeError: { _ in "offline" })
+        let pending = interaction()
+        let option = try #require(pending.options.last)
 
         let outcome = await store.choose(option, for: pending)
-        #expect(outcome == .delivered)
-        // The option's TEXT is what the agent receives (the brief's
-        // explicit choice; the demo agent matches on label).
-        #expect(spy.delivered == ["Run them"])
-
-        // A second tap on the same (now answered) interaction is a no-op.
-        let second = await store.choose(option, for: pending)
-        #expect(second == .alreadyAnswered)
-        #expect(spy.delivered.count == 1)
-    }
-
-    @Test func answeredStateIsExposedForRendering() async throws {
-        let spy = DeliverSpy()
-        let store = PendingAnswerDelivery(deliver: { text in try await spy.deliver(text) })
-        let pending = interaction()
+        #expect(outcome == .failed("offline"))
         #expect(store.answer(for: pending) == nil)
 
-        try await store.choose(try #require(pending.options.last), for: pending)
-        #expect(store.answer(for: pending) == "Skip")
+        // Retry after the failure delivers exactly once when it
+        // succeeds.
+        spy.error = nil
+        let retry = await store.choose(option, for: pending)
+        #expect(retry == .delivered)
+        #expect(spy.sent == ["down", "enter"])
     }
 
     @Test func transcriptAnswerIsAnswerEvenBeforeAnyTap() {
         // The transcript's own answer record wins without any local state.
-        let spy = DeliverSpy()
-        let store = PendingAnswerDelivery(deliver: { text in try await spy.deliver(text) })
+        let store = PendingAnswerDelivery(sendKey: { _ in })
         let answered = PendingInteraction(
             id: "ask_1#q", question: "Run the tests?",
             options: [PendingInteraction.Option(label: "Run them")],
@@ -255,62 +302,28 @@ struct ChatPendingDeliveryTests {
         #expect(store.answer(for: answered) == "Run them")
     }
 
-    @Test func failedDeliveryRollsBackSoTheQuestionStaysAnswerable() async throws {
-        let spy = DeliverSpy()
-        spy.error = CocoaError(.fileNoSuchFile)
-        let store = PendingAnswerDelivery(
-            deliver: { text in try await spy.deliver(text) },
-            describeError: { _ in "offline" })
-        let pending = interaction()
-        let option = try #require(pending.options.first)
-
-        let outcome = await store.choose(option, for: pending)
-        #expect(outcome == .failed("offline"))
-        #expect(store.answer(for: pending) == nil)
-
-        // Retry after the failure delivers exactly once when it succeeds.
-        spy.error = nil
-        let retry = await store.choose(option, for: pending)
-        #expect(retry == .delivered)
-        #expect(spy.delivered == ["Run them"])
-    }
-
     @Test func otherOptionsStayAnswerableUntilOneIsChosen() async throws {
         // Tapping option A answers; tapping option B afterwards must NOT
-        // deliver — the question is answered.
-        let spy = DeliverSpy()
-        let store = PendingAnswerDelivery(deliver: { text in try await spy.deliver(text) })
+        // send more keys — the question is answered.
+        let spy = KeySpy()
+        let store = PendingAnswerDelivery(sendKey: { key in try await spy.send(key) })
         let pending = interaction()
 
         try await store.choose(try #require(pending.options.first), for: pending)
         let outcome = await store.choose(
             try #require(pending.options.last), for: pending)
         #expect(outcome == .alreadyAnswered)
-        #expect(spy.delivered == ["Run them"])
+        #expect(spy.sent == ["enter"])
     }
 
-    @Test func concurrentDoubleTapDeliversOnce() async throws {
-        // Two taps racing on the same interaction: the in-flight guard
-        // means only one delivery lands.
-        let spy = DeliverSpy()
-        let store = PendingAnswerDelivery(deliver: { text in try await spy.deliver(text) })
-        let pending = interaction()
-        let option = try #require(pending.options.first)
-
-        async let first = store.choose(option, for: pending)
-        async let second = store.choose(option, for: pending)
-        let (a, b) = await (first, second)
-        #expect([a, b].contains(.delivered))
-        #expect(spy.delivered.count == 1)
-    }
     @Test func failedDeliveryIsVisibleAndRetrySucceeds() async throws {
         // A failed tap must not roll back silently: the failure message is
         // exposed for the card to render, and retry after the failure
         // clears it.
-        let spy = DeliverSpy()
+        let spy = KeySpy()
         spy.error = CocoaError(.fileNoSuchFile)
         let store = PendingAnswerDelivery(
-            deliver: { text in try await spy.deliver(text) },
+            sendKey: { key in try await spy.send(key) },
             describeError: { _ in "Host connection dropped" })
         let pending = interaction()
         let option = try #require(pending.options.first)
@@ -329,15 +342,15 @@ struct ChatPendingDeliveryTests {
     }
 
     @Test func inFlightDeliveryIsVisibleWhileSuppressionHolds() async throws {
-        // While the deliver closure is awaiting, the card must be able to
+        // While the key sequence is in flight, the card must be able to
         // render progress (and a concurrent second tap is a no-op).
-        let spy = DeliverSpy()
+        let spy = KeySpy()
         var release: (@Sendable () -> Void) = {}
         let stream = AsyncStream<Void> { continuation in
             release = { continuation.finish() }
         }
-        let store = PendingAnswerDelivery(deliver: { text in
-            try await spy.deliver(text)
+        let store = PendingAnswerDelivery(sendKey: { key in
+            try await spy.send(key)
             for await _ in stream { break }
         })
         let pending = interaction()
@@ -359,14 +372,16 @@ struct ChatPendingDeliveryTests {
     }
 }
 
-// MARK: - Production wiring: the AgentDetailView deliver path
+// MARK: - Production wiring: the AgentDetailView answer-key path
 
-/// The closure shape AgentDetailView hands ChatScreen, driven through a
-/// real ConsoleStore over a scripted transport — the exact production
-/// path (console.promptAgent → transport.promptAgent), not an injected
-/// stub. Pins that the option label reaches the wire with the right
-/// pane target, and that a transport failure surfaces through the seam
-/// rather than vanishing.
+/// The key closure shape AgentDetailView hands ChatScreen, driven through
+/// a real ConsoleStore over a scripted transport — the exact production
+/// path (console.sendAgentKeys → transport agent.send_keys), not an
+/// injected stub. A blocked agent refuses agent.prompt (`agent_blocked`),
+/// so the ask answer is the dialog's selection keys: pinned that the
+/// down/enter sequence reaches the wire addressed to the pane, that
+/// agent.prompt is NEVER used for answers, and that a transport failure
+/// surfaces through the seam rather than vanishing.
 @MainActor
 @Suite("Pending interactions: production wiring")
 struct ChatPendingProductionWiringTests {
@@ -397,7 +412,7 @@ struct ChatPendingProductionWiringTests {
         return (host.id, console, transport)
     }
 
-    /// Waits until the Host's console connection is live — a prompt
+    /// Waits until the Host's console connection is live — a key send
     /// before the session connects fails with "The Host is not
     /// connected", which is the production precondition, not a bug.
     private func waitUntilConnected(
@@ -411,56 +426,61 @@ struct ChatPendingProductionWiringTests {
         #expect(console.hostStatuses[hostID] == .connected, "console must connect")
     }
 
-    /// The deliver closure AgentDetailView builds for ChatScreen
-    /// (ChatScreen(deliver:) parameter), verbatim.
-    private func detailDeliverClosure(
+    /// The answer-key closure AgentDetailView builds for ChatScreen
+    /// (ChatScreen(sendAnswerKey:) parameter), verbatim.
+    private func detailSendKeyClosure(
         console: ConsoleStore, hostID: Host.ID, paneID: String
-    ) -> (String) async throws -> Void {
-        { text in
-            try await console.promptAgent(
-                AgentPromptParams(target: paneID, text: text),
-                on: hostID)
+    ) -> (_ key: String) async throws -> Void {
+        { key in
+            try await console.sendAgentKeys(paneID, key: key, on: hostID)
         }
     }
 
-    @Test func optionLabelReachesTheWireThroughTheProductionClosure() async throws {
+    @Test func answerKeysReachTheWireNotAgentPrompt() async throws {
         let (hostID, console, transport) = await hostAndConsole()
         try await waitUntilConnected(console, hostID: hostID)
 
-        // Mirror AgentDetailView's chat surface wiring: the deliver
-        // closure passed to ChatScreen.
-        let deliver = detailDeliverClosure(
+        // Mirror AgentDetailView's chat surface wiring: the
+        // sendAnswerKey closure passed to ChatScreen.
+        let sendKey = detailSendKeyClosure(
             console: console, hostID: hostID, paneID: "w1:p1")
-        let store = PendingAnswerDelivery(deliver: deliver)
+        let store = PendingAnswerDelivery(sendKey: sendKey)
+        // An option two steps below the highlight: down, down, enter.
         let pending = PendingInteraction(
-            id: "ask_0#q", question: "Run the tests?",
-            options: [PendingInteraction.Option(label: "Run the tests")])
+            id: "ask_0#q", question: "Which option?",
+            options: [
+                PendingInteraction.Option(label: "A", index: 0),
+                PendingInteraction.Option(label: "B", index: 1),
+                PendingInteraction.Option(label: "C", index: 2),
+            ],
+            recommendedIndex: 0)
 
         let outcome = await store.choose(
-            try #require(pending.options.first), for: pending)
+            try #require(pending.options.last), for: pending)
         #expect(outcome == .delivered)
 
-        // The option's label arrived at the transport, addressed to the
-        // agent's pane.
-        let params = try #require(
-            await transport.agentPromptParams.last,
-            "the tap must reach the transport's promptAgent")
-        #expect(params.target == "w1:p1")
-        #expect(params.text == "Run the tests")
+        // The selection keys arrived at the transport as one
+        // agent.send_keys call per key, addressed to the agent's pane.
+        let sends = await transport.agentKeyParams
+        #expect(sends.map(\.keys) == [["down"], ["down"], ["enter"]])
+        #expect(sends.allSatisfy { $0.target == "w1:p1" })
+        // THE pinned contract: an ask answer never routes through
+        // agent.prompt — a blocked agent would refuse it.
+        #expect(await transport.agentPromptParams.isEmpty)
     }
 
     @Test func transportFailureSurfacesNotSilentlyRollsBack() async throws {
         let (hostID, console, transport) = await hostAndConsole()
         try await waitUntilConnected(console, hostID: hostID)
-        await transport.setAgentPromptFailure(
+        await transport.setAgentKeyFailure(
             TransportError.sshUnreachable(detail: "connection lost"))
 
-        let deliver = detailDeliverClosure(
+        let sendKey = detailSendKeyClosure(
             console: console, hostID: hostID, paneID: "w1:p1")
-        let store = PendingAnswerDelivery(deliver: deliver)
+        let store = PendingAnswerDelivery(sendKey: sendKey)
         let pending = PendingInteraction(
-            id: "ask_1#q", question: "Run the tests?",
-            options: [PendingInteraction.Option(label: "Run the tests")])
+            id: "ask_1#q", question: "Which option?",
+            options: [PendingInteraction.Option(label: "A", index: 0)])
         let outcome = await store.choose(
             try #require(pending.options.first), for: pending)
         #expect(outcome != .delivered)
@@ -468,7 +488,7 @@ struct ChatPendingProductionWiringTests {
         // stays answerable, and nothing was recorded as answered.
         #expect(store.failureMessage(for: pending) != nil)
         #expect(store.answer(for: pending) == nil)
-        #expect(await transport.agentPromptParams.count == 1)
+        #expect(await transport.agentKeyParams.count == 1)
     }
 
     @Test func theStoreIsBuiltAtInitSoTheFirstTapIsWired() throws {
@@ -484,11 +504,11 @@ struct ChatPendingProductionWiringTests {
             content: ChatContent(pending: []),
             initialLevel: .l0,
             changeLevel: { _, _ in },
-            deliver: { _ in })
+            sendAnswerKey: { _ in })
         #expect(screen.pendingAnswersForTesting != nil)
 
-        // And a nil deliver (previews, unwired hosts) keeps it nil — the
-        // read-only card renders instead.
+        // And a nil sendAnswerKey (previews, unwired hosts) keeps it nil
+        // — the read-only card renders instead.
         let readonly = ChatScreen(
             paneID: "w1:p1",
             agentName: "reviewer",

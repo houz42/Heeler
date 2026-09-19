@@ -165,11 +165,17 @@ enum OmpTranscriptParser {
                 !questionText.isEmpty
             else { continue }
             let questionID = fields["id"]?.stringValue ?? String(index)
-            let options = Self.pendingOptions(from: fields["options"])
+            // `recommended` is the dialog's starting highlight; answers
+            // key off it. Absent/out-of-range reads as the first option.
+            let recommended = fields["recommended"]
+                .flatMap { if case .number(let value) = $0 { Int(value) } else { nil } } ?? 0
+            let options = Self.pendingOptions(
+                from: fields["options"], recommended: recommended)
             interactions.append(PendingInteraction(
                 id: "\(call.id)#\(questionID)",
                 question: questionText,
                 options: options,
+                recommendedIndex: recommended,
                 answer: answer))
         }
         return interactions
@@ -177,23 +183,31 @@ enum OmpTranscriptParser {
 
     /// `options` accepts both live shapes: omp's `ask` carries label +
     /// description pairs; a bare-string list (any future/older spelling)
-    /// reads as label-only. Non-string entries are dropped.
-    private static func pendingOptions(from value: JSONValue?) -> [PendingInteraction.Option] {
+    /// reads as label-only. Each option carries its dialog index so the
+    /// answer's key sequence can be computed. Non-string entries are
+    /// dropped (indexes stay the dialog's own).
+    private static func pendingOptions(
+        from value: JSONValue?, recommended: Int
+    ) -> [PendingInteraction.Option] {
         guard case .array(let options)? = value else { return [] }
-        return options.compactMap { option in
+        var parsed: [PendingInteraction.Option] = []
+        for (index, option) in options.enumerated() {
             switch option {
             case .object(let fields):
                 guard let label = fields["label"]?.stringValue, !label.isEmpty else {
-                    return nil
+                    continue
                 }
-                return PendingInteraction.Option(
-                    label: label, description: fields["description"]?.stringValue)
+                parsed.append(PendingInteraction.Option(
+                    label: label,
+                    description: fields["description"]?.stringValue,
+                    index: index))
             case .string(let label):
-                return PendingInteraction.Option(label: label)
+                parsed.append(PendingInteraction.Option(label: label, index: index))
             default:
-                return nil
+                continue
             }
         }
+        return parsed
     }
 
     /// Extracts the chosen option's label from an answered `ask` result's
@@ -285,11 +299,18 @@ enum OmpTranscriptParser {
     }
 
     private static func decodeJSONValue(_ object: Any) -> JSONValue? {
+        // A JSON true/false arrives from JSONSerialization as a genuine
+        // CFBoolean, but a JSON 0/1 arrives as NSNumber — and the `as
+        // Bool` cast succeeds on BOTH (the NSNumber-Bool bridging trap:
+        // omp's `recommended: 4` decoded as .bool instead of .number).
+        // Classify on the ORIGINAL object's CoreFoundation type, before
+        // any Swift cast loses that information.
+        if CFGetTypeID(object as CFTypeRef) == CFBooleanGetTypeID() {
+            return .bool(object as! Bool)
+        }
         switch object {
         case is NSNull:
             return .null
-        case let value as Bool:
-            return .bool(value)
         case let value as Int:
             return .number(Double(value))
         case let value as UInt:

@@ -12,21 +12,30 @@ import Foundation
 /// through the composer, not this row).
 internal struct PendingInteraction: Sendable, Equatable, Identifiable {
     /// One tappable answer choice. omp's `ask` tool carries label +
-    /// description pairs (verified against live session records: the call's
-    /// arguments hold `options: [{label, description}]`).
+    /// description pairs plus a `recommended` index; the terminal dialog
+    /// highlights `recommended` and selects with ↑/↓ + Enter, so answers
+    /// are delivered as a key sequence against that highlight (verified
+    /// against a live blocked agent).
     struct Option: Sendable, Equatable {
         let label: String
         var description: String? = nil
+        /// The option's index in the dialog's list — the `down` count the
+        /// answer must send (relative to `recommended`).
+        var index: Int = 0
 
-        init(label: String, description: String? = nil) {
+        init(label: String, description: String? = nil, index: Int = 0) {
             self.label = label
             self.description = description
+            self.index = index
         }
     }
 
     let id: String
     let question: String
     let options: [Option]
+    /// The option the terminal dialog highlights when the question lands
+    /// (omp's `recommended`); answers key off it.
+    let recommendedIndex: Int
     /// The chosen option's label once answered; nil while the question
     /// blocks the run. The transcript's own answer (the `ask` result
     /// record) is set by the parser; a locally made choice lives in
@@ -37,12 +46,25 @@ internal struct PendingInteraction: Sendable, Equatable, Identifiable {
         id: String = UUID().uuidString,
         question: String,
         options: [Option],
+        recommendedIndex: Int = 0,
         answer: String? = nil
     ) {
         self.id = id
         self.question = question
         self.options = options
+        self.recommendedIndex = recommendedIndex
         self.answer = answer
+    }
+
+    /// The key sequence that selects `option` in the terminal dialog from
+    /// the highlighted `recommendedIndex`: `down` once per step below the
+    /// highlight, then `enter`. (A `down` count of zero is just `enter`.)
+    /// The dialog opens highlighting `recommended`; the card answers
+    /// immediately on tap, so the highlight has not moved.
+    func selectionKeys(for option: Option) -> [String] {
+        let steps = option.index - recommendedIndex
+        if steps <= 0 { return ["enter"] }
+        return Array(repeating: "down", count: steps) + ["enter"]
     }
 }
 
