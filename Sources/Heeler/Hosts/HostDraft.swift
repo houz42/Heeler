@@ -1,5 +1,20 @@
 import Foundation
 
+/// One additional-address form row. The id is SwiftUI's row identity: it is
+/// assigned when the row is created and never changes while the row lives,
+/// so typing into the field (which rewrites `address` every keystroke)
+/// cannot tear the row down and drop the keyboard. The string value cannot
+/// be the identity — that is the bug this type exists to prevent.
+struct AdditionalAddressRow: Equatable, Identifiable, Sendable {
+    let id: UUID
+    var address: String
+
+    init(id: UUID = UUID(), address: String = "") {
+        self.id = id
+        self.address = address
+    }
+}
+
 /// Editable form state behind `HostFormView`, validated before it becomes a
 /// catalog Host. Text-field friendly (port is a string) so the view stays
 /// dumb and the rules stay testable.
@@ -13,9 +28,9 @@ struct HostDraft: Equatable, Sendable {
     var password = ""
     var sessionName = ""
     /// Alternative addresses for the same machine, dialed in order after
-    /// Address when it does not answer. One entry per form row; the empty
-    /// string means single-path.
-    var additionalAddresses: [String] = []
+    /// Address when it does not answer. One row per form line; empty means
+    /// single-path. Rows carry stable ids (see `AdditionalAddressRow`).
+    var additionalAddresses: [AdditionalAddressRow] = []
     /// Blank means a direct connection. When set, Address/Port above are
     /// resolved from the Jump Host, not from this device.
     var jumpAddress = ""
@@ -35,7 +50,9 @@ struct HostDraft: Equatable, Sendable {
         username = host.username
         authMethod = host.authMethod
         sessionName = host.sessionName
-        additionalAddresses = host.additionalAddresses
+        additionalAddresses = host.additionalAddresses.map {
+            AdditionalAddressRow(address: $0)
+        }
         jumpAddress = host.jumpAddress
         jumpPort = String(host.jumpPort)
         jumpUsername = host.jumpUsername
@@ -97,26 +114,26 @@ struct HostDraft: Equatable, Sendable {
             alias: trimmedAlias)
     }
 
-    /// The form's additional rows: trimmed, empty entries dropped. Everything
-    /// (decode, the form, the dialer) sees the same candidate list.
+    /// The form's additional rows as addresses: trimmed, empty entries
+    /// dropped. Everything (decode, the form, the dialer) sees the same
+    /// candidate list.
     var normalizedAdditionalAddresses: [String] {
         additionalAddresses
-            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .map { $0.address.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
     }
 
     /// Appends one additional-address row. A blank row is a no-op — the
     /// row exists to be typed into; saving drops it instead of rejecting.
     mutating func addAdditionalAddress(_ address: String = "") {
-        additionalAddresses.append(address)
+        additionalAddresses.append(AdditionalAddressRow(address: address))
     }
 
-    /// Removes the additional row at `index`. Additional rows only: the
+    /// Removes the additional row with `id`. Additional rows only: the
     /// primary address is not part of this list and cannot be removed, so a
     /// Host always keeps at least one dialable address.
-    mutating func removeAdditionalAddress(at index: Int) {
-        guard additionalAddresses.indices.contains(index) else { return }
-        additionalAddresses.remove(at: index)
+    mutating func removeAdditionalAddress(id: UUID) {
+        additionalAddresses.removeAll { $0.id == id }
     }
 
     /// Reorders the additional rows after an EditMode/onDelete OnMove. The

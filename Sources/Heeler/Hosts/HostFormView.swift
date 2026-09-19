@@ -51,14 +51,14 @@ struct HostFormView: View {
                         .textContentType(.URL)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
-                    ForEach($draft.additionalAddresses, id: \.self) { $address in
+                    ForEach($draft.additionalAddresses) { $row in
                         HStack {
-                            TextField("Additional address", text: $address)
+                            TextField("Additional address", text: $row.address)
                                 .textContentType(.URL)
                                 .autocorrectionDisabled()
                                 .textInputAutocapitalization(.never)
                             Button(role: .destructive) {
-                                removeAddress(at: getIndexOf(address))
+                                draft.removeAdditionalAddress(id: row.id)
                             } label: {
                                 Image(systemName: "minus.circle.fill")
                             }
@@ -224,23 +224,6 @@ struct HostFormView: View {
             + "name the same machine."
     }
 
-    /// The binding ForEach renders rows by identity; removing a row needs
-    /// the row's index, not its (possibly duplicated) string value.
-    private func removeAddress(at index: Int) {
-        // Removing the last additional row returns to a single-address Host;
-        // the primary Address row itself can never be removed.
-        draft.removeAdditionalAddress(at: index)
-    }
-
-    /// Resolves a row's index from its binding wrapper. Rows are addressed
-    /// by index; duplicated strings would break a value-based lookup.
-    private func getIndexOf(_ address: String) -> Int {
-        // The ForEach binds `$address` — find by identity in the array.
-        if let index = draft.additionalAddresses.firstIndex(of: address) {
-            return index
-        }
-        return draft.additionalAddresses.count
-    }
 
     @ViewBuilder
     private var deviceKeySection: some View {

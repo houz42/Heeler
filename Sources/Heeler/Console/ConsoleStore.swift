@@ -14,6 +14,11 @@ final class ConsoleStore {
 
     private(set) var agents: [ConsoleAgent] = []
     private(set) var hostStatuses: [Host.ID: EventsSessionStatus] = [:]
+    /// Which candidate address each Host's live session is actually dialed
+    /// through (`nil` while not connected) — the fact the Addresses section
+    /// renders as the live "Connected" row, distinct from probe facts and
+    /// the user's preferred intent.
+    private(set) var hostConnectedAddresses: [Host.ID: String] = [:]
     private(set) var hostStandingFailures: [Host.ID: TransportError] = [:]
     private(set) var hostLatencies: [Host.ID: Duration] = [:]
     private(set) var hostSyncErrors: [Host.ID: String] = [:]
@@ -79,17 +84,38 @@ final class ConsoleStore {
     let rowLayouts: AgentRowLayoutStore
     let sidebarSnapshots = HerdrSidebarSnapshotStore()
 
+    /// A mailbox for dial outcomes arriving off the main actor; the default
+    /// session factory publishes through it and `rebuild` folds it into
+    /// `hostConnectedAddresses`.
+    private let connectedAddressEvents = AsyncStream<(
+        Host.ID, String
+    )>.makeStream()
+
     init(
         snapshotRetryDelay: Duration = .seconds(2),
         pins: PinnedAgentsStore = PinnedAgentsStore(),
         rowLayouts: AgentRowLayoutStore = AgentRowLayoutStore(),
-        makeSession: @escaping @Sendable (Host, [EventSubscription]) -> EventsSession =
-            ConsoleStore.sshSessionFactory()
+        makeSession: (@Sendable (Host, [EventSubscription]) -> EventsSession)? = nil
     ) {
         self.snapshotRetryDelay = snapshotRetryDelay
         self.pins = pins
         self.rowLayouts = rowLayouts
-        self.makeSession = makeSession
+        // nil means "the production factory", built here so it can report
+        // the winning candidate address back into this store.
+        self.makeSession = makeSession ?? Self.sshSessionFactory(
+            onConnectedAddress: { [connectedAddressEvents] hostID, address in
+                connectedAddressEvents.continuation.yield((hostID, address))
+            })
+        Task { @MainActor [weak self, connectedAddressEvents] in
+            for await (hostID, address) in connectedAddressEvents.stream {
+                // Single source of truth: recording a new connection
+                // REPLACES the host's mark — at most one address per Host
+                // can ever read as in use.
+                if let self {
+                    self.hostConnectedAddresses[hostID] = address
+                }
+            }
+        }
     }
 
     /// Pins or unpins the Agent and re-sorts the published list in the same
@@ -559,6 +585,11 @@ final class ConsoleStore {
             uniqueKeysWithValues: current.compactMap { projection in
                 projection.status.map { (projection.host.id, $0) }
             })
+        // Zero when disconnected, exactly one when connected: a Host whose
+        // session is not `.connected` cannot claim an in-use address.
+        hostConnectedAddresses = hostConnectedAddresses.filter { hostID, _ in
+            hostStatuses[hostID] == .connected
+        }
         hostStandingFailures = Dictionary(
             uniqueKeysWithValues: current.compactMap { projection in
                 projection.standingFailure.map { (projection.host.id, $0) }
@@ -683,11 +714,15 @@ extension ConsoleStore: NotificationTransportProvider {
 extension ConsoleStore {
     /// The production session factory: SSH transports built from the Host
     /// catalog's credentials. TOFU is restricted to already-trusted
-    /// fingerprints; the Console never prompts.
     static func sshSessionFactory(
         connector: any TransportConnector = SSHTransportConnector(),
         knownHosts: any KnownHostsStore = UserDefaultsKnownHostsStore.shared,
-        credentials: HostCredentialsProvider = HostCredentialsProvider()
+        credentials: HostCredentialsProvider = HostCredentialsProvider(),
+        /// Receives (host id, winning address) whenever a dial succeeds.
+        /// The Console wires this to its single-source
+        /// `hostConnectedAddresses` map: one connected address per Host,
+        /// so the "in use" mark cannot appear on two rows at once.
+        onConnectedAddress: (@Sendable (Host.ID, String) -> Void)? = nil
     ) -> @Sendable (Host, [EventSubscription]) -> EventsSession {
         { host, subscriptions in
             EventsSession(subscriptions: subscriptions) {
@@ -698,11 +733,15 @@ extension ConsoleStore {
                     throw TransportError.authenticationFailed
                 }
                 let policy = HostKeyPolicy(knownHosts: knownHosts) { _ in false }
+                let settings = SSHTransportSettings(
+                    host: host,
+                    credentials: resolved,
+                    hostKeyPolicy: policy)
                 return try await connector.connect(
-                    settings: SSHTransportSettings(
-                        host: host,
-                        credentials: resolved,
-                        hostKeyPolicy: policy))
+                    settings: settings,
+                    onCandidate: { result in
+                        onConnectedAddress?(host.id, result.address)
+                    })
             }
         }
     }

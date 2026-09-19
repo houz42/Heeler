@@ -56,6 +56,47 @@ struct HostMultiPathTests {
         #expect(host.candidateAddresses == ["192.168.31.71", "CMF79KM7YF.local", "vpn.example"])
     }
 
+    // MARK: Title guard (addresses never label the Host)
+
+    @Test func aliasMatchingACandidateAddressNeverTitlesTheHost() {
+        // The device-found shape: the .local address was typed into the
+        // Alias field. The title must fall to the name, never show the
+        // address in the label slot.
+        let host = Host(
+            name: "Mac", address: "192.168.31.71", username: "jhou",
+            additionalAddresses: ["CMF79KM7YF.local"],
+            alias: "CMF79KM7YF.local")
+
+        #expect(host.displayAliasName == "Mac")
+    }
+
+    @Test func nameMatchingACandidateAddressFallsBackToUserAtAddress() {
+        let host = Host(
+            name: "CMF79KM7YF.local", address: "192.168.31.71", username: "jhou",
+            additionalAddresses: ["CMF79KM7YF.local"])
+
+        #expect(host.displayAliasName == "jhou@192.168.31.71")
+    }
+
+    @Test func nonAddressAliasAndNameStillTitleTheHost() {
+        // The guard must not eat legitimate labels: a real alias or name
+        // that merely RESEMBLES a hostname still wins.
+        let aliased = Host(
+            name: "Mac", address: "192.168.31.71", username: "jhou",
+            additionalAddresses: ["CMF79KM7YF.local"],
+            alias: "Studio Laptop")
+        #expect(aliased.displayAliasName == "Studio Laptop")
+
+        let named = Host(
+            name: "Mac", address: "192.168.31.71", username: "jhou",
+            additionalAddresses: ["CMF79KM7YF.local"])
+        #expect(named.displayAliasName == "Mac")
+
+        let primaryAddressLabel = Host(
+            name: "192.168.31.71", address: "192.168.31.71", username: "jhou")
+        #expect(primaryAddressLabel.displayAliasName == "jhou@192.168.31.71")
+    }
+
     @Test(arguments: [["", "  "], [" "], ["", ""]])
     func blankAndWhitespaceCandidatesAreDropped(raw: [String]) {
         let host = Host(address: "a.example", username: "dev", additionalAddresses: raw)
@@ -91,6 +132,31 @@ struct HostMultiPathTests {
         #expect(reloaded.hosts.first?.candidateAddresses == host.candidateAddresses)
     }
 
+    @Test func editingInASecondAddressSurvivesSaveAndReload() throws {
+        // The device-found defect's exact repro: an existing one-address
+        // Host gains a second address in the Edit form; after save + reload
+        // (what the detail page's store reads), BOTH candidates must be
+        // there — the save path cannot drop the additional rows.
+        let (defaults, cleanup) = try makeDefaults()
+        defer { cleanup() }
+        let store = HostStore(defaults: defaults, secrets: InMemorySecretStore())
+        let original = Host(address: "192.168.31.71", username: "jhou")
+        try store.add(original)
+
+        var draft = HostDraft(host: original)
+        draft.addAdditionalAddress("CMF79KM7YF.local")
+        let saved = try #require(draft.makeHost(id: original.id))
+        try store.update(saved)
+
+        // The detail page's model reads a freshly loaded store's host.
+        let reloadedHost = try #require(
+            HostStore(defaults: defaults, secrets: InMemorySecretStore())
+                .hosts.first)
+        #expect(
+            reloadedHost.candidateAddresses == ["192.168.31.71", "CMF79KM7YF.local"])
+        #expect(reloadedHost.additionalAddresses == ["CMF79KM7YF.local"])
+    }
+
     @Test func hostsSavedBeforeTheFieldDecodeWithNoAdditionalAddresses() throws {
         let id = UUID()
         let legacy = """
@@ -122,7 +188,11 @@ struct HostMultiPathTests {
         var draft = HostDraft()
         draft.address = "192.168.31.71"
         draft.username = "dev"
-        draft.additionalAddresses = ["  CMF79KM7YF.local ", "vpn.example", "  "]
+        draft.additionalAddresses = [
+            AdditionalAddressRow(address: "  CMF79KM7YF.local "),
+            AdditionalAddressRow(address: "vpn.example"),
+            AdditionalAddressRow(address: "  "),
+        ]
 
         let host = try #require(draft.makeHost())
         #expect(host.additionalAddresses == ["CMF79KM7YF.local", "vpn.example"])
@@ -137,7 +207,7 @@ struct HostMultiPathTests {
             additionalAddresses: ["CMF79KM7YF.local", "vpn.example"])
 
         let draft = HostDraft(host: host)
-        #expect(draft.additionalAddresses == ["CMF79KM7YF.local", "vpn.example"])
+        #expect(draft.normalizedAdditionalAddresses == ["CMF79KM7YF.local", "vpn.example"])
         #expect(try draft.makeHost(id: host.id) == host)
     }
 
@@ -153,20 +223,22 @@ struct HostMultiPathTests {
 
     @Test func addRowAppendsAnAdditionalAddress() {
         var draft = HostDraft()
-        draft.additionalAddresses = ["vpn.example"]
+        draft.additionalAddresses = [AdditionalAddressRow(address: "vpn.example")]
 
         draft.addAdditionalAddress()
 
-        #expect(draft.additionalAddresses == ["vpn.example", ""])
+        #expect(
+            draft.additionalAddresses.map(\.address) == ["vpn.example", ""])
     }
 
     @Test func removingTheLastAdditionalRowLeavesThePrimaryAddress() throws {
         var draft = HostDraft()
         draft.address = "a.example"
         draft.username = "dev"
-        draft.additionalAddresses = ["vpn.example"]
+        draft.additionalAddresses = [AdditionalAddressRow(address: "vpn.example")]
 
-        draft.removeAdditionalAddress(at: 0)
+        let removedID = draft.additionalAddresses[0].id
+        draft.removeAdditionalAddress(id: removedID)
 
         // The floor is one TOTAL address: the primary row is not part of
         // the additional list, so the Host still dials it.
@@ -175,26 +247,46 @@ struct HostMultiPathTests {
         #expect(host.candidateAddresses == ["a.example"])
     }
 
-    @Test func removingOutOfRangeIndexIsIgnored() {
+    @Test func removingAnUnknownRowIDIsIgnored() {
         var draft = HostDraft()
-        draft.additionalAddresses = ["vpn.example"]
+        draft.additionalAddresses = [AdditionalAddressRow(address: "vpn.example")]
 
-        draft.removeAdditionalAddress(at: 3)
+        draft.removeAdditionalAddress(id: UUID())
 
-        #expect(draft.additionalAddresses == ["vpn.example"])
+        #expect(draft.additionalAddresses.map(\.address) == ["vpn.example"])
     }
 
     @Test func movingRowsReordersCandidatesButKeepsPrimaryFirst() throws {
         var draft = HostDraft()
         draft.address = "a.example"
         draft.username = "dev"
-        draft.additionalAddresses = ["b.example", "c.example"]
+        draft.additionalAddresses = [
+            AdditionalAddressRow(address: "b.example"),
+            AdditionalAddressRow(address: "c.example"),
+        ]
 
         draft.moveAdditionalAddress(from: IndexSet(integer: 1), to: 0)
 
         let host = try #require(draft.makeHost())
         #expect(
             host.candidateAddresses == ["a.example", "c.example", "b.example"])
+    }
+
+    @Test func rowIdentitySurvivesEditsToItsAddress() {
+        // The defect this pins: the row's SwiftUI identity (its id) must
+        // not depend on the typed value. Editing the text — every keystroke
+        // in the form — must leave the row's id untouched, or the field is
+        // torn down and the keyboard dismissed per character.
+        var draft = HostDraft()
+        draft.addAdditionalAddress()
+        let originalID = draft.additionalAddresses[0].id
+
+        for character in "vpn.example" {
+            draft.additionalAddresses[0].address.append(character)
+        }
+
+        #expect(draft.additionalAddresses[0].id == originalID)
+        #expect(draft.additionalAddresses[0].address == "vpn.example")
     }
 
     // MARK: Dial order and fallback (stub seam, no network)
@@ -457,6 +549,102 @@ struct HostMultiPathTests {
         // The Host no longer carries the picked address; the configured
         // order wins.
         #expect(store.preferredOrder(for: host.candidateAddresses) == ["lan.example"])
+    }
+
+    // MARK: Live connection address (single source of truth)
+
+    /// Records (host id, address) pairs the way the Console store folds
+    /// them: REPLACE by host id, never accumulate.
+    private final class ConnectedAddressBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var marks: [Host.ID: String] = [:]
+
+        func record(_ hostID: Host.ID, _ address: String) {
+            lock.lock()
+            marks[hostID] = address
+            lock.unlock()
+        }
+
+        subscript(hostID: Host.ID) -> String? {
+            lock.lock()
+            defer { lock.unlock() }
+            return marks[hostID]
+        }
+    }
+
+    private struct ReportingSweepConnector: TransportConnector {
+        let reachable: Set<String>
+
+        func connect(settings: SSHTransportSettings) async throws -> any Transport {
+            try await connect(settings: settings, onCandidate: nil)
+        }
+
+        func connect(
+            settings: SSHTransportSettings,
+            onCandidate: (@Sendable (CandidateDialResult) -> Void)?
+        ) async throws -> any Transport {
+            for address in settings.dialCandidates where reachable.contains(address) {
+                onCandidate?(
+                    CandidateDialResult(address: address, failedAttempts: 0))
+                return ScriptedTransport()
+            }
+            throw TransportError.sshUnreachable(detail: "no candidate answered")
+        }
+    }
+
+    @Test func redialingThroughAnotherCandidateReplacesTheInUseMark() async throws {
+        // The user invariant: at most ONE address may read as in use. The
+        // production factory reports the winning address per dial, and the
+        // store's map is keyed by Host — so a redial through candidate 2
+        // after a connection via candidate 1 leaves ONLY candidate 2
+        // marked; candidate 1's mark cannot survive its own replacement.
+        let host = Host(
+            address: "lan.example", username: "dev",
+            additionalAddresses: ["vpn.example"])
+        let marks = ConnectedAddressBox()
+        let factory = ConsoleStore.sshSessionFactory(
+            connector: ReportingSweepConnector(reachable: ["lan.example", "vpn.example"]),
+            knownHosts: InMemoryKnownHostsStore(),
+            credentials: HostCredentialsProvider(
+                deviceKeys: DeviceKeyStore(secrets: InMemorySecretStore()),
+                secrets: InMemorySecretStore()),
+            onConnectedAddress: { hostID, address in
+                marks.record(hostID, address)
+            })
+        // Dial 1: LAN (first candidate) wins.
+        let session1 = factory(host, [])
+        await session1.resume()
+        try await waitUntilMarked(marks, host: host, equals: "lan.example")
+        try? await session1.end()
+
+        // Dial 2 — LAN now down, VPN wins. The second dial REPLACES the
+        // mark: only candidate 2 reads as in use.
+        let reconnecting = ConsoleStore.sshSessionFactory(
+            connector: ReportingSweepConnector(reachable: ["vpn.example"]),
+            knownHosts: InMemoryKnownHostsStore(),
+            credentials: HostCredentialsProvider(
+                deviceKeys: DeviceKeyStore(secrets: InMemorySecretStore()),
+                secrets: InMemorySecretStore()),
+            onConnectedAddress: { hostID, address in
+                marks.record(hostID, address)
+            })
+        let session2 = reconnecting(host, [])
+        await session2.resume()
+        try await waitUntilMarked(marks, host: host, equals: "vpn.example")
+        try? await session2.end()
+    }
+
+    /// The EventsSession dials on its own run task; poll until the store
+    /// fold lands the winning address (bounded — a stuck dial fails the
+    /// test instead of hanging it).
+    private func waitUntilMarked(
+        _ marks: ConnectedAddressBox, host: Host, equals expected: String
+    ) async throws {
+        let deadline = ContinuousClock.now + .seconds(10)
+        while marks[host.id] != expected, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(marks[host.id] == expected)
     }
 
     // MARK: Support

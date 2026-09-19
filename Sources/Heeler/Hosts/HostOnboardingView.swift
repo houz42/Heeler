@@ -13,6 +13,9 @@ struct HostOnboardingView: View {
     /// `EventsSessionStatus.reconnecting`.
     let isManualReconnectInFlight: Bool
     let retryConnection: (@MainActor @Sendable () async -> Void)?
+    /// The address the live Console session is dialed through right now,
+    /// nil while disconnected. Supplied by the Console's single-source map.
+    let connectedAddress: String?
     @State private var store: HostOnboardingStore
     @State private var isEditing = false
     @State private var isConfirmingHostKeyReplacement = false
@@ -25,6 +28,11 @@ struct HostOnboardingView: View {
         standingFailure: TransportError? = nil,
         isManualReconnectInFlight: Bool = false,
         retryConnection: (@MainActor @Sendable () async -> Void)? = nil,
+        /// Which address the Host's live Console session is dialed through
+        /// right now, or nil while disconnected. The Console's single-source
+        /// map (`ConsoleStore.hostConnectedAddresses`) supplies it: at most
+        /// one candidate can ever carry the in-use mark.
+        connectedAddress: String? = nil,
         /// Pre-built store override for demo screenshots; nil builds the
         /// production store keyed to this Host.
         store: HostOnboardingStore? = nil
@@ -34,6 +42,7 @@ struct HostOnboardingView: View {
         self.standingFailure = standingFailure
         self.isManualReconnectInFlight = isManualReconnectInFlight
         self.retryConnection = retryConnection
+        self.connectedAddress = connectedAddress
         _store = State(
             initialValue: store ?? HostOnboardingStore(
                 host: host,
@@ -242,35 +251,49 @@ struct HostOnboardingView: View {
         return "default"
     }
 
-    /// One address row: the address, its dialing position, and its live
-    /// probe state (spinner while probing, green/red once resolved,
-    /// gray before a sweep).
+    /// One address row: the address, its live probe state (spinner while
+    /// probing, green/red once resolved, gray before a sweep), and — when
+    /// the Console session is live — the in-use mark on exactly the row
+    /// whose address carries the current connection.
     private func candidateRow(_ address: String) -> some View {
         let state = store.candidateStates[address] ?? .unknown
         let isPreferred = store.orderedCandidates.first == address
+        let isInUse = connectedAddress == address
         return HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(address)
-                if isPreferred {
-                    Text("Preferred")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    if isInUse {
+                        Text("Connected")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.green)
+                    }
+                    if isPreferred {
+                        Text("Preferred")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             Spacer()
-            switch state {
-            case .unknown:
-                Image(systemName: "questionmark.circle")
-                    .foregroundStyle(.secondary)
-            case .probing:
-                ProgressView()
-                    .controlSize(.small)
-            case .reachable:
-                Image(systemName: "checkmark.circle.fill")
+            if isInUse {
+                Image(systemName: "bolt.fill")
                     .foregroundStyle(.green)
-            case .unreachable:
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundStyle(.red)
+            } else {
+                switch state {
+                case .unknown:
+                    Image(systemName: "questionmark.circle")
+                        .foregroundStyle(.secondary)
+                case .probing:
+                    ProgressView()
+                        .controlSize(.small)
+                case .reachable:
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                case .unreachable:
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.red)
+                }
             }
         }
     }

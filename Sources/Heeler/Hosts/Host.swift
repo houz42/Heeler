@@ -154,11 +154,24 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
     /// (itself falling back to `user@address`) otherwise. Decode and the
     /// form already normalize stored aliases, so the blank check only
     /// guards direct construction.
+    ///
+    /// A label that exactly matches one of the Host's candidate addresses
+    /// is skipped: an address in the title slot is address-as-label
+    /// pollution (typed into the wrong field), never a name, and showing
+    /// it turns the Hosts list into a list of addresses with the real name
+    /// nowhere. The chain falls to the next label instead.
     var displayAliasName: String {
-        guard let alias, !alias.trimmingCharacters(in: .whitespaces).isEmpty else {
-            return displayName
+        let candidates = Set(candidateAddresses.map { $0.lowercased() })
+        if let alias, !alias.trimmingCharacters(in: .whitespaces).isEmpty,
+            !candidates.contains(alias.lowercased())
+        {
+            return alias
         }
-        return alias
+        let trimmedName = name.trimmingCharacters(in: .whitespaces)
+        if !trimmedName.isEmpty, !candidates.contains(trimmedName.lowercased()) {
+            return trimmedName
+        }
+        return "\(username)@\(address)"
     }
 
     /// The herdr socket this Host's session name points at.

@@ -69,6 +69,9 @@ struct HostListView: View {
     private let connectionStatuses: [Host.ID: EventsSessionStatus]
     private let standingFailures: [Host.ID: TransportError]
     private let latencies: [Host.ID: Duration]
+    /// Which candidate address each Host's live session is dialed through;
+    /// the detail page marks exactly that row as in use.
+    private let connectedAddresses: [Host.ID: String]
     /// Hosts whose Host-detail Reconnect request is in flight. Distinct from
     /// `EventsSessionStatus.reconnecting`.
     private let manualReconnectInFlightHostIDs: Set<Host.ID>
@@ -90,6 +93,7 @@ struct HostListView: View {
         connectionStatuses: [Host.ID: EventsSessionStatus] = [:],
         standingFailures: [Host.ID: TransportError] = [:],
         latencies: [Host.ID: Duration] = [:],
+        connectedAddresses: [Host.ID: String] = [:],
         manualReconnectInFlightHostIDs: Set<Host.ID> = [],
         retryConnection: (@MainActor @Sendable (Host.ID) async -> Void)? = nil,
         discovery: SessionDiscoveryStore? = nil
@@ -99,6 +103,7 @@ struct HostListView: View {
         self.connectionStatuses = connectionStatuses
         self.standingFailures = standingFailures
         self.latencies = latencies
+        self.connectedAddresses = connectedAddresses
         self.manualReconnectInFlightHostIDs = manualReconnectInFlightHostIDs
         self.retryConnection = retryConnection
         self.discovery = discovery
@@ -169,7 +174,8 @@ struct HostListView: View {
                         connectionStatus: connectionStatuses[id],
                         standingFailure: standingFailures[id],
                         isManualReconnectInFlight: manualReconnectInFlightHostIDs.contains(id),
-                        retryConnection: retryAction(for: id))
+                        retryConnection: retryAction(for: id),
+                        connectedAddress: connectedAddresses[id])
                         .id(host)
                 } else {
                     ContentUnavailableView("Host removed", systemImage: "server.rack")
