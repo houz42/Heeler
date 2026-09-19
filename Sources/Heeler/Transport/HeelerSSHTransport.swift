@@ -529,6 +529,25 @@ actor HeelerSSHTransport: Transport {
         return try Self.serverInfo(from: pong)
     }
 
+    /// Opens one long-lived direct-streamlocal channel to the native
+    /// chat broker's socket (broker-hardening-contract). Channel
+    /// discipline mirrors Events: the caller owns exactly one broker
+    /// connection per Host connection and closes it on reconnect.
+    func openBrokerChannel(socketPath: String) async throws -> SSHStreamLocalChannel {
+        guard connected else {
+            throw TransportError.sshUnreachable(
+                detail: "The SSH connection is closed.")
+        }
+        do {
+            return try await connection.openStreamLocal(
+                socketPath: socketPath, timeout: requestTimeout)
+        } catch SSHError.streamLocalOpenFailed {
+            throw try await classifyStreamLocalOpenFailure(socketPath: socketPath)
+        } catch let error as SSHError {
+            throw await mapOperationError(error)
+        }
+    }
+
     static func serverInfo(from pong: PongResponse) throws -> ServerInfo {
         guard pong.protocolVersion >= Self.minimumProtocolVersion else {
             throw TransportError.protocolVersionMismatch(

@@ -263,6 +263,13 @@ final class ConsoleStore {
         return projection
     }
 
+    /// The catalog record of a connected Host (nil when the Host is not
+    /// connected). Consumers needing up-to-date catalog state pass their
+    /// own Host record instead.
+    func host(for hostID: Host.ID) -> Host? {
+        projections[hostID]?.host
+    }
+
     func availableAgentKinds(on hostID: Host.ID) async throws -> [SupportedAgentKind] {
         try await projection(for: hostID).availableAgentKinds()
     }
