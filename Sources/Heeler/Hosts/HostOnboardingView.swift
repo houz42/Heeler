@@ -243,15 +243,19 @@ struct HostOnboardingView: View {
     }
 
     /// One line per address: status icon, the address (with an inline,
-    /// subtle Preferred mark), and — while a pick is pending — a Use
-    /// button right on the row. The live connection's row shows the
-    /// in-use mark instead of its probe icon; at most one row can carry it.
+    /// subtle Preferred mark), and a Use button on every reachable row
+    /// that is not the live connection — picking is not a one-shot state,
+    /// the user can switch paths anytime a probe proved them reachable.
+    /// The connected row shows the bolt instead; unreachable rows show no
+    /// control (using them cannot succeed until they answer again).
     private func candidateRow(_ address: String) -> some View {
         let state = store.candidateStates[address] ?? .unknown
         let isPreferred = store.orderedCandidates.first == address
         let isInUse = connectedAddress == address
-        let pickable =
-            store.pendingAddressChoice?.contains(address) ?? false
+        let isReachable =
+            state == .reachable
+            || store.pendingAddressChoice?.contains(address) ?? false
+        let pickable = isReachable && !isInUse
         return HStack(spacing: 10) {
             if isInUse {
                 Image(systemName: "bolt.fill")

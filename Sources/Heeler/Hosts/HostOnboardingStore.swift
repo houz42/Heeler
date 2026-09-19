@@ -124,10 +124,13 @@ final class HostOnboardingStore {
         }
     }
 
-    /// The user's pick among several reachable addresses: persist it as the
-    /// preferred order, clear the choice, and connect through it.
+    /// The user chose `address` — the initial pick between several
+    /// reachable paths, or a later switch to a different reachable row
+    /// (Use stays available on every reachable row that is not the live
+    /// connection). Either way: persist it as the preferred order and
+    /// connect through it.
     func chooseAddress(_ address: String) async {
-        guard let choices = pendingAddressChoice, choices.contains(address) else { return }
+        guard host.candidateAddresses.contains(address) else { return }
         pendingAddressChoice = nil
         preferredAddresses.prefer(address, candidates: orderedCandidates)
         candidateStates[address] = .reachable

@@ -182,6 +182,36 @@ struct HostMultiPathTests {
         #expect(host?.candidateAddresses == ["new.example", "lan.example", "vpn.example"])
     }
 
+    @Test func intermediateEraCatalogDecodesWithoutTrapping() throws {
+        // The device's store carries records written by the comma-field and
+        // keyboard-bug era builds: multi-address + an alias polluted with
+        // an address string. Every intermediate build persisted the same
+        // shape (the comma parsing lived in the draft, not the model), so
+        // this pins that a first read of that data cannot trap or fail —
+        // including through the store's versioned envelope.
+        let id = UUID()
+        let intermediate = """
+            {"version":1,"hosts":[{"id":"\(id.uuidString)",
+              "name":"Mac","address":"192.168.31.71","port":22,
+              "username":"jhou","authMethod":"deviceKey",
+              "sessionName":"","additionalAddresses":["CMF79KM7YF.local"],
+              "jumpAddress":"","jumpPort":22,"jumpUsername":"",
+              "alias":"CMF79KM7YF.local"}]}
+            """
+        let (defaults, cleanup) = try makeDefaults()
+        defer { cleanup() }
+        defaults.set(Data(intermediate.utf8), forKey: "hosts")
+
+        let store = HostStore(defaults: defaults, secrets: InMemorySecretStore())
+        #expect(store.catalogLoadError == nil)
+        let host = try #require(store.hosts.first)
+        #expect(host.additionalAddresses == ["CMF79KM7YF.local"])
+        #expect(host.candidateAddresses == ["192.168.31.71", "CMF79KM7YF.local"])
+        // The polluted alias (an exact candidate match) never titles the
+        // Host; the name wins.
+        #expect(host.displayAliasName == "Mac")
+    }
+
     // MARK: Draft (form) normalization
 
     @Test func draftRowsNormalizeToCandidates() throws {
@@ -495,6 +525,41 @@ struct HostMultiPathTests {
 
         // The pick persists as the preferred order: the next run probes the
         // VPN path first.
+        let reloadedStore = makeOnboardingStore(
+            host: host, connector: connector, defaults: defaults)
+        #expect(reloadedStore.orderedCandidates == ["vpn.example", "lan.example"])
+    }
+
+    @Test func switchingToAnotherReachableAddressWorksAfterTheInitialPick() async throws {
+        // The device-found defect: after picking A, the Use controls
+        // vanished, so the user could never switch to B. The store must
+        // accept a later chooseAddress for ANY candidate (the view keeps
+        // Use on reachable rows), re-dial through it, and move the mark.
+        let (defaults, cleanup) = try makeDefaults()
+        defer { cleanup() }
+        let host = Host(
+            address: "lan.example", username: "dev",
+            additionalAddresses: ["vpn.example"])
+        let connector = FakeTransportConnector(
+            outcome: .connects(pingResult: .success(
+                ServerInfo(version: "0.7.5", protocolVersion: 17))))
+        let store = makeOnboardingStore(host: host, connector: connector, defaults: defaults)
+
+        await store.runChecks()
+        // Both reachable → the pick list appears.
+        #expect(store.pendingAddressChoice?.contains("vpn.example") == true)
+        await store.chooseAddress("lan.example")
+        #expect(store.workingAddress?.address == "lan.example")
+
+        // After the initial pick the choice is gone — but choosing the
+        // other reachable address must still work, dialing it and moving
+        // the working-address mark.
+        await store.chooseAddress("vpn.example")
+        #expect(store.pendingAddressChoice == nil)
+        #expect(store.report?.isFullyPassed == true)
+        #expect(store.workingAddress?.address == "vpn.example")
+
+        // The later pick REPLACED the earlier preference.
         let reloadedStore = makeOnboardingStore(
             host: host, connector: connector, defaults: defaults)
         #expect(reloadedStore.orderedCandidates == ["vpn.example", "lan.example"])
