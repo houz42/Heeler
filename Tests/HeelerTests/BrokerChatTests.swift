@@ -39,16 +39,20 @@ struct BrokerChatCodecTests {
 
         // Oversized frame: fatal, never resync.
         var capped = BrokerFrameReader(maxFrameBytes: 8)
-        #expect(throws: BrokerFrameReader.FrameError.frameTooLarge(bytes: 12, cap: 8)) {
+        #expect(throws: BrokerFrameReader.FrameError.frameTooLarge(bytes: 13, cap: 8)) {
             _ = try capped.feed(Data("abcdefghijklm\n".utf8))
         }
     }
 
     @Test("captured sessions frame decodes registrations")
     func sessionsFrameDecodes() throws {
-        let value = try JSONDecoder().decode(JSONValue.self, from: Data(Self.capturedSessionsFrame.utf8))
-        let data = try JSONEncoder().encode(value)
-        let decoded = try JSONDecoder().decode(BrokerSessionsResult.self, from: data)
+        // The store decodes the envelope's `result` (not the raw frame),
+        // so the vector goes through the same hop.
+        let envelope = try JSONDecoder().decode(
+            BrokerResponseEnvelope.self, from: Data(Self.capturedSessionsFrame.utf8))
+        let result = try #require(envelope.result)
+        let decoded = try JSONDecoder().decode(
+            BrokerSessionsResult.self, from: JSONEncoder().encode(result))
         let session = try #require(decoded.sessions.first)
         #expect(session.sessionId == "01a0afc5-acd5-723d-b3e3-44416bcfbda8")
         #expect(session.hasHistory && session.hasEvents && session.hasPrompt)
@@ -69,9 +73,11 @@ struct BrokerChatCodecTests {
 
     @Test("captured open page decodes with cursor paging fields")
     func openPageDecodes() throws {
-        let value = try JSONDecoder().decode(JSONValue.self, from: Data(Self.capturedOpenPageFragment.utf8))
-        let data = try JSONEncoder().encode(value)
-        let page = try JSONDecoder().decode(BrokerHistoryPage.self, from: data)
+        let envelope = try JSONDecoder().decode(
+            BrokerResponseEnvelope.self, from: Data(Self.capturedOpenPageFragment.utf8))
+        let result = try #require(envelope.result)
+        let page = try JSONDecoder().decode(
+            BrokerHistoryPage.self, from: JSONEncoder().encode(result))
         #expect(page.hasOlder)
         #expect(page.olderCursor?.isEmpty == false)
         let item = try #require(page.items.first)

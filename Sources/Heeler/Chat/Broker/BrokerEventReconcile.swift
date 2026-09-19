@@ -57,13 +57,41 @@ enum BrokerEventReconcile: Sendable {
         }
         guard frame.seq > state.lastSeq else { return .ignored }
         if frame.seq > state.lastSeq + 1, state.lastSeq > 0 {
-            // Gap: buffer; the store's gap watchdog resyncs if it does
-            // not close. (The contract guarantees ordered delivery, so
+            // Gap: buffer until the missing frames arrive, then replay
+            // in order. (The contract guarantees ordered delivery, so
             // this is belt-and-braces for a misbehaving fan-out.)
             state.buffered.append(frame)
             return .ignored
         }
         state.lastSeq = frame.seq
+        // A gap that just closed: replay buffered frames in seq order.
+        // The buffered effects are folded the same way (a buffered
+        // durable transition still triggers its refetch).
+        var replayed: [BrokerEventFrame] = []
+        while let next = state.buffered.min(by: { $0.seq < $1.seq }),
+            next.seq == state.lastSeq + 1
+        {
+            state.buffered.removeAll { $0.seq == next.seq }
+            state.lastSeq = next.seq
+            replayed.append(next)
+        }
+
+        let effect = Self.effect(for: frame)
+        // A replayed durable transition still triggers its refetch —
+        // the current frame's effect and any replayed refetch collapse
+        // into one (the store's refresh is already idempotent+epoched).
+        for replayedFrame in replayed {
+            if case .refetchRecent = Self.effect(for: replayedFrame) {
+                if case .refetchRecent = effect { continue }
+                return .refetchRecent
+            }
+        }
+        return effect
+    }
+
+    private static func effect(
+        for frame: BrokerEventFrame
+    ) -> BrokerEventEffect {
         switch BrokerEventKind(rawValue: frame.kind) {
         case .resyncRequired:
             return .resync
