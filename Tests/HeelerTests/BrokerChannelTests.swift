@@ -21,9 +21,10 @@ actor ScriptedBrokerPipe: BrokerBytePipe {
         written.map { String(decoding: $0, as: UTF8.self) }
     }
 
-    /// Test-side: deliver bytes as if the broker sent them.
+    /// Test-side: deliver bytes as if the broker sent them. Frames are
+    /// LF-terminated on the real wire, so the mock appends the newline.
     func brokerSend(_ text: String) {
-        incoming.append(Data(text.utf8))
+        incoming.append(Data((text + "\n").utf8))
         pump()
     }
 

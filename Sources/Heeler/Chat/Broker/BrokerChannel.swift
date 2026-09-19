@@ -43,8 +43,7 @@ actor BrokerChannel {
     private var pending: [String: PendingSlot] = [:]
     private var readerTask: Task<Void, Never>?
     private var closed = false
-    private var helloContinuation:
-        CheckedContinuation<BrokerHelloAck?, Never>?
+    // (hello continuation state lives in HelloSlot, installed by connect)
 
     /// Negotiated state, readable after `connect`.
     private(set) var proto: BrokerProto = .v0
@@ -72,23 +71,19 @@ actor BrokerChannel {
     /// one version-gated legacy branch, deleted once every deployed
     /// broker answers proto:1.
     func connect() async throws {
-        // Reader BEFORE the race: the ack (or a v0 broker's non-reply)
-        // is only observed because the reader is consuming frames while
-        // connect awaits the hello continuation.
+        // The hello slot is installed synchronously FIRST; the ack can
+        // only be observed by the reader, which starts next — so no ack
+        // can slip past before the slot exists.
+        let slot = HelloSlot()
+        installHelloSlot(slot)
         startReader()
         try await send(BrokerFrameWriter.encode(BrokerClientHello(proto: .requested)))
-        let body = Task<BrokerHelloAck?, Never> {
-            await withCheckedContinuation {
-                (continuation: CheckedContinuation<BrokerHelloAck?, Never>) in
-                self.installHelloContinuation(continuation)
-            }
-        }
         let timer = Task {
             try? await Task.sleep(for: .seconds(3))
             await self.expireHello()
         }
         defer { timer.cancel() }
-        let ack = await body.value
+        let ack = await slot.awaitAck()
         if let ack, ack.isV1 {
             proto = .v1
             maxFrameBytes = ack.maxFrameBytes ?? maxFrameBytes
@@ -96,24 +91,65 @@ actor BrokerChannel {
         // No ack or not v1: v0 arm. A v0 broker ignores the hello frame.
     }
 
-    private func installHelloContinuation(
-        _ continuation: CheckedContinuation<BrokerHelloAck?, Never>
-    ) {
-        // Registered synchronously on the actor; the reader (or the
-        // expiry timer) is the single resumer.
-        helloContinuation = continuation
+    /// Same discipline as PendingSlot: synchronous install, single
+    /// resume (reader ack, error reply, or the expiry timer).
+    private final class HelloSlot: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<BrokerHelloAck?, Never>?
+        private var buffered: BrokerHelloAck?
+        private var delivered = false
+
+        func install(
+            _ continuation: CheckedContinuation<BrokerHelloAck?, Never>
+        ) {
+            lock.lock(); defer { lock.unlock() }
+            // Delivery may have raced ahead of install (the reader can
+            // consume a pre-queued ack before awaitAck suspends); the
+            // buffered value resumes immediately in that case.
+            if delivered {
+                continuation.resume(returning: buffered)
+                return
+            }
+            self.continuation = continuation
+        }
+
+        func deliver(_ ack: BrokerHelloAck?) {
+            lock.lock(); defer { lock.unlock() }
+            guard !delivered else { return }
+            delivered = true
+            buffered = ack
+            continuation?.resume(returning: ack)
+            continuation = nil
+        }
+
+        func awaitAck() async -> BrokerHelloAck? {
+            await withTaskCancellationHandler {
+                await withCheckedContinuation {
+                    (continuation: CheckedContinuation<BrokerHelloAck?, Never>) in
+                    install(continuation)
+                }
+            } onCancel: {
+                deliver(nil)
+            }
+        }
     }
 
+    private func installHelloSlot(_ slot: HelloSlot) {
+        helloSlot = slot
+    }
+
+    private var helloSlot: HelloSlot?
+
     private func expireHello() {
-        helloContinuation?.resume(returning: nil)
-        helloContinuation = nil
+        helloSlot?.deliver(nil)
+        helloSlot = nil
     }
 
     /// Resolves a pending hello when the reader sees an ack (or a
     /// non-hello frame first: v0 brokers never answer hello).
     private func resolveHello(_ ack: BrokerHelloAck?) {
-        helloContinuation?.resume(returning: ack)
-        helloContinuation = nil
+        helloSlot?.deliver(ack)
+        helloSlot = nil
     }
 
     private func startReader() {
@@ -241,22 +277,36 @@ actor BrokerChannel {
         private let lock = NSLock()
         private var continuation:
             CheckedContinuation<JSONValue, any Error>?
+        private var buffered: Result<JSONValue, any Error>?
+        private var delivered = false
 
         func install(
             _ continuation: CheckedContinuation<JSONValue, any Error>
         ) {
             lock.lock(); defer { lock.unlock() }
+            // Same early-delivery buffer as HelloSlot: handle() can
+            // consume the reply before awaitResult suspends.
+            if delivered, let buffered {
+                continuation.resume(with: buffered)
+                return
+            }
             self.continuation = continuation
         }
 
         func resume(returning value: JSONValue) {
             lock.lock(); defer { lock.unlock() }
+            guard !delivered else { return }
+            delivered = true
+            buffered = .success(value)
             continuation?.resume(returning: value)
             continuation = nil
         }
 
         func resume(throwing error: any Error) {
             lock.lock(); defer { lock.unlock() }
+            guard !delivered else { return }
+            delivered = true
+            buffered = .failure(error)
             continuation?.resume(throwing: error)
             continuation = nil
         }

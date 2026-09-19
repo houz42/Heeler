@@ -74,11 +74,23 @@ enum BrokerFrameWriter {
 /// The client hello. Fire-and-forget in v0; v1 brokers reply with
 /// ``BrokerHelloAck``.
 struct BrokerClientHello: Encodable, Sendable {
-    let type = "client"
-    var proto: Int? { protoValue }
-    private let protoValue: Int?
+    var type: String { "client" }
+    /// Omitted when nil (v0 arm never encodes it); explicit CodingKeys
+    /// because a computed `type` must not be encoded as a stored var.
+    var proto: Int?
+
     init(proto: BrokerProto?) {
-        protoValue = proto.map(\.rawValue)
+        self.proto = proto.map(\.rawValue)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case type, proto
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(type, forKey: .type)
+        try container.encodeIfPresent(proto, forKey: .proto)
     }
 }
 
