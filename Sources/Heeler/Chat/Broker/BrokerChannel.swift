@@ -40,8 +40,7 @@ actor BrokerChannel {
     private let continuation: AsyncStream<BrokerChannelEvent>.Continuation
 
     private var nextID = 0
-    private var pending:
-        [String: CheckedContinuation<JSONValue, any Error>] = [:]
+    private var pending: [String: PendingSlot] = [:]
     private var readerTask: Task<Void, Never>?
     private var closed = false
     private var helloContinuation:
@@ -73,11 +72,11 @@ actor BrokerChannel {
     /// one version-gated legacy branch, deleted once every deployed
     /// broker answers proto:1.
     func connect() async throws {
+        // Reader BEFORE the race: the ack (or a v0 broker's non-reply)
+        // is only observed because the reader is consuming frames while
+        // connect awaits the hello continuation.
+        startReader()
         try await send(BrokerFrameWriter.encode(BrokerClientHello(proto: .requested)))
-        // The continuation is registered synchronously on the actor
-        // BEFORE the race starts; the reader's ack resolution and this
-        // timeout race are both actor-isolated, so there is exactly one
-        // resumer.
         let body = Task<BrokerHelloAck?, Never> {
             await withCheckedContinuation {
                 (continuation: CheckedContinuation<BrokerHelloAck?, Never>) in
@@ -95,7 +94,6 @@ actor BrokerChannel {
             maxFrameBytes = ack.maxFrameBytes ?? maxFrameBytes
         }
         // No ack or not v1: v0 arm. A v0 broker ignores the hello frame.
-        startReader()
     }
 
     private func installHelloContinuation(
@@ -219,23 +217,60 @@ actor BrokerChannel {
             throw BrokerClientError.frameTooLarge(
                 bytes: bytes.count, cap: maxFrameBytes)
         }
-        // Write first, then await the correlated reply. The reader runs
-        // on this actor's executor, so a reply frame cannot be handled
-        // before `pending[id]` is set by the continuation registration
-        // this await performs.
-        try await send(bytes)
-        let body = Task<JSONValue, any Error> {
-            try await withCheckedThrowingContinuation {
-                (continuation: CheckedContinuation<JSONValue, any Error>) in
-                self.pending[id] = continuation
-            }
-        }
+        // Synchronous registration on the actor BEFORE any write: a
+        // reply can only be handled by handle() — also actor-isolated —
+        // so once pending[id] is set here, no interleaving can miss it.
+        let slot = PendingSlot()
+        pending[id] = slot
         let timer = Task {
             try? await Task.sleep(for: requestTimeout)
             await self.expireRequest(id)
         }
-        defer { timer.cancel() }
-        return try await body.value
+        defer {
+            timer.cancel()
+            if pending[id] === slot { pending[id] = nil }
+        }
+        try await send(bytes)
+        return try await slot.awaitResult()
+    }
+
+    /// One awaited reply: `request` installs the slot synchronously (so
+    /// no reply can race ahead of registration), then suspends on this
+    /// continuation exactly once — resumed by handle/expire/finish.
+    private final class PendingSlot: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation:
+            CheckedContinuation<JSONValue, any Error>?
+
+        func install(
+            _ continuation: CheckedContinuation<JSONValue, any Error>
+        ) {
+            lock.lock(); defer { lock.unlock() }
+            self.continuation = continuation
+        }
+
+        func resume(returning value: JSONValue) {
+            lock.lock(); defer { lock.unlock() }
+            continuation?.resume(returning: value)
+            continuation = nil
+        }
+
+        func resume(throwing error: any Error) {
+            lock.lock(); defer { lock.unlock() }
+            continuation?.resume(throwing: error)
+            continuation = nil
+        }
+
+        func awaitResult() async throws -> JSONValue {
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation {
+                    (continuation: CheckedContinuation<JSONValue, any Error>) in
+                    install(continuation)
+                }
+            } onCancel: {
+                resume(throwing: BrokerClientError.connectionClosed)
+            }
+        }
     }
 
     private func expireRequest(_ id: String) {
