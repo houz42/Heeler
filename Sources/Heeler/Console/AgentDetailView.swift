@@ -26,6 +26,14 @@ struct AgentDetailView: View {
     @State private var chat: ChatStore?
     /// The chat input's submit router (/ # @ ! routing). Built with the
     /// same per-agent task as the chat store.
+    /// The broker-backed chat store, one per (host, pane). Preferred
+    /// over the JSONL store when the Host has a broker configured and
+    /// the agent's session matches a live registration; the JSONL
+    /// backend stays the fallback (and the only backend on Hosts
+    /// without a broker).
+    @State private var brokerChat: BrokerChatStore?
+    /// The chat input's submit router (/ # @ ! routing). Built with the
+    /// same per-agent task as the chat store.
     @State private var chatRouter: ComposerRouterStore?
     /// Which surface the detail shows. Set on first appearance from the
     /// agent's session shape; the picker is the only other writer.
@@ -281,6 +289,26 @@ struct AgentDetailView: View {
         guard chat == nil,
             agent.agent.agentSession?.kind == AgentSessionRefKind.path
         else { return }
+
+        // Broker backend: only when this Host configured a broker socket
+        // path. One store per agent identity; started here so surface
+        // entry only renders.
+        if brokerChat == nil, console.host(for: agent.hostID)?.hasBrokerChat == true {
+            let brokerStore = BrokerChatStore(
+                pipeFactory: .console(console, hostID: agent.hostID),
+                paneSessionIdentity: { [agent] in
+                    guard let path = agent.agent.agentSession?.value else {
+                        return nil
+                    }
+                    return HerdrPaneSessionIdentity(sessionFilePath: path)
+                })
+            brokerChat = brokerStore
+            await brokerStore.start()
+        }
+
+        // JSONL backend: unchanged behavior, still built even when the
+        // broker store exists (it renders when broker matching failed
+        // closed AND the transcript path is readable).
         let store = ChatStore(
             hostID: agent.hostID,
             paneID: agent.agent.paneID,
@@ -319,7 +347,9 @@ struct AgentDetailView: View {
     /// renders the chat surface.
     @ViewBuilder
     private var chatSurface: some View {
-        if let chat {
+        if let brokerChat {
+            brokerChatSurface(brokerChat)
+        } else if let chat {
             ChatScreen(
                 paneID: agent.agent.paneID,
                 agentName: agent.tabLabel ?? agent.agent.displayName,
@@ -342,6 +372,76 @@ struct AgentDetailView: View {
         } else {
             ChatUnavailablePlaceholder()
         }
+    }
+
+    /// The broker-backed chat surface: honest state surfaces for every
+    /// non-ready phase, and the SAME row/bubble rendering (ChatScreen
+    /// reused, not forked) when content is live.
+    @ViewBuilder
+    private func brokerChatSurface(_ store: BrokerChatStore) -> some View {
+        switch store.phase {
+        case .ready, .disconnected:
+            ChatScreen(
+                paneID: agent.agent.paneID,
+                agentName: agent.tabLabel ?? agent.agent.displayName,
+                state: brokerAgentState,
+                content: brokerContent,
+                initialLevel: chatLevels.level(paneID: agent.agent.paneID),
+                changeLevel: { [chatLevels] level, paneID in
+                    chatLevels.setLevel(level, paneID: paneID)
+                },
+                hasOlder: store.hasOlder,
+                isLoadingOlder: store.isLoadingOlder,
+                loadOlder: { [weak store] in await store?.loadOlder() },
+                router: chatRouter,
+                deliver: { text in
+                    try await store.send(text)
+                },
+                pendingUnsupported: true)
+                .overlay(alignment: .bottom) {
+                    if case .disconnected(let reason) = store.phase {
+                        BrokerChatStateBanner(
+                            icon: "wifi.exclamationmark",
+                            title: "Reconnect to the chat broker",
+                            detail: reason)
+                    }
+                }
+        case .idle, .connecting, .loading:
+            BrokerChatStateBanner(
+                icon: "hourglass", title: "Connecting to the chat broker…",
+                detail: nil)
+        case .unavailable(let reason):
+            BrokerChatStateBanner(
+                icon: "person.crop.circle.badge.xmark",
+                title: "No chat broker for this agent", detail: reason)
+        case .ambiguous(let reason):
+            BrokerChatStateBanner(
+                icon: "arrow.triangle.branch",
+                title: "Ambiguous agent mapping", detail: reason)
+        case .failed(let reason):
+            BrokerChatStateBanner(
+                icon: "exclamationmark.triangle",
+                title: "The chat broker connection failed", detail: reason)
+        }
+    }
+
+    /// The broker store's content, with the streaming tail rendered as
+    /// a provisional assistant bubble.
+    private var brokerContent: ChatContent {
+        var content = brokerChat?.content ?? ChatContent()
+        if let tail = brokerChat?.streamingTail, !tail.text.isEmpty {
+            content.messages.append(
+                ChatMessage(role: .assistant, blocks: [.text(tail.text)]))
+        }
+        return content
+    }
+
+    /// The status-strip state for the broker surface: Running while the
+    /// tail streams or the agent status says working, else the console's
+    /// status.
+    private var brokerAgentState: ChatAgentState {
+        if brokerChat?.streamingTail != nil { return .running }
+        return chatAgentState
     }
 
     var body: some View {

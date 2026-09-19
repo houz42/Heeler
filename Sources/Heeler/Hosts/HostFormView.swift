@@ -127,6 +127,20 @@ struct HostFormView: View {
                         Text("Leave blank to connect to the Host directly.")
                     }
                 }
+
+                Section {
+                    TextField(
+                        "Chat broker socket path (optional)",
+                        text: $draft.brokerChatSocketPath)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                } header: {
+                    Text("Chat Broker")
+                } footer: {
+                    Text(
+                        "Absolute path of the native chat broker socket on this Host. "
+                            + "Blank keeps the chat surface on the transcript file backend.")
+                }
             }
             .navigationTitle(editing == nil ? "Add Host" : "Edit Host")
             .navigationBarTitleDisplayMode(.inline)

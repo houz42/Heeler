@@ -53,6 +53,10 @@ struct ChatScreen: View {
     /// Delivers plain text to the agent (`agent.prompt` equivalent). Called
     /// only when the router returns `.passthrough`.
     var deliver: ((String) async throws -> Void)? = nil
+    /// True when the pending (ask) rows must render as an honest
+    /// unsupported state — the broker backend has no verified answering
+    /// API in v1. False keeps the JSONL backend's interactive rows.
+    var pendingUnsupported: Bool = false
 
     @State private var level: DetailLevel
     init(
@@ -67,7 +71,8 @@ struct ChatScreen: View {
         loadOlder: (@Sendable () async -> Void)? = nil,
         stripAccessory: AnyView? = nil,
         router: ComposerRouterStore? = nil,
-        deliver: ((String) async throws -> Void)? = nil
+        deliver: ((String) async throws -> Void)? = nil,
+        pendingUnsupported: Bool = false
     ) {
         self.paneID = paneID
         self.agentName = agentName
@@ -78,8 +83,8 @@ struct ChatScreen: View {
         self.isLoadingOlder = isLoadingOlder
         self.loadOlder = loadOlder
         self.stripAccessory = stripAccessory
-        self.router = router
         self.deliver = deliver
+        self.pendingUnsupported = pendingUnsupported
         self._level = State(initialValue: initialLevel)
     }
 
@@ -288,7 +293,11 @@ struct ChatScreen: View {
                 isFocused: focusedBubble == bubble,
                 onLongPress: { enterBubbleFocus(bubble) })
         case .row(let row):
-            LinkifiedChatRow(row: row, router: openRouter)
+            if pendingUnsupported, case .pending(let interaction) = row {
+                BrokerUnsupportedAskRow(interaction: interaction)
+            } else {
+                LinkifiedChatRow(row: row, router: openRouter)
+            }
         }
     }
 
