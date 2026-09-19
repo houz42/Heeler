@@ -554,4 +554,111 @@ struct ChatPendingFilteringTests {
         }
         #expect(pendingRows.map(\.id) == ["ask_0#q1", "ask_0#q2"])
     }
+
+    // MARK: inline placement (device-verified defect: bottom-appended
+    // cards detached from their conversation)
+
+    private func askTurn(
+        callID: String, answer: String? = nil
+    ) -> (ChatMessage, ChatMessage) {
+        // An assistant turn ending in an ask call, and the follow-up turn.
+        let asking = ChatMessage(
+            id: UUID(), role: .assistant,
+            blocks: [
+                .text("I need a decision:"),
+                .toolCall(ToolCall(
+                    id: callID, name: "ask",
+                    arguments: .object([:])),
+                ),
+            ])
+        let followUp = ChatMessage(
+            id: UUID(), role: .assistant, blocks: [.text("Continuing.")])
+        _ = answer
+        return (asking, followUp)
+    }
+
+    @Test func pendingCardRendersInlineAtTheAskCallPosition() throws {
+        // [user → ask call → agent] must render the card BETWEEN the
+        // turns, at every level (the ask row itself is level-gated; the
+        // card never is).
+        let user = ChatMessage(id: UUID(), role: .user, blocks: [.text("Ask me")])
+        let (asking, followUp) = askTurn(callID: "ask_0#x")
+        let question = PendingInteraction(
+            id: "ask_0#x#q", callID: "ask_0#x", question: "Which?",
+            options: [PendingInteraction.Option(label: "A", index: 0)])
+
+        for level in DetailLevel.allCases {
+            let rows = ChatFiltering.visibleRows(
+                messages: [user, asking, followUp], toolResults: [],
+                pending: [question], level: level)
+
+            let pendingIndex = try #require(
+                rows.firstIndex { if case .pending = $0 { return true } else { return false } },
+                "level \(level): card must render")
+            let textIndices = rows.indices.filter {
+                if case .text = rows[$0] { return true } else { return false }
+            }
+            // User text before the card, the follow-up turn after it.
+            #expect(textIndices.contains { $0 < pendingIndex })
+            #expect(textIndices.contains { $0 > pendingIndex })
+        }
+    }
+
+    @Test func answeredCardsStayInlineInConversationOrder() {
+        // The device screenshot's shape: two ask turns with answered
+        // cards, each card at ITS call's position — not stacked at the
+        // bottom.
+        let (first, firstFollow) = askTurn(callID: "ask_a")
+        let (second, secondFollow) = askTurn(callID: "ask_b")
+        let answeredA = PendingInteraction(
+            id: "ask_a#q", callID: "ask_a", question: "Pick one?",
+            options: [PendingInteraction.Option(label: "B", index: 1)],
+            answer: "B")
+        let answeredB = PendingInteraction(
+            id: "ask_b#q", callID: "ask_b", question: "Pick again?",
+            options: [PendingInteraction.Option(label: "Green", index: 0)],
+            answer: "Green")
+
+        let rows = ChatFiltering.visibleRows(
+            messages: [first, firstFollow, second, secondFollow],
+            toolResults: [], pending: [answeredA, answeredB], level: .l0)
+
+        let pendingIDs = rows.compactMap { row -> String? in
+            guard case .pending(let interaction) = row else { return nil }
+            return interaction.id
+        }
+        #expect(pendingIDs == ["ask_a#q", "ask_b#q"])
+        // Both were emitted inline — nothing fell to the tail.
+        #expect(pendingIDs.count == 2)
+
+        // And the order interleaves: ask_a's card before ask_b's card,
+        // each followed by its own turn's continuation.
+        let kinds = rows.map { row -> String in
+            switch row {
+            case .text(_, _, let role, let text):
+                return role == .user ? "user" : "text:\(text.prefix(12))"
+            case .pending(let interaction):
+                return "card:\(interaction.callID)"
+            default:
+                return "other"
+            }
+        }
+        #expect(kinds == [
+            "text:I need a dec", "card:ask_a", "text:Continuing.",
+            "text:I need a dec", "card:ask_b", "text:Continuing.",
+        ])
+    }
+
+    @Test func strayPendingWithoutACallKeepsTailPlacement() {
+        // Hand-built pendings (previews) and window-boundary strays keep
+        // the old live-edge tail placement.
+        let pending = PendingInteraction(question: "Proceed?", options: [])
+        let rows = ChatFiltering.visibleRows(
+            messages: [ChatMessage(id: UUID(), role: .assistant, blocks: [.text("hi")])],
+            toolResults: [], pending: [pending], level: .l0)
+        guard case .pending = rows.last else {
+            Issue.record("stray pending must keep tail placement")
+            return
+        }
+    }
 }
