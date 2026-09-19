@@ -256,17 +256,20 @@
         static let chatTranscriptPath = "/home/demo/.local/share/omp/session.jsonl"
 
         /// A small omp JSONL transcript: a user turn, an assistant turn
-        /// with thinking + a tool call + text, a paired tool result, and
-        /// a closing assistant round of TWO messages — so the chat
-        /// surface's bubble grouping shows one bubble per message within
-        /// the round (the pending card stays preview-only until a
-        /// transcript record feeds it).
+        /// with thinking + a tool call + text, a paired tool result, a
+        /// closing assistant round of two messages, and one very long
+        /// assistant message (taller than the viewport) — so the bubble
+        /// grouping shows per-message bubbles AND the focus overlay's
+        /// pill/menu clamping can be screenshot-verified against an
+        /// over-tall bubble (the pending card stays preview-only until
+        /// a transcript record feeds it).
         private static let chatTranscriptJSON = """
             {"type":"message","id":"demo-1","timestamp":1789292098261,"message":{"role":"user","content":[{"type":"text","text":"Ship the checkout fix — run the targeted tests first."}],"timestamp":1789292098261}}
             {"type":"message","id":"demo-2","timestamp":1789292105000,"message":{"role":"assistant","content":[{"type":"thinking","thinking":"The user wants the fix shipped. Read the failing test first, then run the suite."},{"type":"toolCall","id":"demo-call-1","name":"read","arguments":{"path":"CheckoutView.swift"}},{"type":"text","text":"The retry logic drops the cart because `PaymentCoordinator` resets state on the first attempt. I'll preserve the cart across retries and re-run `CheckoutFlowTests`."}],"timestamp":1789292105000}}
             {"type":"message","id":"demo-3","timestamp":1789292110000,"message":{"role":"toolResult","toolCallId":"demo-call-1","toolName":"read","content":[{"type":"text","text":"struct CheckoutView: View {\\n    var body: some View {\\n        Text(\\"Checkout\\")\\n    }\\n}"}],"timestamp":1789292110000}}
             {"type":"message","id":"demo-4","timestamp":1789292115000,"message":{"role":"assistant","content":[{"type":"text","text":"Re-ran the suite: 18 of 18 passing, no flake in the retry path."}],"timestamp":1789292115000}}
             {"type":"message","id":"demo-5","timestamp":1789292120000,"message":{"role":"assistant","content":[{"type":"text","text":"All 18 tests pass. Ready to commit when you are."}],"timestamp":1789292120000}}
+            {"type":"message","id":"demo-6","timestamp":1789292130000,"message":{"role":"assistant","content":[{"type":"text","text":"Long-run verification notes. Step 1: reproduce the failure on a clean checkout — clone the repo, apply no local patches, and run the failing test exactly as CI does, because a passing local run with uncommitted changes proves nothing about the shipped build. Step 2: capture the failure signature — the first error line, the file and line it names, and the full stack if one prints — so a fix can be matched to the failure later rather than to a guess. Step 3: form one hypothesis at a time. Change exactly one thing, re-run, and record the result; changing two things at once means a passing run cannot say which change mattered. Step 4: keep the reproduction as the regression test. If the fix cannot be shown to flip the repro from red to green, the fix is not verified — it is a hope. Step 5: when the cause is found, write the root cause down before writing the fix, because a fix written against a misread cause silently moves the bug somewhere else. Step 6: re-run the full suite before declaring done, since narrow tests pass happily while neighbors break. Step 7: note the environment — simulator version, OS build, device family — because a failure that only reproduces on one runtime is an environment bug wearing a code bug's clothes. Step 8: if two people are debugging, say out loud what you believe and why before acting; a wrong belief shared is corrected in seconds, a wrong belief private can burn an afternoon. Step 9: when the same failure appears in three places, stop patching and look for the shared seam — the bug lives in the seam, not the call sites. Step 10: after the fix ships, watch the next few CI runs for the same signature elsewhere; regressions rarely travel alone."}],"timestamp":1789292130000}}
             """
 
         static let chatTranscript = Data(chatTranscriptJSON.utf8)
