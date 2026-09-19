@@ -303,6 +303,201 @@ struct ChatPendingDeliveryTests {
         #expect([a, b].contains(.delivered))
         #expect(spy.delivered.count == 1)
     }
+    @Test func failedDeliveryIsVisibleAndRetrySucceeds() async throws {
+        // A failed tap must not roll back silently: the failure message is
+        // exposed for the card to render, and retry after the failure
+        // clears it.
+        let spy = DeliverSpy()
+        spy.error = CocoaError(.fileNoSuchFile)
+        let store = PendingAnswerDelivery(
+            deliver: { text in try await spy.deliver(text) },
+            describeError: { _ in "Host connection dropped" })
+        let pending = interaction()
+        let option = try #require(pending.options.first)
+
+        let outcome = await store.choose(option, for: pending)
+        #expect(outcome == .failed("Host connection dropped"))
+        #expect(store.failureMessage(for: pending) == "Host connection dropped")
+        #expect(store.answer(for: pending) == nil)
+
+        // Retry once the transport recovers: the failure message clears.
+        spy.error = nil
+        let retry = await store.choose(option, for: pending)
+        #expect(retry == .delivered)
+        #expect(store.failureMessage(for: pending) == nil)
+        #expect(store.answer(for: pending) == "Run them")
+    }
+
+    @Test func inFlightDeliveryIsVisibleWhileSuppressionHolds() async throws {
+        // While the deliver closure is awaiting, the card must be able to
+        // render progress (and a concurrent second tap is a no-op).
+        let spy = DeliverSpy()
+        var release: (@Sendable () -> Void) = {}
+        let stream = AsyncStream<Void> { continuation in
+            release = { continuation.finish() }
+        }
+        let store = PendingAnswerDelivery(deliver: { text in
+            try await spy.deliver(text)
+            for await _ in stream { break }
+        })
+        let pending = interaction()
+        let option = try #require(pending.options.first)
+
+        async let first = store.choose(option, for: pending)
+        // Let the delivery reach its await point.
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(store.isDelivering(to: pending))
+        #expect(store.failureMessage(for: pending) == nil)
+
+        let second = await store.choose(option, for: pending)
+        #expect(second == .alreadyAnswered)
+
+        release()
+        let outcome = await first
+        #expect(outcome == .delivered)
+        #expect(!store.isDelivering(to: pending))
+    }
+}
+
+// MARK: - Production wiring: the AgentDetailView deliver path
+
+/// The closure shape AgentDetailView hands ChatScreen, driven through a
+/// real ConsoleStore over a scripted transport — the exact production
+/// path (console.promptAgent → transport.promptAgent), not an injected
+/// stub. Pins that the option label reaches the wire with the right
+/// pane target, and that a transport failure surfaces through the seam
+/// rather than vanishing.
+@MainActor
+@Suite("Pending interactions: production wiring")
+struct ChatPendingProductionWiringTests {
+    private func makeConsole(
+        transport: ScriptedTransport
+    ) -> ConsoleStore {
+        ConsoleStore(snapshotRetryDelay: .milliseconds(10)) { _, subscriptions in
+            EventsSession(
+                subscriptions: subscriptions,
+                connect: { transport },
+                reconnectPolicy: ReconnectPolicy(
+                    initialDelay: .milliseconds(10), multiplier: 2,
+                    maxDelay: .milliseconds(50)),
+                keepalive: nil)
+        }
+    }
+
+    private func hostAndConsole() async
+        -> (Host.ID, ConsoleStore, ScriptedTransport)
+    {
+        let transport = ScriptedTransport()
+        let console = makeConsole(transport: transport)
+        let host = Host.fixture()
+        console.setHosts([host])
+        // The production flow: the app resumes the Console on appear and
+        // the Host's session connects before any delivery can run.
+        await console.resume()
+        return (host.id, console, transport)
+    }
+
+    /// Waits until the Host's console connection is live — a prompt
+    /// before the session connects fails with "The Host is not
+    /// connected", which is the production precondition, not a bug.
+    private func waitUntilConnected(
+        _ console: ConsoleStore, hostID: Host.ID
+    ) async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while ContinuousClock.now < deadline {
+            if console.hostStatuses[hostID] == .connected { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(console.hostStatuses[hostID] == .connected, "console must connect")
+    }
+
+    /// The deliver closure AgentDetailView builds for ChatScreen
+    /// (ChatScreen(deliver:) parameter), verbatim.
+    private func detailDeliverClosure(
+        console: ConsoleStore, hostID: Host.ID, paneID: String
+    ) -> (String) async throws -> Void {
+        { text in
+            try await console.promptAgent(
+                AgentPromptParams(target: paneID, text: text),
+                on: hostID)
+        }
+    }
+
+    @Test func optionLabelReachesTheWireThroughTheProductionClosure() async throws {
+        let (hostID, console, transport) = await hostAndConsole()
+        try await waitUntilConnected(console, hostID: hostID)
+
+        // Mirror AgentDetailView's chat surface wiring: the deliver
+        // closure passed to ChatScreen.
+        let deliver = detailDeliverClosure(
+            console: console, hostID: hostID, paneID: "w1:p1")
+        let store = PendingAnswerDelivery(deliver: deliver)
+        let pending = PendingInteraction(
+            id: "ask_0#q", question: "Run the tests?",
+            options: [PendingInteraction.Option(label: "Run the tests")])
+
+        let outcome = await store.choose(
+            try #require(pending.options.first), for: pending)
+        #expect(outcome == .delivered)
+
+        // The option's label arrived at the transport, addressed to the
+        // agent's pane.
+        let params = try #require(
+            await transport.agentPromptParams.last,
+            "the tap must reach the transport's promptAgent")
+        #expect(params.target == "w1:p1")
+        #expect(params.text == "Run the tests")
+    }
+
+    @Test func transportFailureSurfacesNotSilentlyRollsBack() async throws {
+        let (hostID, console, transport) = await hostAndConsole()
+        try await waitUntilConnected(console, hostID: hostID)
+        await transport.setAgentPromptFailure(
+            TransportError.sshUnreachable(detail: "connection lost"))
+
+        let deliver = detailDeliverClosure(
+            console: console, hostID: hostID, paneID: "w1:p1")
+        let store = PendingAnswerDelivery(deliver: deliver)
+        let pending = PendingInteraction(
+            id: "ask_1#q", question: "Run the tests?",
+            options: [PendingInteraction.Option(label: "Run the tests")])
+        let outcome = await store.choose(
+            try #require(pending.options.first), for: pending)
+        #expect(outcome != .delivered)
+        // The failure is user-visible through the seam, the question
+        // stays answerable, and nothing was recorded as answered.
+        #expect(store.failureMessage(for: pending) != nil)
+        #expect(store.answer(for: pending) == nil)
+        #expect(await transport.agentPromptParams.count == 1)
+    }
+
+    @Test func theStoreIsBuiltAtInitSoTheFirstTapIsWired() throws {
+        // The device bug: ChatScreen previously built its pending-answer
+        // store in a .task, so a tap on the very first render hit the
+        // read-only form (choose: { _ in }) and did nothing. The store
+        // must exist the moment the screen does — assert it through the
+        // store the screen hands its cards (internal test seam).
+        let screen = ChatScreen(
+            paneID: "w1:p1",
+            agentName: "reviewer",
+            state: .blocked,
+            content: ChatContent(pending: []),
+            initialLevel: .l0,
+            changeLevel: { _, _ in },
+            deliver: { _ in })
+        #expect(screen.pendingAnswersForTesting != nil)
+
+        // And a nil deliver (previews, unwired hosts) keeps it nil — the
+        // read-only card renders instead.
+        let readonly = ChatScreen(
+            paneID: "w1:p1",
+            agentName: "reviewer",
+            state: .blocked,
+            content: ChatContent(pending: []),
+            initialLevel: .l0,
+            changeLevel: { _, _ in })
+        #expect(readonly.pendingAnswersForTesting == nil)
+    }
 }
 
 // MARK: - Filtering: pending rows keep their every-level contract

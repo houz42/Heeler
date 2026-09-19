@@ -49,6 +49,9 @@ final class PendingAnswerDelivery {
         case alreadyAnswered
     }
 
+    /// The last delivery failure per interaction, for the card to render.
+    /// A successful retry (or the transcript's own answer) clears it.
+    private(set) var deliveryErrors: [String: String] = [:]
     private(set) var localAnswers: [String: String] = [:]
     private var inFlight: Set<String> = []
     private let deliver: (String) async throws -> Void
@@ -71,9 +74,23 @@ final class PendingAnswerDelivery {
         localAnswers[interaction.id] ?? interaction.answer
     }
 
+    /// True while a delivery for this interaction is in flight: the card
+    /// shows progress and suppresses further taps (the deliver-once guard
+    /// also holds, but the user should SEE why nothing happens).
+    func isDelivering(to interaction: PendingInteraction) -> Bool {
+        inFlight.contains(interaction.id)
+    }
+
+    /// The user-visible failure text for this interaction, if the last
+    /// delivery attempt threw.
+    func failureMessage(for interaction: PendingInteraction) -> String? {
+        deliveryErrors[interaction.id]
+    }
+
     /// Tapping an option: delivers the option's label once. A second tap
     /// (or a tap on an already-answered question) is a no-op; a failed
-    /// delivery rolls back so the question stays answerable.
+    /// delivery records the failure for the card to show and keeps the
+    /// question answerable.
     @discardableResult
     func choose(
         _ option: PendingInteraction.Option, for interaction: PendingInteraction
@@ -82,12 +99,14 @@ final class PendingAnswerDelivery {
             return .alreadyAnswered
         }
         inFlight.insert(interaction.id)
+        deliveryErrors[interaction.id] = nil
         defer { inFlight.remove(interaction.id) }
         do {
             try await deliver(option.label)
             localAnswers[interaction.id] = option.label
             return .delivered
         } catch {
+            deliveryErrors[interaction.id] = describeError(error)
             return .failed(describeError(error))
         }
     }
@@ -150,10 +169,18 @@ struct ChatScreen: View {
         self.router = router
         self.deliver = deliver
         self._level = State(initialValue: initialLevel)
+        // Built in init, not on appear: the deliver closure is fixed at
+ // construction (AgentDetailView passes console.promptAgent directly), so a
+        // tap on first render is already wired — no read-only window, and no
+        // dependence on a .task firing before the first tap.
+        if let deliver {
+            _pendingAnswers = State(
+                initialValue: PendingAnswerDelivery(deliver: deliver))
+        }
     }
 
-    /// The pending-question answer store: one per screen, built from the
-    /// injected `deliver` closure (nil deliver = read-only, previews).
+    /// The pending-question answer store, built from the injected
+    /// `deliver` closure in init (nil deliver = read-only, previews).
     @State private var pendingAnswers: PendingAnswerDelivery?
 
     /// The pane's link-open router (Phase 4 openers): every detected
@@ -264,7 +291,6 @@ struct ChatScreen: View {
         }
         // The input affordance floats bottom-trailing and only while the
         // input frame is closed; the frame's own chevron closes it.
-        .task { ensurePendingAnswers() }
         .overlay {
             if !inputPresented, router != nil && deliver != nil { inputOverlay }
         }
@@ -355,6 +381,8 @@ struct ChatScreen: View {
             ChatPendingRow(
                 interaction: interaction,
                 answer: pendingAnswers.answer(for: interaction),
+                isDelivering: pendingAnswers.isDelivering(to: interaction),
+                failureMessage: pendingAnswers.failureMessage(for: interaction),
                 choose: { option in
                     Task { await pendingAnswers.choose(option, for: interaction) }
                 })
@@ -363,13 +391,10 @@ struct ChatScreen: View {
         }
     }
 
-    /// Builds the pending-answer store once, from the injected `deliver`
-    /// closure; no-op on re-renders. A nil `deliver` keeps the card in its
-    /// read-only form.
-    private func ensurePendingAnswers() {
-        guard pendingAnswers == nil, let deliver else { return }
-        pendingAnswers = PendingAnswerDelivery(deliver: deliver)
-    }
+    /// Test-only: the pending-answer store (nil when `deliver` was not
+    /// injected), so tests can pin that the store exists from init — the
+    /// first tap on first render must already be wired.
+    var pendingAnswersForTesting: PendingAnswerDelivery? { pendingAnswers }
 
     // MARK: - Floating input
 

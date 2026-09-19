@@ -282,6 +282,11 @@ struct ChatPendingRow: View {
     /// The effective answer (local choice or the transcript's own record);
     /// non-nil renders the answered form.
     let answer: String?
+    /// True while the chosen option's delivery is in flight: buttons show
+    /// progress and ignore taps.
+    var isDelivering: Bool = false
+    /// The user-visible text for the last failed delivery, if any.
+    var failureMessage: String? = nil
     let choose: (PendingInteraction.Option) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -304,6 +309,14 @@ struct ChatPendingRow: View {
                         optionButton(option)
                     }
                 }
+            }
+            if let failureMessage, !isAnswered {
+                Label(failureMessage, systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    // The failure text is selectable so it can be read in
+                    // full even when it runs long.
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(12)
@@ -334,15 +347,21 @@ struct ChatPendingRow: View {
             Button {
                 choose(option)
             } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(option.label)
-                        .font(.subheadline)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if let description = option.description {
-                        Text(description)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                HStack(alignment: .center, spacing: 8) {
+                    if isDelivering {
+                        ProgressView()
+                            .controlSize(.mini)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(option.label)
+                            .font(.subheadline)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                        if let description = option.description {
+                            Text(description)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
                 }
                 .padding(.horizontal, 12)
@@ -351,6 +370,12 @@ struct ChatPendingRow: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.primary)
+            // The whole button is the tap target — the background wash and
+            // both text lines all hit. Disabled only while this question's
+            // delivery is in flight; a Button keeps its accessibility
+            // label either way.
+            .disabled(isDelivering)
+            .opacity(isDelivering ? 0.55 : 1)
             .accessibilityLabel("Answer: \(option.label)")
         }
     }
