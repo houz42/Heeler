@@ -125,6 +125,7 @@ final class ChatAttachmentDraftStore: ComposerDraftOperations {
     func holdPendingImage(path: String) {
         pendingImage = PendingImageAttachment(remotePath: path)
     }
+
     /// The x on the thumbnail chip, or the teardown after Send.
     func clearPendingImage() {
         pendingImage = nil
