@@ -31,6 +31,10 @@ internal struct PendingInteraction: Sendable, Equatable, Identifiable {
     }
 
     let id: String
+    /// The `ask` toolCall's opaque id — the pairing key that anchors the
+    /// card INLINE at the call's transcript position (call ids contain
+    /// `|`/`#`, so it is carried separately, never parsed out of `id`).
+    let callID: String
     let question: String
     let options: [Option]
     /// The option the terminal dialog highlights when the question lands
@@ -44,12 +48,14 @@ internal struct PendingInteraction: Sendable, Equatable, Identifiable {
 
     init(
         id: String = UUID().uuidString,
+        callID: String = "",
         question: String,
         options: [Option],
         recommendedIndex: Int = 0,
         answer: String? = nil
     ) {
         self.id = id
+        self.callID = callID
         self.question = question
         self.options = options
         self.recommendedIndex = recommendedIndex
@@ -132,8 +138,10 @@ internal enum ChatFiltering {
     }
 
     /// Full form, including the blocked-agent affordance rows. Pending
-    /// interactions render at every level, after all transcript rows — they
-    /// are the conversation's live edge, not chrome to be filtered.
+    /// interactions render at every level, INLINE at their ask call's
+    /// transcript position (a question is part of the turn that asked it,
+    /// answered or not); pendings whose call is outside the visible
+    /// window fall to the tail as the live edge.
     static func visibleRows(
         messages: [ChatMessage],
         toolResults: [ToolResult],
@@ -146,6 +154,17 @@ internal enum ChatFiltering {
         for result in toolResults where resultsByCall[result.toolCallId] == nil {
             resultsByCall[result.toolCallId] = result
         }
+        // Pending interactions indexed by their ask call's id: the card
+        // renders INLINE at the call's transcript position (a question is
+        // part of the turn that asked it, answered or not — verified on
+        // device: bottom-appended cards detach from their conversation).
+        // Multiple questions from one call keep their wire order.
+        var pendingByCall: [String: [PendingInteraction]] = [:]
+        for interaction in pending {
+            pendingByCall[interaction.callID, default: []].append(interaction)
+        }
+        var emittedPending = Set<String>()
+
         // Which ids exist as calls in the visible messages. Classified
         // independently of level so a result does not flip orphan/non-orphan
         // when the level changes — only whether orphans render does.
@@ -154,6 +173,13 @@ internal enum ChatFiltering {
             for block in message.blocks {
                 if case .toolCall(let call) = block { visibleCallIDs.insert(call.id) }
             }
+        }
+
+        /// Emits the interactions paired to `callID`, in wire order.
+        func pendingRows(for callID: String) -> [ChatRow] {
+            guard let interactions = pendingByCall[callID] else { return [] }
+            emittedPending.formUnion(interactions.map(\.id))
+            return interactions.map(ChatRow.pending)
         }
 
         var rows: [ChatRow] = []
@@ -181,8 +207,21 @@ internal enum ChatFiltering {
                         // name-only line.
                         let result = level >= .l2 ? resultsByCall[call.id] : nil
                         rows.append(.toolCall(messageID: message.id, blockIndex: index, call: call, result: result))
+                        // The ask call's question card rides at the call's
+                        // position — visible at every level, right after the
+                        // call row it belongs to, whether answered or not.
+                        rows.append(contentsOf: pendingRows(for: call.id))
                     case .thinking, .toolCall:
-                        break  // below its level
+                        // Below the call's level the row is hidden — but an
+                        // `ask` card is never filtered: emit its card at
+                        // this block's position anyway (pending renders at
+                        // every level; only the collapsed tool-call chrome
+                        // is level-gated).
+                        if case .toolCall(let call) = block,
+                            !(pendingByCall[call.id] ?? []).isEmpty
+                        {
+                            rows.append(contentsOf: pendingRows(for: call.id))
+                        }
                     }
                 }
 
@@ -213,7 +252,13 @@ internal enum ChatFiltering {
             rows.append(.orphanResult(result))
         }
 
-        rows.append(contentsOf: pending.map(ChatRow.pending))
+        // Stray pendings whose call is outside the visible window (or built
+        // by hand in previews) keep the old tail placement — the live edge,
+        // after everything rendered.
+        rows.append(
+            contentsOf: pending
+                .filter { !emittedPending.contains($0.id) }
+                .map(ChatRow.pending))
         return rows
     }
 

@@ -173,6 +173,7 @@ enum OmpTranscriptParser {
                 from: fields["options"], recommended: recommended)
             interactions.append(PendingInteraction(
                 id: "\(call.id)#\(questionID)",
+                callID: call.id,
                 question: questionText,
                 options: options,
                 recommendedIndex: recommended,
