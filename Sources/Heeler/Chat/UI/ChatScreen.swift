@@ -870,8 +870,16 @@ struct ChatScreen: View {
     }
 
     private func sendDraft() {
-        let text = draft
-        guard canSend, !isSending, let router
+        // Compose the FULL message before routing: a pending image's
+        // path rides ahead of the draft text, and the router must
+        // classify the text the agent actually receives (the raw draft
+        // alone would be empty for an image-only paste, and a leading
+        // "/tmp/…" path in a bare path-send must not be classified as a
+        // slash command on the path-less draft either).
+        let text =
+            attachments?.draftStore.messageText(forDraft: draft) ?? draft
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            canSend, !isSending, let router
         else { return }
         isSending = true
         Task {
@@ -883,26 +891,43 @@ struct ChatScreen: View {
             case .rejected:
                 break  // draft stays for editing; routingError explains
             case .passthrough:
+                guard let deliver else {
+                    // No delivery seam wired (read-only surface): the
+                    // send must not clear the draft and pretend.
+                    attachments?.draftStore.recordUploadFailure(
+                        "This chat is read-only; the message was not sent.")
+                    return
+                }
                 do {
-                    // The delivered text carries a pending image's path
-                    // reference ahead of the draft text — the same
-                    // convention a bare path insert produces.
-                    try await deliver?(
-                        attachments?.draftStore.messageText(forDraft: text) ?? text)
+                    try await deliver(text)
                     clearDraftAfterSend()
                 } catch {
-                    // Delivery failed: keep the draft for retry.
+                    // Delivery failed: keep the draft AND the pending
+                    // image chip for retry, and surface the error in
+                    // the same row staging failures use — the UI must
+                    // not act like success.
+                    attachments?.draftStore.recordUploadFailure(
+                        "Couldn't send the message: \(Self.describe(error))")
                 }
             }
         }
     }
-
     /// A successful send clears the draft and the pending image chip
     /// together: the message carried the path reference.
     private func clearDraftAfterSend() {
         draft = ""
         attachments?.draftStore.replaceDraft(with: "")
         attachments?.draftStore.clearPendingImage()
+        pendingImagePreviewData = nil
+    }
+
+    /// The delivery failure's user-facing copy, matching the router's
+    /// describeError contract for plain prompt failures.
+    private static func describe(_ error: any Error) -> String {
+        if case TransportError.sshUnreachable = error {
+            return "The Host is not connected. Check the connection and retry."
+        }
+        return error.localizedDescription
     }
 }
 
