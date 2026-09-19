@@ -47,29 +47,33 @@ struct HostFormView: View {
                         text: $draft.alias,
                         prompt: Text(verbatim: aliasPlaceholder)
                     )
-                    TextField("Address", text: $draft.address)
-                        .textContentType(.URL)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                    ForEach($draft.additionalAddresses) { $row in
-                        HStack {
-                            TextField("Additional address", text: $row.address)
-                                .textContentType(.URL)
-                                .autocorrectionDisabled()
-                                .textInputAutocapitalization(.never)
+                    ForEach($draft.addresses) { $row in
+                        HStack(spacing: 8) {
+                            TextField(
+                                row.id == draft.addresses.first?.id
+                                    ? "Address" : "Additional address",
+                                text: $row.address
+                            )
+                            .textContentType(.URL)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
                             Button(role: .destructive) {
-                                draft.removeAdditionalAddress(id: row.id)
+                                draft.removeAddress(id: row.id)
                             } label: {
                                 Image(systemName: "minus.circle.fill")
                             }
                             .buttonStyle(.borderless)
+                            // The floor is one row: the last address can
+                            // never be removed, or the Host has nothing to
+                            // dial.
+                            .disabled(draft.addresses.count <= 1)
                         }
                     }
                     .onMove { source, destination in
-                        draft.moveAdditionalAddress(from: source, to: destination)
+                        draft.moveAddresses(from: source, to: destination)
                     }
                     Button {
-                        draft.addAdditionalAddress()
+                        draft.addAddress()
                     } label: {
                         Label("Add address", systemImage: "plus.circle.fill")
                     }
@@ -219,9 +223,9 @@ struct HostFormView: View {
     }
 
     private var addressFooter: String {
-        "The first address is dialed first; each additional one is tried in "
-            + "order when the one before it does not answer. They should all "
-            + "name the same machine."
+        "Addresses are dialed top to bottom until one answers; drag to "
+            + "reorder, and removing the first promotes the next one. They "
+            + "should all name the same machine."
     }
 
 

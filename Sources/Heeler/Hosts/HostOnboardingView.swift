@@ -59,36 +59,20 @@ struct HostOnboardingView: View {
                     value: store.host.authMethod == .deviceKey ? "Device Key" : "Password")
             }
 
-            // Every way this Host can be reached, with the live probe state
-            // of each from the last sweep. Multi-path Hosts run a sweep
-            // before connecting; single-address Hosts show their one row
-            // with the connection outcome.
+            // Every way this Host can be reached — one line per address:
+            // status icon, the address, and an inline Use control on the
+            // reachable rows while a pick is pending. No separate pick
+            // card: picking happens on the rows themselves.
             Section {
                 ForEach(store.orderedCandidates, id: \.self) { address in
                     candidateRow(address)
                 }
-                if let choices = store.pendingAddressChoice {
+                if store.pendingAddressChoice != nil {
                     Text(
-                        "Several addresses answered. Pick the one to use — "
+                        "Several paths answered. Use the one you want — "
                             + "it becomes this Host's preferred path.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                    ForEach(choices, id: \.self) { address in
-                        Button {
-                            Task { await store.chooseAddress(address) }
-                        } label: {
-                            HStack {
-                                Image(systemName: "checkmark.circle")
-                                    .foregroundStyle(.green)
-                                Text(address)
-                                Spacer()
-                                Text("Use")
-                                    .font(.callout.bold())
-                                    .foregroundStyle(.tint)
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                    }
                 }
             } header: {
                 Text("Addresses")
@@ -240,8 +224,15 @@ struct HostOnboardingView: View {
             set: { _ in })
     }
 
+    /// The summary line: user@primary:port, plus a count hint when more
+    /// paths exist so a multi-path Host is legible without scrolling.
     private var addressLine: String {
-        "\(store.host.username)@\(store.host.address):\(String(store.host.port))"
+        var line = "\(store.host.username)@\(store.host.address):\(String(store.host.port))"
+        let extra = store.host.candidateAddresses.count - 1
+        if extra > 0 {
+            line += "  +\(extra) more"
+        }
+        return line
     }
 
     private var sessionLine: String {
@@ -251,31 +242,17 @@ struct HostOnboardingView: View {
         return "default"
     }
 
-    /// One address row: the address, its live probe state (spinner while
-    /// probing, green/red once resolved, gray before a sweep), and — when
-    /// the Console session is live — the in-use mark on exactly the row
-    /// whose address carries the current connection.
+    /// One line per address: status icon, the address (with an inline,
+    /// subtle Preferred mark), and — while a pick is pending — a Use
+    /// button right on the row. The live connection's row shows the
+    /// in-use mark instead of its probe icon; at most one row can carry it.
     private func candidateRow(_ address: String) -> some View {
         let state = store.candidateStates[address] ?? .unknown
         let isPreferred = store.orderedCandidates.first == address
         let isInUse = connectedAddress == address
-        return HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(address)
-                HStack(spacing: 8) {
-                    if isInUse {
-                        Text("Connected")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.green)
-                    }
-                    if isPreferred {
-                        Text("Preferred")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            Spacer()
+        let pickable =
+            store.pendingAddressChoice?.contains(address) ?? false
+        return HStack(spacing: 10) {
             if isInUse {
                 Image(systemName: "bolt.fill")
                     .foregroundStyle(.green)
@@ -295,12 +272,26 @@ struct HostOnboardingView: View {
                         .foregroundStyle(.red)
                 }
             }
+            Text(address)
+            if isPreferred, !isInUse {
+                Text("Preferred")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if pickable {
+                Button("Use") {
+                    Task { await store.chooseAddress(address) }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
         }
     }
 
     private var addressSectionFooter: String {
         if store.pendingAddressChoice != nil {
-            return "Pick the address to connect through."
+            return "Several paths answered — pick the one to connect through."
         }
         if store.host.candidateAddresses.count > 1 {
             return "Addresses are dialed in order until one answers. "

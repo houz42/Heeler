@@ -144,7 +144,7 @@ struct HostMultiPathTests {
         try store.add(original)
 
         var draft = HostDraft(host: original)
-        draft.addAdditionalAddress("CMF79KM7YF.local")
+        draft.addAddress("CMF79KM7YF.local")
         let saved = try #require(draft.makeHost(id: original.id))
         try store.update(saved)
 
@@ -186,15 +186,16 @@ struct HostMultiPathTests {
 
     @Test func draftRowsNormalizeToCandidates() throws {
         var draft = HostDraft()
-        draft.address = "192.168.31.71"
         draft.username = "dev"
-        draft.additionalAddresses = [
+        draft.addresses = [
+            AdditionalAddressRow(address: "192.168.31.71"),
             AdditionalAddressRow(address: "  CMF79KM7YF.local "),
             AdditionalAddressRow(address: "vpn.example"),
             AdditionalAddressRow(address: "  "),
         ]
 
         let host = try #require(draft.makeHost())
+        #expect(host.address == "192.168.31.71")
         #expect(host.additionalAddresses == ["CMF79KM7YF.local", "vpn.example"])
         #expect(
             host.candidateAddresses == ["192.168.31.71", "CMF79KM7YF.local", "vpn.example"])
@@ -207,13 +208,13 @@ struct HostMultiPathTests {
             additionalAddresses: ["CMF79KM7YF.local", "vpn.example"])
 
         let draft = HostDraft(host: host)
-        #expect(draft.normalizedAdditionalAddresses == ["CMF79KM7YF.local", "vpn.example"])
+        #expect(draft.normalizedAddresses == host.candidateAddresses)
         #expect(try draft.makeHost(id: host.id) == host)
     }
 
-    @Test func freshDraftHasNoAdditionalRows() throws {
+    @Test func freshDraftStartsWithOnePrimaryRow() throws {
         var draft = HostDraft()
-        draft.address = "a.example"
+        draft.addresses[0].address = "a.example"
         draft.username = "dev"
 
         #expect(try draft.makeHost()?.additionalAddresses == [])
@@ -221,55 +222,73 @@ struct HostMultiPathTests {
 
     // MARK: Draft row editing (the edit form's dynamic list)
 
-    @Test func addRowAppendsAnAdditionalAddress() {
+    @Test func addRowAppendsAnAddress() {
         var draft = HostDraft()
-        draft.additionalAddresses = [AdditionalAddressRow(address: "vpn.example")]
+        draft.addresses[0].address = "vpn.example"
 
-        draft.addAdditionalAddress()
+        draft.addAddress()
 
-        #expect(
-            draft.additionalAddresses.map(\.address) == ["vpn.example", ""])
+        #expect(draft.addresses.map(\.address) == ["vpn.example", ""])
     }
 
-    @Test func removingTheLastAdditionalRowLeavesThePrimaryAddress() throws {
+    @Test func removingThePrimaryPromotesTheNextRow() throws {
         var draft = HostDraft()
-        draft.address = "a.example"
         draft.username = "dev"
-        draft.additionalAddresses = [AdditionalAddressRow(address: "vpn.example")]
+        draft.addresses = [
+            AdditionalAddressRow(address: "lan.example"),
+            AdditionalAddressRow(address: "vpn.example"),
+        ]
 
-        let removedID = draft.additionalAddresses[0].id
-        draft.removeAdditionalAddress(id: removedID)
+        let removedID = draft.addresses[0].id
+        draft.removeAddress(id: removedID)
 
-        // The floor is one TOTAL address: the primary row is not part of
-        // the additional list, so the Host still dials it.
+        // The primary address is removable: the next remaining row takes
+        // its place as the stored default.
         let host = try #require(draft.makeHost())
+        #expect(host.address == "vpn.example")
         #expect(host.additionalAddresses == [])
-        #expect(host.candidateAddresses == ["a.example"])
+        #expect(host.candidateAddresses == ["vpn.example"])
+    }
+
+    @Test func removingDownToTheLastRowIsBlocked() throws {
+        var draft = HostDraft()
+        draft.username = "dev"
+        draft.addresses[0].address = "only.example"
+
+        let removedID = draft.addresses[0].id
+        draft.removeAddress(id: removedID)
+
+        // A Host must always keep at least one addressable row.
+        #expect(draft.addresses.map(\.address) == ["only.example"])
+        #expect(try draft.makeHost()?.candidateAddresses == ["only.example"])
     }
 
     @Test func removingAnUnknownRowIDIsIgnored() {
         var draft = HostDraft()
-        draft.additionalAddresses = [AdditionalAddressRow(address: "vpn.example")]
+        draft.addresses = [
+            AdditionalAddressRow(address: "a.example"),
+            AdditionalAddressRow(address: "b.example"),
+        ]
 
-        draft.removeAdditionalAddress(id: UUID())
+        draft.removeAddress(id: UUID())
 
-        #expect(draft.additionalAddresses.map(\.address) == ["vpn.example"])
+        #expect(draft.addresses.map(\.address) == ["a.example", "b.example"])
     }
 
-    @Test func movingRowsReordersCandidatesButKeepsPrimaryFirst() throws {
+    @Test func movingARowToTheFrontPromotesItToPrimary() throws {
         var draft = HostDraft()
-        draft.address = "a.example"
         draft.username = "dev"
-        draft.additionalAddresses = [
+        draft.addresses = [
+            AdditionalAddressRow(address: "a.example"),
             AdditionalAddressRow(address: "b.example"),
             AdditionalAddressRow(address: "c.example"),
         ]
 
-        draft.moveAdditionalAddress(from: IndexSet(integer: 1), to: 0)
+        draft.moveAddresses(from: IndexSet(integer: 2), to: 0)
 
         let host = try #require(draft.makeHost())
         #expect(
-            host.candidateAddresses == ["a.example", "c.example", "b.example"])
+            host.candidateAddresses == ["c.example", "a.example", "b.example"])
     }
 
     @Test func rowIdentitySurvivesEditsToItsAddress() {
@@ -278,15 +297,14 @@ struct HostMultiPathTests {
         // in the form — must leave the row's id untouched, or the field is
         // torn down and the keyboard dismissed per character.
         var draft = HostDraft()
-        draft.addAdditionalAddress()
-        let originalID = draft.additionalAddresses[0].id
+        let originalID = draft.addresses[0].id
 
         for character in "vpn.example" {
-            draft.additionalAddresses[0].address.append(character)
+            draft.addresses[0].address.append(character)
         }
 
-        #expect(draft.additionalAddresses[0].id == originalID)
-        #expect(draft.additionalAddresses[0].address == "vpn.example")
+        #expect(draft.addresses[0].id == originalID)
+        #expect(draft.addresses[0].address == "vpn.example")
     }
 
     // MARK: Dial order and fallback (stub seam, no network)

@@ -1,10 +1,10 @@
 import Foundation
 
-/// One additional-address form row. The id is SwiftUI's row identity: it is
-/// assigned when the row is created and never changes while the row lives,
-/// so typing into the field (which rewrites `address` every keystroke)
-/// cannot tear the row down and drop the keyboard. The string value cannot
-/// be the identity — that is the bug this type exists to prevent.
+/// One address form row. The id is SwiftUI's row identity: it is assigned
+/// when the row is created and never changes while the row lives, so
+/// typing into the field (which rewrites `address` every keystroke) cannot
+/// tear the row down and drop the keyboard. The string value cannot be the
+/// identity — that is the bug this type exists to prevent.
 struct AdditionalAddressRow: Equatable, Identifiable, Sendable {
     let id: UUID
     var address: String
@@ -20,17 +20,25 @@ struct AdditionalAddressRow: Equatable, Identifiable, Sendable {
 /// dumb and the rules stay testable.
 struct HostDraft: Equatable, Sendable {
     var name = ""
-    var address = ""
+    /// Every way to reach the Host, one row each; the FIRST row is the
+    /// primary `Host.address`, the rest become `additionalAddresses`. A
+    /// single list so the form treats every address identically — removing
+    /// the primary just promotes the next row — with a floor of one row:
+    /// a Host must always be reachable somewhere.
+    var addresses: [AdditionalAddressRow] = [AdditionalAddressRow()]
+    /// The primary address — the first row. Reads and writes go to row 0;
+    /// removing it (the floor keeps a row present) promotes the next row
+    /// into the slot.
+    var address: String {
+        get { addresses.first?.address ?? "" }
+        set { addresses[0].address = newValue }
+    }
     var port = "22"
     var username = ""
     var authMethod: Host.AuthMethod = .deviceKey
     /// Blank means "keep the stored password" when editing.
     var password = ""
     var sessionName = ""
-    /// Alternative addresses for the same machine, dialed in order after
-    /// Address when it does not answer. One row per form line; empty means
-    /// single-path. Rows carry stable ids (see `AdditionalAddressRow`).
-    var additionalAddresses: [AdditionalAddressRow] = []
     /// Blank means a direct connection. When set, Address/Port above are
     /// resolved from the Jump Host, not from this device.
     var jumpAddress = ""
@@ -45,14 +53,14 @@ struct HostDraft: Equatable, Sendable {
     /// Prefill for editing an existing Host.
     init(host: Host) {
         name = host.name
-        address = host.address
+        addresses = host.candidateAddresses.map { AdditionalAddressRow(address: $0) }
+        if addresses.isEmpty {
+            addresses = [AdditionalAddressRow()]
+        }
         port = String(host.port)
         username = host.username
         authMethod = host.authMethod
         sessionName = host.sessionName
-        additionalAddresses = host.additionalAddresses.map {
-            AdditionalAddressRow(address: $0)
-        }
         jumpAddress = host.jumpAddress
         jumpPort = String(host.jumpPort)
         jumpUsername = host.jumpUsername
@@ -99,47 +107,49 @@ struct HostDraft: Equatable, Sendable {
     /// Keychain password account).
     func makeHost(id: UUID = UUID()) -> Host? {
         guard isValid, let portNumber else { return nil }
+        let trimmed = normalizedAddresses
         return Host(
             id: id,
             name: name.trimmingCharacters(in: .whitespaces),
-            address: address.trimmingCharacters(in: .whitespaces),
+            address: trimmed.first ?? "",
             port: portNumber,
             username: username.trimmingCharacters(in: .whitespaces),
             authMethod: authMethod,
             sessionName: sessionName.trimmingCharacters(in: .whitespaces),
-            additionalAddresses: normalizedAdditionalAddresses,
+            additionalAddresses: Array(trimmed.dropFirst()),
             jumpAddress: jumpAddress.trimmingCharacters(in: .whitespaces),
             jumpPort: jumpPortNumber ?? 22,
             jumpUsername: jumpUsername.trimmingCharacters(in: .whitespaces),
             alias: trimmedAlias)
     }
 
-    /// The form's additional rows as addresses: trimmed, empty entries
-    /// dropped. Everything (decode, the form, the dialer) sees the same
-    /// candidate list.
-    var normalizedAdditionalAddresses: [String] {
-        additionalAddresses
+    /// The form's addresses as dialed: trimmed, empty entries dropped, order
+    /// preserved. The first entry is the primary; `candidateAddresses` and
+    /// the dialer see the same list.
+    var normalizedAddresses: [String] {
+        addresses
             .map { $0.address.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
     }
 
-    /// Appends one additional-address row. A blank row is a no-op — the
-    /// row exists to be typed into; saving drops it instead of rejecting.
-    mutating func addAdditionalAddress(_ address: String = "") {
-        additionalAddresses.append(AdditionalAddressRow(address: address))
+    /// Appends one address row. A blank row is a no-op — the row exists to
+    /// be typed into; saving drops it instead of rejecting.
+    mutating func addAddress(_ address: String = "") {
+        addresses.append(AdditionalAddressRow(address: address))
     }
 
-    /// Removes the additional row with `id`. Additional rows only: the
-    /// primary address is not part of this list and cannot be removed, so a
-    /// Host always keeps at least one dialable address.
-    mutating func removeAdditionalAddress(id: UUID) {
-        additionalAddresses.removeAll { $0.id == id }
+    /// Removes the row with `id` — ANY row, the primary included: removing
+    /// the first row promotes the next remaining row to primary. The floor
+    /// is one row total; removing the last one is a no-op.
+    mutating func removeAddress(id: UUID) {
+        guard addresses.count > 1 else { return }
+        addresses.removeAll { $0.id == id }
     }
 
-    /// Reorders the additional rows after an EditMode/onDelete OnMove. The
-    /// primary address stays first regardless of `destination`.
-    mutating func moveAdditionalAddress(from source: IndexSet, to destination: Int) {
-        additionalAddresses.move(fromOffsets: source, toOffset: destination)
+    /// Reorders the rows after an EditMode/onDelete OnMove. Position 0 is
+    /// the primary, so moving a row to the front promotes it.
+    mutating func moveAddresses(from source: IndexSet, to destination: Int) {
+        addresses.move(fromOffsets: source, toOffset: destination)
     }
 
     /// A whitespace-only alias is no alias: trimmed, and nil when blank, so
