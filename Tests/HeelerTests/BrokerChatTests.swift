@@ -14,8 +14,9 @@ import Testing
 struct BrokerChatCodecTests {
     // Captured live from the v0 prototype broker (2026-09-20 session):
     // real frame shapes, trimmed to the fields under test.
+    /// Live v1 frame (2026-09-20): registration carries sessionFile/pid.
     private static let capturedSessionsFrame = """
-        {"id":"r1","result":{"sessions":[{"instanceId":"048628c3-1020-417d-86f2-25732e07720a","sessionId":"01a0afc5-acd5-723d-b3e3-44416bcfbda8","generation":1,"capabilities":["history","events","prompt","commands"]}]}}
+        {"id":"r1","result":{"sessions":[{"instanceId":"bf1ad296-bfd8-4072-ae84-787d647f626f","sessionId":"01a0ae90-2e79-701e-b52b-113e520b7972","generation":1,"capabilities":["history","events","prompt","commands","entry"],"sessionFile":"/Users/jhou/.cache/heeler-chat-main-probe/history.jsonl","pid":50879}]}}
         """
     private static let capturedSubscribeAck = """
         {"id":"s1","result":{"subscribed":true}}
@@ -23,8 +24,10 @@ struct BrokerChatCodecTests {
     private static let capturedEventFrame = """
         {"type":"event","instanceId":"048628c3-1020-417d-86f2-25732e07720a","generation":1,"seq":1110,"event":{"kind":"message_delta","delta":"ong"}}
         """
+    /// Live v1 frame (2026-09-20): items without role (custom entries),
+    /// no legacy flat-content preview fields.
     private static let capturedOpenPageFragment = """
-        {"id":"r2","result":{"sessionId":"01a0afc5-acd5-723d-b3e3-44416bcfbda8","leafId":"61de5308","items":[{"id":"73695a5a","parentId":"be0cdec8","timestamp":"2026-09-19T18:00:54.748Z","type":"message","role":"user","blocks":[{"type":"text","text":"Count 1 to 500, one per line, no tools."}],"content":"Count 1 to 500, one per line, no tools."}],"olderCursor":"eyJ2IjoxLCJzZXNzaW9uSWQiOiIwMWEwYWZjNS1hY2Q1LTcyM2QtYjNlMy00NDQxNmJjZmJkYTgiLCJsZWFmSWQiOiI2MWRlNTMwOCIsImVudHJ5SWQiOiIyMzA0NmJhMSJ9","hasOlder":true,"bytes":261502,"walked":3}}
+        {"id":"r2","result":{"sessionId":"01a0ae90-2e79-701e-b52b-113e520b7972","leafId":"f0274435","items":[{"id":"32aa23e8","parentId":"d77202e2","timestamp":"2026-09-19T17:42:28.656Z","type":"custom","customType":"session_exit","data":{"reason":"sigterm","kind":"signal","recordedAt":"2026-09-19T17:42:28.655Z"}},{"id":"9ba51e1a","parentId":"32aa23e8","timestamp":"2026-09-19T17:46:00.082Z","type":"custom","customType":"session_exit","data":{"reason":"sigterm","kind":"signal","recordedAt":"2026-09-19T17:46:00.082Z"}},{"id":"f0274435","parentId":"9ba51e1a","timestamp":"2026-09-20T02:16:03.090Z","type":"custom","customType":"session_exit","data":{"reason":"sigterm","kind":"signal","recordedAt":"2026-09-20T02:16:03.090Z"}}],"olderCursor":"eyJ2IjoxLCJzZXNzaW9uSWQiOiIwMWEwYWU5MC0yZTc5LTcwMWUtYjUyYi0xMTNlNTIwYjc5NzIiLCJsZWFmSWQiOiJmMDI3NDQzNSIsImVudHJ5SWQiOiJkNzcyMDJlMiJ9","hasOlder":true,"bytes":891,"walked":3}}
         """
 
     @Test("frame reader joins split frames and enforces the cap")
@@ -54,10 +57,15 @@ struct BrokerChatCodecTests {
         let decoded = try JSONDecoder().decode(
             BrokerSessionsResult.self, from: JSONEncoder().encode(result))
         let session = try #require(decoded.sessions.first)
-        #expect(session.sessionId == "01a0afc5-acd5-723d-b3e3-44416bcfbda8")
+        #expect(session.sessionId == "01a0ae90-2e79-701e-b52b-113e520b7972")
         #expect(session.hasHistory && session.hasEvents && session.hasPrompt)
-        // v0 registration: additive identity fields decode as nil.
-        #expect(session.sessionFile == nil && session.paneId == nil && session.pid == nil)
+        // v1 registration metadata: sessionFile + pid decode (paneId
+        // remains optional-additive and absent here).
+        #expect(
+            session.sessionFile
+                == "/Users/jhou/.cache/heeler-chat-main-probe/history.jsonl")
+        #expect(session.pid == 50879)
+        #expect(session.paneId == nil)
     }
 
     @Test("captured event frame decodes with payload access")
@@ -82,9 +90,10 @@ struct BrokerChatCodecTests {
         #expect(page.olderCursor?.isEmpty == false)
         let item = try #require(page.items.first)
         #expect(!item.detailRequired)
-        #expect(item.role == "user")
-        // The cursor stays opaque to the client; only its presence matters.
-        #expect(page.items.count == 1)
+        // v1 page items carry no flat-content preview; custom entries
+        // expose type/customType/data. The cursor stays opaque.
+        #expect(item.type == "custom")
+        #expect(page.items.count == 3)
     }
 
     @Test("v1 hello ack flips the arm; silent broker keeps v0")
@@ -371,6 +380,13 @@ struct BrokerErrorTaxonomyTests {
         // Unknown/other codes: neither — surfaced as failures.
         let other = BrokerClientError.broker(code: "param_invalid", message: "")
         #expect(!other.requiresFullResync && !other.requiresFreshOpen)
+        // v1 entry codes (verified live 2026-09-20): a missing entry is
+        // an ordinary failure (the store skips the stub); budget codes
+        // surface honestly for the caller to adjust.
+        for code in ["entry_not_found", "budget_too_small", "payload_too_large"] {
+            let error = BrokerClientError.broker(code: code, message: "")
+            #expect(!error.requiresFullResync && !error.requiresFreshOpen)
+        }
     }
 
     @Test("ask unsupported is the honest capability signal")
