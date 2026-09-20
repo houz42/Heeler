@@ -375,6 +375,36 @@ final class AgentsRedesignProofTests: XCTestCase {
         print("MEASURED group header height: \(headerHeight)pt")
     }
 
+    // MARK: Re-review regressions — grouped-mode host issues navigate
+
+    func testGroupedHostIssueRowNavigatesToHosts() {
+        resetViewMenu()
+        waitToExist(row(containing: "Polish the Attach experience"))
+        // Group by state: the host-issue rows (Offline Server, which fails
+        // to connect in the demo fixture) render above the groups and must
+        // navigate to Hosts — the SAME handler as the flat list.
+        let menu = app.buttons["Agent list view options"].firstMatch
+        menu.tap()
+        let stateGroup = app.buttons["Agent state"].firstMatch
+        XCTAssertTrue(stateGroup.waitForExistence(timeout: 5))
+        stateGroup.tap()
+        XCTAssertTrue(staticText(containing: "Needs you").waitForExistence(timeout: 5))
+
+        let issue = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "Offline Server")).firstMatch
+        XCTAssertTrue(
+            issue.waitForExistence(timeout: UITestTimeouts.standard),
+            "the offline host's issue row must render in grouped mode")
+        captureScreenshot(app, "agents-grouped-neutral-tint", lifetime: .keepAlways)
+        issue.tap()
+        // The Hosts surface presents (HostListView owns its navigation
+        // stack, so its bar appears).
+        let hostsBar = app.navigationBars.firstMatch
+        XCTAssertTrue(hostsBar.waitForExistence(timeout: UITestTimeouts.standard),
+                      "tapping the issue row must present Hosts")
+        captureScreenshot(app, "agents-grouped-issue-tapped-hosts", lifetime: .keepAlways)
+    }
+
     // MARK: §B2 — empty state
 
     func testSearchEmptyState() {

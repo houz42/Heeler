@@ -265,7 +265,22 @@
                 address: "build.demo.invalid",
                 username: "builder",
                 sessionName: "ci"),
+            // A third machine that fails to connect (no demo profile):
+            // the Console's deterministic host-issue row — the flat and
+            // grouped lists both navigate it to the same Hosts handler.
+            Host(
+                id: offlineHostID,
+                name: "Offline Server",
+                address: "offline.demo.invalid",
+                username: "developer",
+                sessionName: "main"),
         ]
+
+        static let offlineHostID = UUID(
+            uuid: (
+                0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x43, 0x33,
+                0x83, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33
+            ))
 
         static let profiles: [Host.ID: DemoHostProfile] = [
             studioHostID: DemoHostProfile(

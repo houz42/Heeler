@@ -549,14 +549,27 @@ struct ConsoleView: View {
         }
     }
 
-    /// Host issues in the ScrollView grouped path: same rows, no List
-    /// chrome.
+    /// Host issues in the ScrollView grouped path: the SAME functional
+    /// rows as the flat list (re-review regression #2 — the earlier
+    /// version dropped the Button wrapper and left a dead chevron).
     @ViewBuilder
     private var visibleHostIssuesView: some View {
         ForEach(visibleHostIssues) { issue in
-            hostIssueRow(issue, showsChevron: issue.navigates)
+            if issue.navigates {
+                Button {
+                    presentHosts(issue.hostID)
+                } label: {
+                    hostIssueRow(issue, showsChevron: true)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens this Host's settings.")
                 .padding(.horizontal, 16)
                 .padding(.vertical, 2)
+            } else {
+                hostIssueRow(issue, showsChevron: false)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 2)
+            }
         }
     }
 
@@ -641,6 +654,11 @@ struct ConsoleView: View {
             // NavigationLink itself is dropped by List row layout.
             .padding(.leading, leadingIndent)
         }
+        // Re-review regression #1: outside a List's plain rows (the
+        // grouped ScrollView path), NavigationLink renders the accent
+        // link tint — the approved look is neutral. `.plain` restores
+        // the flat rows' colors everywhere; the press affordance stays.
+        .buttonStyle(.plain)
         .hoverEffect(.highlight)
         .contextMenu {
             let pinned = console.pins.isPinned(
