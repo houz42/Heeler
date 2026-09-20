@@ -64,9 +64,13 @@ struct SettingsView: View {
     let hosts: [Host]
     /// The approved compact top-left destination selector (#A). Present
     /// when Settings is a top-level page; nil inside sheets keeps Done.
+    /// Omitted entirely while a pushed sub-page owns the window (#A: no
+    /// destination chrome inside details).
     @Environment(\.appDestination) private var appDestination
+    @Environment(\.appDestinationMenuSuppressed) private var isMenuSuppressed
     private var destinationMenu: AppDestinationMenu? {
-        appDestination.map { AppDestinationMenu(selection: $0) }
+        guard !isMenuSuppressed else { return nil }
+        return appDestination.map { AppDestinationMenu(selection: $0) }
     }
 
     static let agentListDestination = SettingsAgentListDestination.fields

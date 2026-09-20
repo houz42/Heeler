@@ -72,10 +72,16 @@ struct ConsoleView: View {
     /// The approved compact top-left destination selector (#A). Provided by
     /// `AppRootView`'s environment when the Console is a top-level page;
     /// nil keeps the sheet-era toolbar behavior for previews, Demo runs,
-    /// and tests that construct `ConsoleView` directly.
+    /// and tests that construct `ConsoleView` directly. While a pushed
+    /// detail owns the window the selector is omitted ENTIRELY (#A: no
+    /// destination chrome inside chat/terminal/details — not even a
+    /// plain title, which the native toolbar would wrap in its own
+    /// capsule chrome).
     @Environment(\.appDestination) private var appDestination
+    @Environment(\.appDestinationMenuSuppressed) private var isMenuSuppressed
     private var destinationMenu: AppDestinationMenu? {
-        appDestination.map { AppDestinationMenu(selection: $0) }
+        guard !isMenuSuppressed else { return nil }
+        return appDestination.map { AppDestinationMenu(selection: $0) }
     }
 
     var body: some View {

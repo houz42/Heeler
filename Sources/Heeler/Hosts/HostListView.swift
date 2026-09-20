@@ -84,10 +84,13 @@ struct HostListView: View {
     /// The approved compact top-left destination selector (#A). Present
     /// when this page is mounted at top level by `AppRootView`; nil inside
     /// the Console sheet/previews/tests keeps the plain "Hosts" title.
+    /// Omitted entirely while a pushed Host detail owns the window (#A).
     /// NavRedesign hunk — merge arbitration with HostsRedesign's rewrite.
     @Environment(\.appDestination) private var appDestination
+    @Environment(\.appDestinationMenuSuppressed) private var isMenuSuppressed
     private var destinationMenu: AppDestinationMenu? {
-        appDestination.map { AppDestinationMenu(selection: $0) }
+        guard !isMenuSuppressed else { return nil }
+        return appDestination.map { AppDestinationMenu(selection: $0) }
     }
     private var destinationMenuTitleFallback: String {
         appDestination == nil ? "Hosts" : ""
