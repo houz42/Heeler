@@ -73,10 +73,37 @@ extension CaptureUITests {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.45)).tap()
         Thread.sleep(forTimeInterval: 1)
         screenshot("redesign-message-actions-dismissed")
-        // Composer collapse/grow needs an interactive chat; the demo
-        // transcript is read-only (no composer), so the collapse/grow
-        // contract is proven by ChatPrefixKeysTests' sizing tests
-        // (one-line floor, 3-line cap, scroll past cap, draft intact).
+        // Composer collapse/grow, LIVE when this agent's session
+        // resolves an interactive composer (the honest-unavailable
+        // capture documents the read-only case otherwise).
+        let messageButton = app.buttons["Message the agent"]
+        if messageButton.waitForExistence(timeout: 4) {
+            messageButton.tap()
+            Thread.sleep(forTimeInterval: 3)
+            screenshot("d2-composer-collapsed-live")
+            let field = app.textViews.firstMatch
+            if field.waitForExistence(timeout: 5) {
+                field.typeText("A typed draft long enough to wrap past one composer row, exercising the grow bound with genuine keystrokes")
+                Thread.sleep(forTimeInterval: 1)
+                screenshot("d2-composer-grown-live")
+                // Close the input: the draft must survive (never
+                // cleared on blur).
+                let close = app.buttons["Close input"]
+                if close.exists {
+                    close.tap()
+                    Thread.sleep(forTimeInterval: 1)
+                    screenshot("d2-composer-closed-draft-preserved")
+                    // Reopen: the rail and draft are still there.
+                    if messageButton.waitForExistence(timeout: 4) {
+                        messageButton.tap()
+                        Thread.sleep(forTimeInterval: 2)
+                        screenshot("d2-composer-reopened-draft-intact")
+                    }
+                }
+            }
+        } else {
+            screenshot("d2-composer-unavailable-honest")
+        }
         app.terminate()
         Thread.sleep(forTimeInterval: 2)
         let app2 = XCUIApplication()
@@ -89,6 +116,85 @@ extension CaptureUITests {
         blocked.tap()
         Thread.sleep(forTimeInterval: 7)
         screenshot("redesign-pending-card")
+    }
+
+    /// D2 proofs: the real multi-question ask flow, the rail's
+    /// non-triggers, and (when the demo agent's session resolves a
+    /// composer) collapse/grow with real typing.
+    func testD2FlowProofs() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--demo-screenshots"]
+        app.launch()
+        Thread.sleep(forTimeInterval: 10)
+        let blocked = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'reviewer'")).firstMatch
+        XCTAssertTrue(blocked.waitForExistence(timeout: 15), "reviewer row missing")
+        blocked.tap()
+        Thread.sleep(forTimeInterval: 7)
+
+        // Multi-question card: step 1 of 2 (single-choice).
+        screenshot("d2-ask-step1")
+        let dev = app.buttons["Answer: Dev"]
+        XCTAssertTrue(dev.waitForExistence(timeout: 8), "multi-question card missing")
+        dev.tap()
+        Thread.sleep(forTimeInterval: 1)
+        // Auto-advanced to step 2 (multi-select).
+        screenshot("d2-ask-step2")
+        let unit = app.buttons["Answer: Unit tests"]
+        if unit.exists {
+            unit.tap()
+            Thread.sleep(forTimeInterval: 1)
+            screenshot("d2-ask-multiselect-selected")
+            // Back preserves the multi-select choice.
+            let back = app.buttons["Previous question"]
+            if back.exists {
+                back.tap()
+                Thread.sleep(forTimeInterval: 1)
+                let unitStill = app.buttons["Answer: Unit tests"]
+                // Selection state survives Back (visual check).
+                screenshot("d2-ask-back-preserved")
+                let next = app.buttons["Answer: Dev"]
+                if next.exists {
+                    next.tap()
+                    Thread.sleep(forTimeInterval: 1)
+                }
+            }
+        }
+
+        // Non-triggers: a long-press on an article must NOT open the
+        // actions rail (long press is native text selection).
+        let article = app.staticTexts.firstMatch
+        if article.exists {
+            article.press(forDuration: 1.0)
+            Thread.sleep(forTimeInterval: 1)
+            let railVisible = app.buttons["Copy"].exists
+            XCTAssertFalse(railVisible, "long-press must not toggle the rail")
+            screenshot("d2-nontrigger-longpress")
+            if railVisible {
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).tap()
+            }
+        }
+
+        // Composer (interactive sessions only): collapse → grow with
+        // real typing.
+        let messageButton = app.buttons["Message the agent"]
+        if messageButton.waitForExistence(timeout: 4) {
+            messageButton.tap()
+            Thread.sleep(forTimeInterval: 3)
+            screenshot("d2-composer-collapsed")
+            let field = app.textViews.firstMatch
+            if field.waitForExistence(timeout: 5) {
+                field.typeText("A draft that runs long enough to wrap past a single row of the composer, exercising the grow bound with genuine typed content")
+                Thread.sleep(forTimeInterval: 1)
+                screenshot("d2-composer-grown")
+                // The rail + quote: dismiss keyboard state check.
+                screenshot("d2-composer-with-draft")
+            }
+        } else {
+            // Honest absence: the demo agent's session does not resolve
+            // an interactive composer; collapse/grow is unit-proven.
+            screenshot("d2-composer-unavailable-honest")
+        }
     }
 
     private func screenshot(_ name: String) {

@@ -71,10 +71,9 @@ enum AgentChatMapper: Sendable {
                 // the shared pending list; ChatFiltering pairs by callId.
                 chatBlocks.append(contentsOf: mapToolResultBlocks(
                     callId: callId, name: name, isError: isError, content: content))
-            case .image:
-                // v1 UI scope: no image row model; skipped (logged), the
-                // blob.read client code exists but is unsurfaced.
-                continue
+            case .image(let mimeType, let ref, let byteLength):
+                chatBlocks.append(.image(ChatImageRef(
+                    ref: ref, mimeType: mimeType, byteLength: byteLength)))
             case .unsupported:
                 continue
             }

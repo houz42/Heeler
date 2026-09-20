@@ -83,7 +83,8 @@ struct ChatScreen: View {
         authorLabel: String = "",
         attachments: ChatAttachments? = nil,
         onAskAnswer: ((PendingInteraction, [PendingAskAnswerPayload]) -> Void)? = nil,
-        onAskCancel: ((PendingInteraction) -> Void)? = nil
+        onAskCancel: ((PendingInteraction) -> Void)? = nil,
+        imageFetcher: ((String) async throws -> Data)? = nil
     ) {
         self.paneID = paneID
         self.agentName = agentName
@@ -100,6 +101,7 @@ struct ChatScreen: View {
         self.attachments = attachments
         self.onAskAnswer = onAskAnswer
         self.onAskCancel = onAskCancel
+        self.imageFetcher = imageFetcher
         self._level = State(initialValue: initialLevel)
     }
 
@@ -230,6 +232,11 @@ struct ChatScreen: View {
             ChatDraftItemPreview(item: item)
                 .presentationDetents([.large])
         }
+        // A transcript image's full reader (loads via the fetch seam).
+        .sheet(item: $viewingImage) { image in
+            ChatTranscriptImageReader(image: image, fetch: imageFetcher)
+                .presentationDetents([.large])
+        }
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
         // Hiding the back button also disables the interactive pop gesture;
@@ -311,7 +318,7 @@ struct ChatScreen: View {
     /// message bubbles (the unit the reaction/quote affordances hang
     /// off); every other row keeps its plain shape.
     private var items: [ChatTranscriptItem] {
-        ChatFiltering.visibleItems(from: rows)
+        ChatFiltering.visibleItems(from: rows, level: level)
     }
 
     @ViewBuilder
@@ -360,9 +367,40 @@ struct ChatScreen: View {
                 AgentUnsupportedAskRow(interaction: interaction)
             } else if case .pending(let interaction) = row {
                 askCard(interaction)
+            } else if case .image(_, _, let image) = row {
+                ChatTranscriptImageTile(
+                    image: image, fetch: imageFetcher)
+                { viewingImage = image }
             } else {
                 LinkifiedChatRow(row: row, router: openRouter)
             }
+        case .workSummary(_, let names):
+            // The L1 Work inspector: one compact summary of the call
+            // run. The level switcher expands to per-call cards (L2).
+            HStack(spacing: 6) {
+                Label(
+                    "Work · \(names.count) call\(names.count == 1 ? "" : "s")",
+                    systemImage: "wrench.and.screwdriver")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(Array(names.enumerated()), id: \.offset) { _, name in
+                            Text(name)
+                                .font(.caption2.monospaced())
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(
+                                    Color.secondary.opacity(0.08),
+                                    in: Capsule())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Work summary: \(names.count) tool calls")
         }
     }
 
@@ -643,6 +681,11 @@ struct ChatScreen: View {
     @State private var showsDraftCollection = false
     /// The tapped tile's full preview (image zoom or quote text).
     @State private var previewedDraftItem: ChatDraftItem?
+    /// Resolves a wire image ref to bytes (broker blob.read). Nil =
+    /// images render as honest unavailable tiles.
+    var imageFetcher: ((String) async throws -> Data)? = nil
+    /// The transcript image being read full-size.
+    @State private var viewingImage: ChatImageRef?
 
     // -- Attachment flow state (the + button's pickers and the image
     // paste share the staging pipeline; the pending-image tile rides

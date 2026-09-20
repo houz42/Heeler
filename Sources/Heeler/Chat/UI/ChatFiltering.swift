@@ -80,6 +80,9 @@ internal enum ChatRow: Sendable, Equatable, Identifiable {
     case text(messageID: UUID, blockIndex: Int, role: ChatRole, text: String)
     /// An assistant `ChatBlock.thinking` payload — L3+, collapsed by default.
     case thinking(messageID: UUID, blockIndex: Int, text: String)
+    /// An image block (sent by the user, or returned by a tool):
+    /// conversation content, visible at every level as gallery tiles.
+    case image(messageID: UUID, blockIndex: Int, image: ChatImageRef)
     /// An assistant `ChatBlock.toolCall` — at the tool's visibility level:
     /// L1 for ordinary tools; todo checklists ride L2 (they are rendered
     /// results), subagent (`task`) spawns ride L3 (they are agent
@@ -98,7 +101,8 @@ internal enum ChatRow: Sendable, Equatable, Identifiable {
         switch self {
         case .text(let messageID, let blockIndex, _, _),
              .thinking(let messageID, let blockIndex, _),
-             .toolCall(let messageID, let blockIndex, _, _):
+             .toolCall(let messageID, let blockIndex, _, _),
+             .image(let messageID, let blockIndex, _):
             return "\(messageID.uuidString)#\(blockIndex)"
         case .orphanResult(let result):
             return "result#\(result.toolCallId)"
@@ -139,11 +143,15 @@ internal struct ChatBubble: Sendable, Equatable, Identifiable {
 internal enum ChatTranscriptItem: Sendable, Equatable, Identifiable {
     case bubble(ChatBubble)
     case row(ChatRow)
+    /// The L1 Work inspector: consecutive tool calls collapsed into one
+    /// compact summary (names only). L2+ renders the per-call cards.
+    case workSummary(id: String, names: [String])
 
     var id: String {
         switch self {
         case .bubble(let bubble): bubble.id
         case .row(let row): row.id
+        case .workSummary(let id, _): id
         }
     }
 }
@@ -201,8 +209,13 @@ internal enum ChatFiltering {
                 // visible at every level. Non-text blocks in a user message
                 // (not produced by the parser) are dropped.
                 for (index, block) in message.blocks.enumerated() {
-                    if case .text(let text) = block {
+                    switch block {
+                    case .text(let text):
                         rows.append(.text(messageID: message.id, blockIndex: index, role: .user, text: text))
+                    case .image(let image):
+                        rows.append(.image(messageID: message.id, blockIndex: index, image: image))
+                    default:
+                        break
                     }
                 }
 
@@ -218,6 +231,8 @@ internal enum ChatFiltering {
                         // name-only line.
                         let result = level >= .l2 ? resultsByCall[call.id] : nil
                         rows.append(.toolCall(messageID: message.id, blockIndex: index, call: call, result: result))
+                    case .image(let image):
+                        rows.append(.image(messageID: message.id, blockIndex: index, image: image))
                     case .thinking, .toolCall:
                         break  // below its level
                     }
@@ -290,9 +305,15 @@ internal enum ChatFiltering {
     /// per contiguous run. The item ids are the underlying row ids (a
     /// bubble takes its first row's), so level switching stays monotonic
     /// in the item list exactly as it is in the row list.
-    static func visibleItems(from rows: [ChatRow]) -> [ChatTranscriptItem] {
+    static func visibleItems(
+        from rows: [ChatRow], level: DetailLevel = .l2
+    ) -> [ChatTranscriptItem] {
         var items: [ChatTranscriptItem] = []
         var run: [ChatRow] = []
+        // L1 Work-inspector grouping: consecutive tool rows collapse
+        // into ONE compact summary. Non-tool rows and L2+ keep the
+        // per-row shapes.
+        var workNames: [String] = []
 
         func flush() {
             // The loop only ever buffers user/assistant `.text` rows
@@ -305,7 +326,32 @@ internal enum ChatFiltering {
             run = []
         }
 
+        func flushWork() {
+            guard !workNames.isEmpty else { return }
+            items.append(.workSummary(
+                id: "work-summary-\(items.count)", names: workNames))
+            workNames = []
+        }
+
         for row in rows {
+            let isWorkRow: Bool
+            switch row {
+            case .toolCall, .orphanResult: isWorkRow = true
+            default: isWorkRow = false
+            }
+            if isWorkRow, level == .l1 {
+                flush()
+                switch row {
+                case .toolCall(_, _, let call, _):
+                    workNames.append(call.name)
+                case .orphanResult(let result):
+                    workNames.append(result.toolName)
+                default:
+                    break
+                }
+                continue
+            }
+            flushWork()
             if case .text(let messageID, _, let role, _) = row,
                 role == .user || role == .assistant,
                 let previous = run.last,
@@ -324,6 +370,7 @@ internal enum ChatFiltering {
                 }
             }
         }
+        flushWork()
         flush()
         return items
     }

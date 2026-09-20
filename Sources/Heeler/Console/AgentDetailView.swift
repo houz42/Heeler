@@ -371,6 +371,16 @@ struct AgentDetailView: View {
         /// Demo-mode-only pending fixture for the redesign proofs: a
         /// blocked demo agent renders both card shapes — short compact
         /// options and descriptive full-width options. Debug + demo
+        /// Demo ask seams: Debug + screenshot gate only; a no-op
+        /// delivery so the card's step flow is exercisable in proofs.
+        private static var demoAskSeamsEnabled: Bool {
+            #if DEBUG
+            DemoScreenshotMode.isEnabled
+            #else
+            false
+            #endif
+        }
+
         /// screenshot mode only; never in release.
         @MainActor
         private static func demoPendingFixture(
@@ -382,6 +392,28 @@ struct AgentDetailView: View {
             else { return content }
             var content = content
             content.pending = [
+                PendingInteraction(
+                    id: "demo-pending-multi",
+                    question: "Stage the retry how?",
+                    options: [],
+                    questions: [
+                        PendingAskQuestion(
+                            id: "q1", text: "Which environment should run the retry?",
+                            multi: false,
+                            options: [
+                                PendingAskQuestion.Option(id: "o1", label: "Dev"),
+                                PendingAskQuestion.Option(id: "o2", label: "Staging"),
+                                PendingAskQuestion.Option(id: "o3", label: "Both"),
+                            ]),
+                        PendingAskQuestion(
+                            id: "q2", text: "Which checks should re-run?",
+                            multi: true,
+                            options: [
+                                PendingAskQuestion.Option(id: "o1", label: "Unit tests"),
+                                PendingAskQuestion.Option(id: "o2", label: "Integration suite"),
+                                PendingAskQuestion.Option(id: "o3", label: "Smoke"),
+                            ]),
+                    ]),
                 PendingInteraction(
                     id: "demo-pending-short",
                     question: "Keep the original camera timing?",
@@ -429,7 +461,13 @@ struct AgentDetailView: View {
                         on: agent.hostID)
                 },
                 authorLabel: "Heeler · \(agent.agent.kind.lowercased())",
-                attachments: chatAttachments)
+                attachments: chatAttachments,
+                // Demo mode (Debug + screenshot gate only): the ask
+                // card's flow is exercisable for proofs — advancing
+                // steps, Back, multi-select confirm — with a no-op
+                // delivery seam. Production paths pass real seams.
+                onAskAnswer: Self.demoAskSeamsEnabled ? { _, _ in } : nil,
+                onAskCancel: Self.demoAskSeamsEnabled ? { _ in } : nil)
         } else {
             ChatUnavailablePlaceholder()
         }
@@ -482,6 +520,12 @@ struct AgentDetailView: View {
                         try? await brokerChat?.cancelInteraction(
                             requestId: interaction.id)
                     }
+                },
+                imageFetcher: { ref in
+                    guard let store = brokerChat else {
+                        throw CocoaError(.fileNoSuchFile)
+                    }
+                    return try await store.readBlob(blobId: ref)
                 })
                 .overlay(alignment: .bottom) {
                     if case .disconnected(let reason) = store.phase {

@@ -44,6 +44,10 @@ struct ChatRowView: View {
             }
         case .pending(let interaction):
             ChatPendingRow(interaction: interaction, choose: { _ in })
+        case .image:
+            // Handled by the screen (fetch seam + reader); the plain
+            // row renderer never sees it.
+            EmptyView()
         }
     }
 }
@@ -488,7 +492,7 @@ struct ChatBubbleBody: View {
                     router: router,
                     // iMessage outgoing convention: saturated blue fill,
                     // white text (the markdown body inherits the color).
-                    foregroundOverride: isUser ? .white : nil)
+                    foregroundOverride: nil)
             }
         }
         .padding(.horizontal, 12)
@@ -496,9 +500,17 @@ struct ChatBubbleBody: View {
         .background(fill, in: ChatBubbleSilhouette.shape(userSide: isUser))
     }
 
+    /// The approved preview's --bubble values: #eaf0ec light /
+    /// #31483b dark — soft green-neutral paper, NOT vivid blue.
+    private static let userBubbleTint = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0x31 / 255, green: 0x48 / 255, blue: 0x3B / 255, alpha: 1)
+            : UIColor(red: 0xEA / 255, green: 0xF0 / 255, blue: 0xEC / 255, alpha: 1)
+    })
+
     private var fill: some ShapeStyle {
         isUser
-            ? AnyShapeStyle(Color.blue)
+            ? AnyShapeStyle(Self.userBubbleTint)
             : AnyShapeStyle(.fill.tertiary)
     }
 }
@@ -675,7 +687,6 @@ struct ChatAssistantArticleView: View {
             ChatLinkText(bubble.text, style: .assistant, router: router)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.bottom, 12)
         .onTapGesture { onToggleActions?() }
     }
 }
@@ -965,5 +976,103 @@ struct AgentPendingQuestionCard: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Answer: \(label)")
+    }
+}
+
+// MARK: - Transcript image tiles + reader (§D fix 3)
+
+/// One square gallery tile for an image block. Loads bytes through the
+/// fetch seam on demand; without a seam (or on failure) renders an
+/// honest unavailable tile — never a spinner pretending content.
+struct ChatTranscriptImageTile: View {
+    let image: ChatImageRef
+    var fetch: ((String) async throws -> Data)?
+    var openReader: () -> Void
+
+    @State private var loadedImage: UIImage?
+    @State private var failed = false
+
+    var body: some View {
+        Button(action: openReader) {
+            Group {
+                if let loadedImage {
+                    Image(uiImage: loadedImage)
+                        .resizable()
+                        .scaledToFill()
+                } else if failed {
+                    VStack(spacing: 4) {
+                        Image(systemName: "photo.badge.exclamationmark")
+                            .font(.subheadline)
+                        Text("Unavailable")
+                            .font(.system(size: 8))
+                    }
+                    .foregroundStyle(.secondary)
+                } else {
+                    Image(systemName: "photo")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 96, height: 96)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.secondary.opacity(0.25), lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+        .task {
+            guard loadedImage == nil, !failed, let fetch else { return }
+            do {
+                let data = try await fetch(image.ref)
+                loadedImage = UIImage(data: data)
+                if loadedImage == nil { failed = true }
+            } catch {
+                failed = true
+            }
+        }
+        .accessibilityLabel("Image attachment, opens full view")
+    }
+}
+
+/// The full-size reader for a transcript image: loads via the fetch
+/// seam, pinch-zooms (ZoomableImageView).
+struct ChatTranscriptImageReader: View {
+    let image: ChatImageRef
+    var fetch: ((String) async throws -> Data)?
+
+    @State private var loadedImage: UIImage?
+    @State private var failed = false
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let loadedImage {
+                    ZoomableImageView(image: loadedImage)
+                } else if failed {
+                    ContentUnavailableView(
+                        "Image unavailable",
+                        systemImage: "photo.badge.exclamationmark",
+                        description: Text(
+                            "The image could not be loaded (\(image.ref))."))
+                } else {
+                    ProgressView("Loading image…")
+                }
+            }
+            .navigationTitle("Image")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .task {
+            guard let fetch else {
+                failed = true
+                return
+            }
+            do {
+                let data = try await fetch(image.ref)
+                loadedImage = UIImage(data: data)
+                if loadedImage == nil { failed = true }
+            } catch {
+                failed = true
+            }
+        }
     }
 }
