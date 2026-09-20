@@ -78,8 +78,14 @@ struct ConsoleView: View {
     /// nil keeps the sheet-era toolbar behavior for previews, Demo runs,
     /// and tests that construct `ConsoleView` directly.
     @Environment(\.appDestination) private var appDestination
+    @Environment(\.appDestinationMenuSuppressed) private var isMenuSuppressed
     private var destinationMenu: AppDestinationMenu? {
-        appDestination.map { AppDestinationMenu(selection: $0) }
+        // While a pushed detail owns the window the selector is omitted
+        // ENTIRELY (#A: no destination chrome inside chat/terminal/
+        // details — not even a plain title, which the native toolbar
+        // would wrap in its own capsule chrome).
+        guard !isMenuSuppressed else { return nil }
+        return appDestination.map { AppDestinationMenu(selection: $0) }
     }
 
     var body: some View {
@@ -220,14 +226,30 @@ struct ConsoleView: View {
         .onChange(of: isStartingAgent) { _, starting in
             if starting { isSearchFocused = false }
         }
+        // The destination-value seam (the one the user directive named):
+        // keying on the DESTINATION VALUE itself, not any menu control —
+        // leaving Agents for Hosts or Settings (menu, drawer, or the nav
+        // seam's future shapes) resigns the search field; query/chips/
+        // scroll stay preserved for the return trip.
+        .onChange(of: appDestination?.wrappedValue) { _, _ in
+            isSearchFocused = false
+        }
     }
 
     // The toolbar extracted from the body: keeps the body's expression
     // graph small enough for the type-checker.
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        // The approved compact destination selector, top-left on every
+        // page (nav #A): mounts only where the appDestination environment
+        // exists (AppRootView; demo injects it too).
+        if let destinationMenu {
+            ToolbarItem(placement: .topBarLeading) {
+                destinationMenu
+            }
+        }
         // (User directive: the host-filter menu is gone — search's
-        // host: chip subsumed it. The NAV arbitration owns this block.)
+        // host: chip subsumed it.)
         ToolbarItem(placement: .primaryAction) {
             Button("Hosts", systemImage: "server.rack") {
                 presentHosts()

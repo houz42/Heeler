@@ -87,6 +87,7 @@
 		2845EA0266D12D4E2B6AD2F0 /* OpenersPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 195A7E87C2EE9CE6B5BCCC8E /* OpenersPresenter.swift */; };
 		289D5FF53D330E3C7CA81707 /* TerminalScreenView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 847A1406F4AAEBF2F1EDFA1F /* TerminalScreenView.swift */; };
 		28C029CF371E68CE15867BF8 /* OmpTranscriptParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC942FF973881A8E51D02B83 /* OmpTranscriptParser.swift */; };
+		28C988A72DA471BA23F73974 /* AgentKindGlyphs.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE138FD87DC08D4F8124F4D7 /* AgentKindGlyphs.swift */; };
 		28F93D9F39898FEB4093A5A2 /* AgentLayoutTokensEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4C7147F40C47FDD436B94BE /* AgentLayoutTokensEditing.swift */; };
 		2919B56BA0DACB65CA4DC910 /* MacroKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E621BD788361A3761DB1374 /* MacroKeyStore.swift */; };
 		297F2EB19960A01651FDA05C /* GeneratedWireTypesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5C058D102046A707547A0FD /* GeneratedWireTypesTests.swift */; };
@@ -983,6 +984,7 @@
 		EB6BD88F9C7CE1520C4D961C /* RemoteDirectoryBrowserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDirectoryBrowserTests.swift; sourceTree = "<group>"; };
 		ED671896F0FC80857EC38088 /* AppRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRootView.swift; sourceTree = "<group>"; };
 		ED83CC7F1D133006430FD357 /* JetBrainsMono-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "JetBrainsMono-Regular.ttf"; sourceTree = "<group>"; };
+		EE138FD87DC08D4F8124F4D7 /* AgentKindGlyphs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentKindGlyphs.swift; sourceTree = "<group>"; };
 		EE5CA92C9062577ED5BB5F25 /* ChatStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatStoreTests.swift; sourceTree = "<group>"; };
 		EEB7627C47322439338006A7 /* HostTerminalOwnership.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostTerminalOwnership.swift; sourceTree = "<group>"; };
 		EEB863EF2AD319A412DB564A /* notification-payload-v1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "notification-payload-v1.json"; sourceTree = "<group>"; };
@@ -1051,6 +1053,7 @@
 			isa = PBXGroup;
 			children = (
 				97FCAC8E90A9E911FE5B6075 /* AgentKindBadge.swift */,
+				EE138FD87DC08D4F8124F4D7 /* AgentKindGlyphs.swift */,
 				4CAAF9890DAC59A98E91CE59 /* AgentListFeatureView.swift */,
 				4B93A603BF71864E7E8A03FF /* AgentListLayout.swift */,
 				3FCF03BF53BA2F6E16B069A0 /* AgentSearchBarStore.swift */,
@@ -2131,6 +2134,7 @@
 				A6747734905576A8861C945A /* AgentFocusCoordinator.swift in Sources */,
 				390E9313FFE9AA540C6B6113 /* AgentInputModeSettings.swift in Sources */,
 				25928E5A8B4F725ABB1D9C9D /* AgentKindBadge.swift in Sources */,
+				28C988A72DA471BA23F73974 /* AgentKindGlyphs.swift in Sources */,
 				E68A1DDFA6C5F618BBB79AB7 /* AgentLayoutErrorView.swift in Sources */,
 				28F93D9F39898FEB4093A5A2 /* AgentLayoutTokensEditing.swift in Sources */,
 				1CDD70EB9994707EBD2EB699 /* AgentListFeatureView.swift in Sources */,
