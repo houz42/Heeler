@@ -2119,6 +2119,71 @@ struct ConsoleStoreTests {
 
         store.setHosts([])
     }
+
+    /// The device defect's exact shape (every route read 'Alternate' while
+    /// the card showed connected): the production factory reports the
+    /// winning address the moment the dial answers — while the session is
+    /// still `.connecting`; `.connected` only publishes after the first
+    /// ping. The old published-map filter wiped that mid-connect mark on
+    /// the next rebuild and nothing ever re-recorded it. The raw record +
+    /// derived publish must survive the race: the winner surfaces the
+    /// moment the status turns `.connected` (the in-use dot fires).
+    @Test func winningAddressRecordedMidConnectSurvivesTheStatusRace() async throws {
+        let host = Host.fixture(name: "alpha", address: "a.example")
+        let (pinDefaults, pinCleanup) = try makePinDefaults()
+        defer { pinCleanup() }
+        let store = ConsoleStore(
+            snapshotRetryDelay: .milliseconds(10),
+            pins: PinnedAgentsStore(defaults: pinDefaults),
+            rowLayouts: AgentRowLayoutStore(defaults: pinDefaults),
+            makeSession: { host, subscriptions in
+                EventsSession(
+                    subscriptions: subscriptions,
+                    connect: { ScriptedTransport(snapshot: .fixture()) },
+                    reconnectPolicy: Self.fastPolicy,
+                    keepalive: nil)
+            })
+
+        // The session stands up; status passes through `.connecting`.
+        store.setHosts([host])
+        await store.resume()
+        try await waitUntil("the session should be dialing") {
+            store.hostStatuses[host.id] != nil
+        }
+
+        // The production fold step, driven exactly as the mailbox task
+        // does when the factory reports the winner mid-connect: status is
+        // still NOT `.connected` here. (Fast scripted transports connect
+        // quickly; if the status already turned `.connected` the race
+        // window simply closed — record then, and the publish must hold
+        // BOTH ways.)
+        let winner = host.candidateAddresses.first ?? host.address
+        await MainActor.run {
+            store.recordConnectedAddressForTesting(hostID: host.id, address: winner)
+        }
+
+        // The moment the status turns `.connected`, the next rebuild
+        // publishes the winner: the Hosts page reflects exactly the
+        // winning route as in use (the dot turns green) — the old code
+        // had already discarded the mark by the time it got here.
+        try await waitUntil("the store should connect") {
+            store.hostStatuses[host.id] == .connected
+        }
+        #expect(
+            store.hostConnectedAddresses[host.id] == winner,
+            "the winning address must publish once connected — the in-use dot must fire")
+
+        store.setHosts([])
+    }
+}
+
+/// Collects dial-reported winning addresses safely off the main actor.
+private actor AddressBox {
+    private(set) var marks: [Host.ID: String] = [:]
+
+    func record(_ hostID: Host.ID, _ address: String) {
+        marks[hostID] = address
+    }
 }
 
 /// Hands out scripted transports in order, one per `connect`, so tests can

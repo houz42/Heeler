@@ -20,7 +20,7 @@ enum RouteCheckState: Equatable, Sendable {
 /// and user for the tapped route, host-key trust for its endpoint, and an
 /// explicit on-demand reachability check. The in-use/alternate derivation
 /// lives in the presentation struct below, not here — this store only
-/// owns facts the sheet can change.
+/// owns facts the sheet can change (probe + trust lookup).
 @MainActor
 @Observable
 final class HostRouteInspectorStore {
@@ -60,10 +60,7 @@ final class HostRouteInspectorStore {
         guard checkState != .checking else { return }
         checkState = .checking
         checkFailureExplanation = nil
-        guard
-            let resolved = try? credentials.credentials(
-                for: host)
-        else {
+        guard let resolved = try? credentials.credentials(for: host) else {
             // The check could not even start: say WHY (no silent reset —
             // §E: the user's press must surface an actionable failure).
             checkState = .unchecked
@@ -131,7 +128,8 @@ struct HostRoutePresentation: Equatable, Sendable {
         self.usage = connectedAddress == address ? .inUse : .alternate
     }
 
-    /// The state chip the Host card row shows.
+    /// The route vocabulary (kept per the prototype; the card ROW is quiet
+    /// — the user's dot-only decision — but the inspector keeps words).
     var stateLabel: String {
         switch usage {
         case .inUse: "In use"
@@ -150,47 +148,76 @@ struct HostRoutePresentation: Equatable, Sendable {
 }
 
 /// The sheet that inspects ONE route of ONE Host, titled
-/// `HOST · ROUTE`: exact address:port and user, trust/reachability
-/// information, and an explicit check button. Never claims an unchecked
-/// alternate route is connected (handoff §E).
+/// `HOST · ROUTE`, at the prototype's compact density
+/// (host-preview.js connectionDetails): a small connection-target block
+/// (eyebrow, ONE strong monospace address:port line, quiet `user ·
+/// state` subline), a compact group of setting rows, an explicit check
+/// control, and an in-context `Edit route` affordance that opens the SAME
+/// route editor the host form uses — so naming a route is reachable
+/// where the user actually lands. Content-height detents, never
+/// full-screen sprawl. Never claims an unchecked alternate route is
+/// connected (handoff §E).
 struct HostRouteInspectorView: View {
     let host: Host
     let route: HostRoutePresentation
-    @Environment(\.dismiss) private var dismiss
+    /// Whether the tapped route carries a user label yet — the Edit
+    /// affordance's hint that a friendly name is available to add.
+    let routeHasLabel: Bool
     @State private var store: HostRouteInspectorStore
+    @State private var isEditingRoute = false
+    /// The edited route's new label: the inspector and the caller's list
+    /// refresh reactively when the catalog updates, so this only needs
+    /// to exist long enough to hand the edit to the saver.
+    @State private var editedRoute: AdditionalAddressRow?
+    @Environment(\.dismiss) private var dismiss
+    /// Persists route edits made in-context (the host catalog; same
+    /// store the host form saves through).
+    var onEditRoute: ((AdditionalAddressRow) -> Void)?
 
     init(
         host: Host,
         address: String,
         connectedAddress: String?,
-        store: HostRouteInspectorStore = HostRouteInspectorStore()
+        routeHasLabel: Bool? = nil,
+        store: HostRouteInspectorStore = HostRouteInspectorStore(),
+        onEditRoute: ((AdditionalAddressRow) -> Void)? = nil
     ) {
         self.host = host
         self.route = HostRoutePresentation(
             host: host, address: address, connectedAddress: connectedAddress)
+        self.routeHasLabel =
+            routeHasLabel ?? !(host.routeLabels[address]?.isEmpty ?? true)
         _store = State(initialValue: store)
+        self.onEditRoute = onEditRoute
     }
 
     var body: some View {
         NavigationStack {
             List {
+                // The prototype's compact connection-target block: eyebrow
+                // + ONE strong address:port line + quiet user·state subline.
                 Section {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 3) {
                         Text("Connection target")
-                            .font(.caption)
+                            .font(.caption2)
                             .foregroundStyle(.secondary)
+                            .textCase(.uppercase)
                         Text("\(route.address):\(String(host.port))")
-                            .font(.title3.weight(.semibold))
-                            .monospaced()
+                            .font(.subheadline.weight(.semibold).monospaced())
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                             .textSelection(.enabled)
-                        Text(host.username)
-                            .font(.subheadline)
+                        Text("\(host.username) · \(route.stateLabel) route")
+                            .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 4)
+                    .padding(.vertical, 2)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("route-connection-target")
                 }
 
+                // Compact setting rows with quiet values, per the prototype.
                 Section {
                     LabeledContent("SSH connection") {
                         connectionStateText
@@ -209,8 +236,6 @@ struct HostRouteInspectorView: View {
                         }
                         .accessibilityIdentifier("route-selection")
                     }
-                } header: {
-                    Text("Status")
                 }
 
                 Section {
@@ -228,10 +253,22 @@ struct HostRouteInspectorView: View {
                             .foregroundStyle(.orange)
                             .accessibilityIdentifier("route-check-failure")
                     }
+                    // In-context naming (device finding): the SAME route
+                    // editor the host form uses, one tap from where the
+                    // user actually lands.
+                    Button {
+                        isEditingRoute = true
+                    } label: {
+                        Label(
+                            routeHasLabel ? "Edit route" : "Name this route",
+                            systemImage: "pencil")
+                    }
+                    .accessibilityIdentifier("route-inspector-edit")
                 } footer: {
                     Text(routeExplanation)
                 }
             }
+            .listStyle(.insetGrouped)
             .navigationTitle("\(host.displayName) · \(route.name)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -239,10 +276,29 @@ struct HostRouteInspectorView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .presentationDetents([.height(500), .large])
+            .sheet(isPresented: $isEditingRoute) {
+                HostRouteEditView(
+                    hostName: host.displayAliasName,
+                    route: editedRoute ?? routeEditorRow,
+                    isPrimaryRoute: host.address == route.address,
+                    onSave: { updated in
+                        onEditRoute?(updated)
+                    },
+                    onRemove: nil)
+            }
             .onAppear {
                 Task { await store.loadTrust(host: route.address, port: host.port) }
             }
         }
+    }
+    /// The tapped route as the editor's row shape: the row identity is the
+    /// address's position in the Host's candidates (address-keyed like the
+    /// labels), so an in-inspector save lands on exactly this route.
+    private var routeEditorRow: AdditionalAddressRow {
+        AdditionalAddressRow(
+            address: route.address,
+            label: host.routeLabels[route.address] ?? "")
     }
 
     private var connectionStateText: Text {
@@ -287,5 +343,4 @@ struct HostRouteInspectorView: View {
     private func checkRoute() {
         Task { await store.check(host: host, address: route.address) }
     }
-
 }

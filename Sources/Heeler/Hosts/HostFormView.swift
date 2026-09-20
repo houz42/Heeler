@@ -184,10 +184,19 @@ struct HostFormView: View {
                             Text(routeName(for: row))
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.primary)
-                            Text(routeSubtitle(for: row))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                            HStack(spacing: 6) {
+                                Text(routeSubtitle(for: row))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                // Nameability hint (device finding): an
+                                // unnamed route says so quietly, inline.
+                                if row.label.trimmingCharacters(in: .whitespaces).isEmpty {
+                                    Text("Add label")
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                }
+                            }
                         }
                         Spacer()
                         Image(systemName: "chevron.right")

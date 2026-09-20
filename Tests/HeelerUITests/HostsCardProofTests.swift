@@ -61,13 +61,22 @@ final class HostsCardProofTests: XCTestCase {
             inspectorTitle.waitForExistence(timeout: UITestTimeouts.standard),
             "route inspector titled 'HOST · ROUTE' never appeared")
 
-        // The connection target shows the exact address:port and user.
-        waitToExist(app.staticTexts[UITestFixtures.studioMacPrimaryAddress])
-        waitToExist(app.staticTexts["developer"])
+        // The compact connection-target block shows the exact
+        // address:port and the user·state subline (one merged element).
+        let target = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == 'route-connection-target'")).firstMatch
+        waitToExist(target)
+        XCTAssertTrue(
+            target.label.contains(UITestFixtures.studioMacPrimaryAddress),
+            "connection target missing the exact address: \(target.label)")
+        XCTAssertTrue(
+            target.label.contains("developer"),
+            "connection target missing the user: \(target.label)")
 
         // Route selection is honest: the primary route says it is in
         // use (identifier'd value; label carries the whole LabeledContent
-        // row merged, so match by content).
+        // row merged, so match by content). Rows themselves are quiet:
+        // the green dot is the in-use signal, no state text on the row.
         let selection = app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier == 'route-selection'")).firstMatch
         waitToExist(selection)
@@ -94,8 +103,13 @@ final class HostsCardProofTests: XCTestCase {
         XCTAssertTrue(
             lanLabel.contains("reachability unknown until checked"),
             "alternate reachability must be stated unknown: \(lanLabel)")
-        // The card's state chip for the alternate route.
-        waitToExist(app.staticTexts["Alternate"])
+        // The row is quiet: no state TEXT may render on route rows (the
+        // dot alone signals; the user's design decision).
+        for word in ["In use", "Alternate"] {
+            XCTAssertEqual(
+                app.staticTexts[word].firstMatch.exists, false,
+                "route rows must not render state text ('\(word)' found)")
+        }
 
         lanRow.tap()
         let inspectorTitle = app.navigationBars["Studio Mac · Local network"]
@@ -362,5 +376,63 @@ final class HostsCardProofTests: XCTestCase {
             app.buttons["route-editor-remove"].firstMatch.exists, false,
             "the last remaining route must not offer Remove")
         captureScreenshot(app, "final-route-editor", lifetime: .keepAlways)
+    }
+
+    // MARK: Naming reachable in-context (device finding)
+
+    /// The inspector's Edit affordance opens the SAME route editor; a
+    /// typed label saves to the catalog, and the LIST ROW plus the
+    /// inspector both show the friendly name immediately.
+    func testEditRouteFromInspectorNamesTheRoute() {
+        app = UITestApp.launchDemo(.hostList)
+
+        // The Build Server card's single route is unnamed (the demo
+        // fixture gives it no label) — its inspector says "Name this
+        // route" (the in-context hint).
+        let row = app.buttons["host-route-build.demo.invalid"]
+        waitToExist(row)
+        row.tap()
+        let inspector = app.navigationBars["Build Server · build.demo.invalid"]
+        XCTAssertTrue(
+            inspector.waitForExistence(timeout: UITestTimeouts.standard),
+            "unnamed route inspector never appeared")
+
+        // The compact sheet may need one scroll to reveal the action
+        // rows on smaller content-height detents.
+        let edit = app.buttons["route-inspector-edit"]
+        if !edit.waitForExistence(timeout: 3) {
+            app.swipeUp(velocity: .fast)
+        }
+        waitToExist(edit)
+        XCTAssertTrue(edit.label.contains("Name this route"))
+        edit.tap()
+
+        // The SAME route editor, scoped to the host.
+        let editor = app.navigationBars["Edit route on Build Server"]
+        XCTAssertTrue(
+            editor.waitForExistence(timeout: UITestTimeouts.standard),
+            "in-inspector route editor never appeared")
+        let labelField = app.textFields["Route label"]
+        waitToExist(labelField)
+        labelField.tap()
+        app.waitForKeyboard()
+        labelField.typeText("Datacenter")
+        let save = app.buttons["route-editor-save"]
+        waitToExist(save)
+        save.tap()
+
+        // The inspector (still open) now shows the friendly name in its
+        // title; the list row shows it after Done.
+        XCTAssertTrue(
+            app.navigationBars["Build Server · Datacenter"]
+                .waitForExistence(timeout: UITestTimeouts.standard),
+            "inspector title did not pick up the saved friendly name")
+        app.buttons["Done"].firstMatch.tap()
+        let namedRow = app.buttons["host-route-build.demo.invalid"]
+        waitToExist(namedRow)
+        XCTAssertTrue(
+            namedRow.label.contains("Datacenter"),
+            "list row did not show the saved friendly name: \(namedRow.label)")
+        captureScreenshot(app, "route-named-in-context", lifetime: .keepAlways)
     }
 }
