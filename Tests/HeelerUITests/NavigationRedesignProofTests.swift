@@ -37,29 +37,36 @@ final class NavigationRedesignProofTests: XCTestCase {
         let menu = app.buttons[UITestFixtures.destinationSelector].firstMatch
         waitToExist(menu)
         captureScreenshot(app, "nav-phone-menu-closed")
-
-        menu.tap()
-        // The menu lists all three destinations, the current one checked
-        // (a Menu-Picker renders the checkmark as the selected control).
-        let hostsItem = app.buttons["Hosts"].firstMatch
+        // Open the menu. A SwiftUI toolbar Menu can eat the first tap
+        // without presenting (highlight-state race on fresh launches), so
+        // tap-and-poll: each attempt re-taps until the Settings row is
+        // queryable, within the standard budget.
+        let settingsItem = app.buttons["Settings"].firstMatch
+        let menuDeadline = Date().addingTimeInterval(UITestTimeouts.standard)
+        while !settingsItem.exists, Date() < menuDeadline {
+            menu.tap()
+            _ = settingsItem.waitForExistence(timeout: 2)
+        }
         XCTAssertTrue(
-            hostsItem.waitForExistence(timeout: UITestTimeouts.standard),
-            "the destination menu must offer Hosts")
-        XCTAssertTrue(
-            app.buttons["Settings"].firstMatch.exists,
+            settingsItem.exists,
             "the destination menu must offer Settings")
         captureScreenshot(app, "nav-phone-menu-open")
 
-        hostsItem.tap()
-        // The Hosts page mounts with the SAME compact selector, relabeled.
-        let hostsMenu = app.buttons["Hosts, switch destination"].firstMatch
+        settingsItem.tap()
+        // The Settings page mounts with the SAME compact selector,
+        // relabeled.
+        let settingsMenu = app.buttons["Settings, switch destination"].firstMatch
         XCTAssertTrue(
-            hostsMenu.waitForExistence(timeout: UITestTimeouts.standard),
+            settingsMenu.waitForExistence(timeout: UITestTimeouts.standard),
             "the selector must relabel to the new destination")
-        captureScreenshot(app, "nav-phone-hosts")
+        XCTAssertTrue(
+            app.staticTexts["Notifications"].firstMatch
+                .waitForExistence(timeout: UITestTimeouts.standard),
+            "the Settings page must mount")
+        captureScreenshot(app, "nav-phone-settings")
 
         // Round trip: back to Agents, the list state is where it was.
-        hostsMenu.tap()
+        settingsMenu.tap()
         let agentsItem = app.buttons["Agents"].firstMatch
         XCTAssertTrue(
             agentsItem.waitForExistence(timeout: UITestTimeouts.standard))
