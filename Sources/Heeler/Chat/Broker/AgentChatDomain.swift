@@ -418,3 +418,31 @@ struct AgentChatAnswer: Encodable, Sendable, Equatable {
     var customText: String?
     var note: String?
 }
+
+
+/// Pure interactions-snapshot merge with the two race rules (the
+/// store's refreshInteractions delegates here):
+/// - RACED-RESOLVED: tombstoned requestIds are excluded from the
+///   snapshot install (a resolution racing the list never resurrects).
+/// - RACED-OPENED: live arrivals not in the snapshot survive (the list
+///   predates them).
+enum AgentChatInteractionMerge: Sendable {
+    static func install(
+        snapshot: [AgentChatInteraction],
+        live: [AgentChatInteraction],
+        tombstones: Set<String>
+    ) -> [AgentChatInteraction] {
+        var byId = Dictionary(
+            snapshot
+                .filter { !tombstones.contains($0.requestId) }
+                .map { ($0.requestId, $0) },
+            uniquingKeysWith: { _, newest in newest })
+        for arrival in live
+        where byId[arrival.requestId] == nil
+            && !tombstones.contains(arrival.requestId)
+        {
+            byId[arrival.requestId] = arrival
+        }
+        return byId.values.sorted { $0.requestId < $1.requestId }
+    }
+}

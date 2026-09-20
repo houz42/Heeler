@@ -72,8 +72,17 @@ final class AgentChatStore {
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var lifecycleTask: Task<Void, Never>?
     @ObservationIgnored private var bufferedEvents: [AgentChatEventFrame] = []
+    /// RequestIds resolved during this connection (any outcome). A
+    /// resolution racing an in-flight interactions.list must win over
+    /// the stale snapshot — the card may never resurrect.
+    @ObservationIgnored private var resolvedInteractionTombstones: Set<String> = []
     @ObservationIgnored private var subscribed = false
     @ObservationIgnored private var recentPageEpoch = 0
+    /// Reconnect backoff after a broker-channel loss (contract: any
+    /// lost connection means resubscribe+open). Grows per attempt,
+    /// resets when a page lands again.
+    @ObservationIgnored private var reconnectDelay: Duration = .seconds(1)
+    @ObservationIgnored private var reconnectTask: Task<Void, Never>? = nil
     @ObservationIgnored private var promptRequestKeys: Set<String> = []
 
     init(
@@ -103,7 +112,10 @@ final class AgentChatStore {
         registration = nil
         capabilities = nil
         bufferedEvents = []
+        resolvedInteractionTombstones = []
         subscribed = false
+        reconnectTask?.cancel()
+        reconnectTask = nil
         generation &+= 1
         let myGeneration = generation
 
@@ -179,13 +191,17 @@ final class AgentChatStore {
                 instanceId: registration.instanceId,
                 generation: registration.generation)
 
-            // 4. Snapshot: recent page + watermark + buffered replay.
-            try await loadRecentPage(storeGeneration: storeGeneration)
-
-            // 5. Optional interactions snapshot replay (late subscriber).
+            // 4. Interactions snapshot replay — IMMEDIATELY after
+            // subscribe: the live event stream alone misses
+            // already-open questions (late subscriber; proven on the
+            // real runtime). Runs before the history snapshot so
+            // pending asks render with the first content.
             if registration.capabilities.interactions {
                 try await refreshInteractions()
             }
+
+            // 5. Snapshot: recent page + watermark + buffered replay.
+            try await loadRecentPage(storeGeneration: storeGeneration)
 
             // 6. Park: events drive everything from here.
             await withCheckedContinuation {
@@ -205,6 +221,20 @@ final class AgentChatStore {
     }
 
     @ObservationIgnored private var parked: [CheckedContinuation<Void, Never>] = []
+
+    /// Contract: a lost broker connection means resubscribe+open. The
+    /// banner stays visible (honest state) while the retry runs.
+    private func scheduleReconnect() {
+        let delay = reconnectDelay
+        reconnectDelay = min(reconnectDelay * 2, .seconds(30))
+        let myGeneration = generation
+        reconnectTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            guard let self, self.generation == myGeneration else { return }
+            await self.start()
+        }
+    }
 
     private func endParked() {
         for continuation in parked {
@@ -378,7 +408,16 @@ final class AgentChatStore {
                     instanceId: registration.instanceId,
                     generation: registration.generation)))
         let result = try Self.decode(AgentChatInteractionsResult.self, from: value)
-        interactions = result.pending
+        // Snapshot install with the two race rules:
+        // - RACED-RESOLVED: a resolution that arrived while the list
+        //   was in flight is tombstoned — the stale snapshot entry is
+        //   excluded (never resurrect).
+        // - RACED-OPENED: an interaction.opened that arrived ahead of
+        //   this call survives (the list predates it).
+        interactions = AgentChatInteractionMerge.install(
+            snapshot: result.pending,
+            live: interactions,
+            tombstones: resolvedInteractionTombstones)
     }
 
     func answer(_ interaction: AgentChatInteraction, answers: [AgentChatAnswer]) async throws {
@@ -448,6 +487,7 @@ final class AgentChatStore {
             if phase.isRenderable {
                 phase = .disconnected(
                     reason: "Connection to the chat broker was lost.")
+                scheduleReconnect()
             } else {
                 phase = .failed(reason: friendly(nil, reason: reason))
             }
@@ -489,6 +529,9 @@ final class AgentChatStore {
         case .interaction(.opened(let interaction)):
             upsertInteraction(interaction)
         case .interaction(.resolved(let requestId, _, _)):
+            // Tombstone first: the snapshot install consults it, so a
+            // resolution racing interactions.list can never resurrect.
+            resolvedInteractionTombstones.insert(requestId)
             interactions.removeAll { $0.requestId == requestId }
         }
     }
@@ -513,6 +556,7 @@ final class AgentChatStore {
                     generation: registration.generation)))
         let page = try Self.decode(AgentChatPage.self, from: value)
         await applyPage(page, replaceRecent: true)
+        reconnectDelay = .seconds(1)
         // Watermark: buffered events above throughSeq replay now; the
         // ones at or below it are already in the page.
         AgentChatEventReconcile.applyWatermark(&reconcile, throughSeq: page.throughSeq)

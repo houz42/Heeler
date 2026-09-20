@@ -681,3 +681,42 @@ struct AgentChatLiveVectorTests {
         #expect(!mapped.requiresFullResync && !mapped.requiresFreshOpen)
     }
 }
+
+@Suite("Agent chat interactions snapshot races")
+struct AgentChatInteractionRaceTests {
+    private func interaction(_ id: String, text: String = "Proceed?") -> AgentChatInteraction {
+        let json = #"{"requestId":"\#(id)","generation":1,"kind":"question","questions":[{"id":"q1","text":"\#(text)","multi":false,"options":[]}],"allowCustom":false}"#
+        let data = json.data(using: .utf8)!
+        return try! JSONDecoder().decode(AgentChatInteraction.self, from: data)
+    }
+
+    @Test("raced-opened: a live interaction.opened survives the snapshot install")
+    func racedOpenedSurvives() {
+        // The event beat the list call; the list predates it.
+        let merged = AgentChatInteractionMerge.install(
+            snapshot: [interaction("r-snap")],
+            live: [interaction("r-live")],
+            tombstones: [])
+        #expect(merged.map(\.requestId).sorted() == ["r-live", "r-snap"])
+    }
+
+    @Test("raced-resolved: a resolution during fetch must NOT resurrect the card")
+    func racedResolvedNeverResurrects() {
+        // The list response still contains r-gone (built before the
+        // resolution), but the tombstone excludes it.
+        let merged = AgentChatInteractionMerge.install(
+            snapshot: [interaction("r-gone"), interaction("r-open")],
+            live: [],
+            tombstones: ["r-gone"])
+        #expect(merged.map(\.requestId) == ["r-open"])
+    }
+
+    @Test("tombstone excludes even a live arrival replay for the same id")
+    func tombstoneBeatsEverything() {
+        let merged = AgentChatInteractionMerge.install(
+            snapshot: [],
+            live: [interaction("r-x")],
+            tombstones: ["r-x"])
+        #expect(merged.isEmpty)
+    }
+}
