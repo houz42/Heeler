@@ -10,15 +10,58 @@ import Foundation
 /// Rendered as the raw question text plus one tappable button per option; an
 /// empty `options` list renders the question alone (free-text answers go
 /// through the composer, not this row).
+/// One question of a pending ask, with the option IDs the answer
+/// payload needs (single-question demos synthesize index ids).
+internal struct PendingAskQuestion: Sendable, Equatable, Identifiable {
+    struct Option: Sendable, Equatable, Identifiable {
+        let id: String
+        let label: String
+    }
+    let id: String
+    let text: String
+    var multi: Bool = false
+    var options: [Option] = []
+
+    init(
+        id: String, text: String, multi: Bool = false,
+        options: [Option] = []
+    ) {
+        self.id = id
+        self.text = text
+        self.multi = multi
+        self.options = options
+    }
+}
+
 internal struct PendingInteraction: Sendable, Equatable, Identifiable {
     let id: String
     let question: String
     let options: [String]
+    /// The full ask structure (multi-question first-class); empty for
+    /// legacy single-question fixtures, which synthesize it.
+    var questions: [PendingAskQuestion] = []
 
-    init(id: String = UUID().uuidString, question: String, options: [String]) {
+    init(
+        id: String = UUID().uuidString, question: String, options: [String],
+        questions: [PendingAskQuestion] = []
+    ) {
         self.id = id
         self.question = question
         self.options = options
+        self.questions = questions
+    }
+
+    /// The effective question list: the real structure when present,
+    /// else the single-question synthesis (index-keyed option ids).
+    var effectiveQuestions: [PendingAskQuestion] {
+        if !questions.isEmpty { return questions }
+        return [
+            PendingAskQuestion(
+                id: "q0", text: question, multi: false,
+                options: options.enumerated().map { index, label in
+                    PendingAskQuestion.Option(id: "o\(index)", label: label)
+                })
+        ]
     }
 }
 

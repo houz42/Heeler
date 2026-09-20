@@ -81,7 +81,9 @@ struct ChatScreen: View {
         deliver: ((String) async throws -> Void)? = nil,
         pendingUnsupported: Bool = false,
         authorLabel: String = "",
-        attachments: ChatAttachments? = nil
+        attachments: ChatAttachments? = nil,
+        onAskAnswer: ((PendingInteraction, [PendingAskAnswerPayload]) -> Void)? = nil,
+        onAskCancel: ((PendingInteraction) -> Void)? = nil
     ) {
         self.paneID = paneID
         self.agentName = agentName
@@ -96,6 +98,8 @@ struct ChatScreen: View {
         self.pendingUnsupported = pendingUnsupported
         self.authorLabel = authorLabel
         self.attachments = attachments
+        self.onAskAnswer = onAskAnswer
+        self.onAskCancel = onAskCancel
         self._level = State(initialValue: initialLevel)
     }
 
@@ -204,29 +208,28 @@ struct ChatScreen: View {
                     router: openRouter,
                     fetch: fetch ?? { _ in throw CocoaError(.fileNoSuchFile) }))
         }
-        // The helpful stub's toast (final spec: no feedback contract —
-        // honest local confirmation only, never a fake success).
-        .overlay(alignment: .bottom) {
-            if let helpfulToast {
-                Text(helpfulToast)
-                    .font(.footnote)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(.thinMaterial, in: Capsule())
-                    .padding(.bottom, 90)
-                    .task {
-                        try? await Task.sleep(for: .seconds(2.5))
-                        withAnimation { self.helpfulToast = nil }
-                    }
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-        }
         // The input affordance floats bottom-trailing and only while the
         // input frame is closed; the frame's own chevron closes it.
         .overlay {
             if !inputPresented, router != nil && deliver != nil { inputOverlay }
         }
         .safeAreaInset(edge: .bottom) { inputFrame }
+        // The +N collection sheet: every draft item, removable there.
+        .sheet(isPresented: $showsDraftCollection) {
+            ChatDraftCollectionSheet(
+                items: draftItems,
+                removeItem: { id in removeDraftItem(id) },
+                openPreview: { item in
+                    showsDraftCollection = false
+                    previewedDraftItem = item
+                })
+                .presentationDetents([.medium, .large])
+        }
+        // The tapped tile's full preview.
+        .sheet(item: $previewedDraftItem) { item in
+            ChatDraftItemPreview(item: item)
+                .presentationDetents([.large])
+        }
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
         // Hiding the back button also disables the interactive pop gesture;
@@ -337,26 +340,116 @@ struct ChatScreen: View {
                         onToggleActions: { toggleActionsBubble(bubble) })
                 }
                 if selectedActionsBubble == bubble {
+                    let _ = helpfulRefresh
                     ChatMessageActionsRail(
                         isAssistant: bubble.role == .assistant,
                         supportsQuote: router != nil,
+                        isMarkedHelpful: helpfulReactions.contains(bubble.id),
                         copy: { copyAffordance(bubble.text); dismissActions() },
-                        quote: { quoteAffordance(bubble.text); dismissActions() },
-                        helpful: { markHelpfulStub(); dismissActions() })
+                        quote: {
+                            quoteAffordance(
+                                bubble.text,
+                                author: bubble.role == .user ? "You" : "Heeler")
+                            dismissActions()
+                        },
+                        helpful: { toggleHelpful(bubble.id); dismissActions() })
                 }
             }
         case .row(let row):
             if pendingUnsupported, case .pending(let interaction) = row {
                 AgentUnsupportedAskRow(interaction: interaction)
             } else if case .pending(let interaction) = row {
-                AgentPendingQuestionCard(
-                    interaction: interaction,
-                    step: 1, stepCount: 1,
-                    choose: { _ in })
+                askCard(interaction)
             } else {
                 LinkifiedChatRow(row: row, router: openRouter)
             }
         }
+    }
+
+    // -- Pending ask flow (real multi-question, requestId-keyed) --
+
+    /// The ask delivery seam: nil keeps the card read-only (options
+    /// render, choosing does nothing, Cancel hidden — honest).
+    var onAskAnswer: ((PendingInteraction, _ answers: [PendingAskAnswerPayload]) -> Void)? = nil
+    var onAskCancel: ((PendingInteraction) -> Void)? = nil
+
+    /// 1-based step per requestId (a re-ask after resolution starts
+    /// fresh because the id changes).
+    @State private var askStepByRequest: [String: Int] = [:]
+    /// Choices so far per requestId: questionId -> option ids.
+    @State private var askChoices: [String: [String: Set<String>]] = [:]
+
+    /// One built answer payload per answered question.
+    struct PendingAskAnswerPayload {
+        let questionId: String
+        let optionIds: [String]
+    }
+
+    @ViewBuilder
+    private func askCard(_ interaction: PendingInteraction) -> some View {
+        let questions = interaction.effectiveQuestions
+        let step = askStepByRequest[interaction.id] ?? 1
+        let question = questions[min(step, questions.count) - 1]
+        let choices = askChoices[interaction.id] ?? [:]
+        let selected = choices[question.id] ?? []
+        AgentPendingQuestionCard(
+            interaction: interaction,
+            step: min(step, questions.count),
+            stepCount: questions.count,
+            isMultiSelect: question.multi,
+            selectedOptionIds: selected,
+            choose: { optionId in
+                chooseAskOption(interaction, question: question, optionId: optionId)
+            },
+            confirmMultiSelect:
+                (question.multi && onAskAnswer != nil)
+                ? { submitAsk(interaction) } : nil,
+            back: step > 1 ? {
+                askStepByRequest[interaction.id] = step - 1
+            } : nil,
+            cancel: onAskCancel.map { cancel in
+                { cancel(interaction) }
+            })
+    }
+
+    /// Single-choice auto-advances; multi-select toggles the set.
+    private func chooseAskOption(
+        _ interaction: PendingInteraction,
+        question: PendingAskQuestion, optionId: String
+    ) {
+        if question.multi {
+            var perQuestion = askChoices[interaction.id] ?? [:]
+            var set = perQuestion[question.id] ?? []
+            if set.contains(optionId) { set.remove(optionId) }
+            else { set.insert(optionId) }
+            perQuestion[question.id] = set
+            askChoices[interaction.id] = perQuestion
+        } else {
+            var perQuestion = askChoices[interaction.id] ?? [:]
+            perQuestion[question.id] = [optionId]
+            askChoices[interaction.id] = perQuestion
+            let step = askStepByRequest[interaction.id] ?? 1
+            let questions = interaction.effectiveQuestions
+            if step >= questions.count {
+                submitAsk(interaction)
+            } else {
+                askStepByRequest[interaction.id] = step + 1
+            }
+        }
+    }
+
+    /// The final answer delivery: all recorded choices become payloads
+    /// and the owner's seam takes over.
+    private func submitAsk(_ interaction: PendingInteraction) {
+        guard let onAskAnswer else { return }
+        let perQuestion = askChoices[interaction.id] ?? [:]
+        var payloads: [PendingAskAnswerPayload] = []
+        for question in interaction.effectiveQuestions {
+            guard let ids = perQuestion[question.id], !ids.isEmpty else { continue }
+            payloads.append(PendingAskAnswerPayload(
+                questionId: question.id, optionIds: ids.sorted()))
+        }
+        onAskAnswer(interaction, payloads)
     }
 
     /// The message-actions selection (final interaction spec): the one
@@ -374,19 +467,31 @@ struct ChatScreen: View {
         withAnimation(.snappy) { selectedActionsBubble = nil }
     }
 
-    /// 'Helpful' on a message. NO real feedback contract exists yet —
-    /// honest stub: local toast only, nothing is sent or claimed saved.
-    @State private var helpfulToast: String?
-    private func markHelpfulStub() {
-        helpfulToast = "Marked helpful — feedback is preview-only for now"
+    /// 'Helpful' on a message: a REAL local reaction, persisted
+    /// on-device (ChatHelpfulReactions). No feedback contract exists
+    /// yet — nothing is claimed sent; the state shown is the honest
+    /// local truth.
+    private let helpfulReactions = ChatHelpfulReactions()
+    /// Bumps when a reaction toggles so the rail re-renders its state.
+    @State private var helpfulRefresh = 0
+    private func toggleHelpful(_ id: String) {
+        helpfulReactions.toggle(id)
+        helpfulRefresh += 1
     }
 
     /// Prefills the composer with the quoted draft and opens the input,
     /// caret at the draft's end (the blank line after the quote).
-    private func quoteAffordance(_ text: String) {
-        let quoted = ChatQuote.draft(for: text)
-        draft = quoted
-        caretRequest = ChatCaretRequest(location: ChatQuote.caretLocation(for: quoted))
+    /// Quote adds a REMOVABLE draft item (the tile rail shows it with
+    /// its author); the user's draft text is never replaced. Send
+    /// composes each held quote as a block-quoted prefix.
+    private func quoteAffordance(_ text: String, author: String = "Heeler") {
+        let id = "quote-" + String(text.hashValue)
+        guard !draftItems.contains(where: { $0.id == id }) else {
+            inputPresented = true
+            inputFocused = true
+            return
+        }
+        draftItems.append(.quote(id: id, text: text, author: author))
         inputPresented = true
         inputFocused = true
     }
@@ -464,11 +569,36 @@ struct ChatScreen: View {
             attachments.draftStore.recordUploadFailure(failure.message)
         case .completed(let outcome):
             attachments.draftStore.clearUploadFailure()
-            if outcome.medium == .image, isPasteImageAttachment {
-                attachments.draftStore.holdPendingImage(path: outcome.path)
+            if isPasteImageAttachment {
+                // Paste image: the path the staging store inserted into
+                // the draft mirror comes OUT of the draft (the tile is
+                // the visible attachment) and lands as a draft item.
                 draft = attachments.draftStore.draft
+                if let range = draft.range(of: outcome.path) {
+                    draft.removeSubrange(range)
+                }
+                draftItems.append(.image(
+                    id: UUID().uuidString,
+                    remotePath: outcome.path,
+                    previewData: pendingImagePreviewData))
                 pendingImagePreviewData = nil
                 isPasteImageAttachment = false
+            }
+            // Picker paths keep the staging store's caret-faithful
+            // path insert in the draft AND record a draft item, so the
+            // tile's corner-x can remove the path from the draft too.
+            switch outcome.medium {
+            case .image:
+                draftItems.append(.image(
+                    id: UUID().uuidString,
+                    remotePath: outcome.path,
+                    previewData: nil))
+            case .file:
+                let name = pendingFileURL?.lastPathComponent ?? "File"
+                draftItems.append(.file(
+                    id: UUID().uuidString,
+                    name: name, remotePath: outcome.path))
+                pendingFileURL = nil
             }
         case nil:
             break
@@ -479,7 +609,7 @@ struct ChatScreen: View {
     /// with no message text still sends (the path reference IS the
     /// message).
     private var canSend: Bool {
-        if attachments?.draftStore.pendingImage != nil { return true }
+        if !draftItems.isEmpty { return true }
         return !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
@@ -504,6 +634,16 @@ struct ChatScreen: View {
     /// cleared there so an ordinary edit cannot re-apply it.
     @State private var pendingAccept: (draft: String, caret: Int)?
 
+    /// §D draft items: attachments and quotes held as removable tiles
+    /// above the field. Send composes the message from them — image
+    /// paths ride ahead of the prose, quotes land block-quoted. The
+    /// rail preserves across blur (draft state, not focus state).
+    @State private var draftItems: [ChatDraftItem] = []
+    /// The +N collection sheet.
+    @State private var showsDraftCollection = false
+    /// The tapped tile's full preview (image zoom or quote text).
+    @State private var previewedDraftItem: ChatDraftItem?
+
     // -- Attachment flow state (the + button's pickers and the image
     // paste share the staging pipeline; the pending-image tile rides
     // the draft tile rail above the field) --
@@ -521,6 +661,8 @@ struct ChatScreen: View {
     /// A picker firing before the bundle exists: honest error, no silent
     /// no-op.
     @State private var attachmentErrorMessage: String?
+    /// The file picker's last selection (name for the rail tile).
+    @State private var pendingFileURL: URL?
 
     private var inputOverlay: some View {
         VStack {
@@ -682,19 +824,16 @@ struct ChatScreen: View {
                         .padding(.horizontal, 12)
                         .padding(.top, 6)
                 }
-                // The draft tile rail (§D): the held paste-image as a
-                // small square tile above the field, corner-x removes.
-                // Preserved across blur (rail = draft state, not focus
-                // state). The multi-attachment/quote tiles arrive with
-                // the model extension.
-                if attachments?.draftStore.pendingImage != nil {
+                // The draft tile rail (§D): every draft item (images,
+                // files, quotes) as a small square tile, corner-x
+                // removes; +N (only on real overflow) opens the
+                // collection sheet. Preserved across blur.
+                if !draftItems.isEmpty {
                     ChatDraftTileRail(
-                        imagePreviewData: pendingImagePreviewData,
-                        quoteCount: 0,
-                        openImagePreview: {},
-                        removeImage: {
-                            attachments?.draftStore.clearPendingImage()
-                        })
+                        items: draftItems,
+                        removeItem: { id in removeDraftItem(id) },
+                        openPreview: { item in previewedDraftItem = item },
+                        openCollection: { showsDraftCollection = true })
                         .padding(.horizontal, 12)
                         .padding(.top, 6)
                 }
@@ -741,6 +880,7 @@ struct ChatScreen: View {
                 isPasteImageAttachment = false
                 attachmentErrorMessage = nil
                 attachments.draftStore.clearUploadFailure()
+                pendingFileURL = url
                 attachments.staging.begin(.file(url))
             }
             .onChange(of: attachments?.staging.state) { _, newState in
@@ -749,10 +889,46 @@ struct ChatScreen: View {
         }
     }
 
+    /// The message Send delivers: each held quote as a block-quoted
+    /// prefix, then the draft's own text. Attachment paths ride ahead
+    /// (the reference convention the agent already reads).
+    private func composedMessageText() -> String {
+        var parts: [String] = []
+        if case .image(_, let path, _)? = draftItems.first, draft.isEmpty {
+            // Image-only send: the path reference is the message.
+            return path
+        }
+        for case .quote(_, let text, _) in draftItems {
+            parts.append(ChatQuote.draft(for: text))
+        }
+        let draftText = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !draftText.isEmpty { parts.append(draftText) }
+        return parts.joined(separator: "\n\n")
+    }
+
+    private func clearDraftAfterSend() {
+        draft = ""
+        draftItems = []
+    }
+
+    private func removeDraftItem(_ id: String) {
+        guard let index = draftItems.firstIndex(where: { $0.id == id })
+        else { return }
+        let item = draftItems.remove(at: index)
+        // Picker inserts put the remote path IN the draft; removing the
+        // tile removes the path too (paste images never had it there).
+        switch item {
+        case .image(_, let path, _), .file(_, _, let path):
+            if let range = draft.range(of: path) {
+                draft.removeSubrange(range)
+            }
+        case .quote:
+            break
+        }
+    }
+
     private func sendDraft() {
-        // The held paste-image rides ahead of the text (the reference
-        // convention the agent already reads).
-        let text = attachments?.draftStore.messageText(forDraft: draft) ?? draft
+        let text = composedMessageText()
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             !isSending, let router
         else { return }
@@ -762,17 +938,15 @@ struct ChatScreen: View {
             let outcome = await router.submit(text)
             switch outcome {
             case .handled:
-                draft = ""
-                attachments?.draftStore.clearPendingImage()
+                clearDraftAfterSend()
             case .rejected:
                 break  // draft stays for editing; routingError explains
             case .passthrough:
                 do {
                     try await deliver?(text)
-                    draft = ""
-                    attachments?.draftStore.clearPendingImage()
+                    clearDraftAfterSend()
                 } catch {
-                    // Delivery failed: keep the draft for retry.
+                    // Delivery failed: keep the draft (and items) for retry.
                 }
             }
         }

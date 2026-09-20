@@ -680,6 +680,44 @@ struct ChatAssistantArticleView: View {
     }
 }
 
+// MARK: - Local helpful reactions
+
+/// Per-message "Helpful" marks, persisted on-device (UserDefaults).
+/// There is NO feedback contract yet — this is a real LOCAL reaction
+/// (survives restarts, honestly local), never presented as sent.
+struct ChatHelpfulReactions {
+    private let key = "chat.helpfulMessages.v1"
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    private func ids() -> Set<String> {
+        Set(defaults.stringArray(forKey: key) ?? [])
+    }
+
+    func contains(_ id: String) -> Bool {
+        ids().contains(id)
+    }
+
+    /// Toggles; returns the new state.
+    @discardableResult
+    func toggle(_ id: String) -> Bool {
+        var set = ids()
+        let nowOn: Bool
+        if set.contains(id) {
+            set.remove(id)
+            nowOn = false
+        } else {
+            set.insert(id)
+            nowOn = true
+        }
+        defaults.set(Array(set), forKey: key)
+        return nowOn
+    }
+}
+
 // MARK: - Message actions rail (final interaction spec)
 
 /// The inline Copy/Quote/Helpful rail toggled under a selected message
@@ -693,6 +731,9 @@ struct ChatMessageActionsRail: View {
     /// Quote needs the composer (a place for the quoted draft to
     /// land); read-only transcripts keep Copy only.
     var supportsQuote: Bool
+    /// True when THIS message is already marked helpful locally — the
+    /// button shows the actual state, never a fake success.
+    var isMarkedHelpful: Bool
     var copy: () -> Void
     var quote: () -> Void
     var helpful: () -> Void
@@ -704,7 +745,10 @@ struct ChatMessageActionsRail: View {
                 railButton("Quote", icon: "text.quote", action: quote)
             }
             if isAssistant {
-                railButton("Helpful", icon: "hand.thumbsup", action: helpful)
+                railButton(
+                    isMarkedHelpful ? "Helpful ✓" : "Helpful",
+                    icon: "hand.thumbsup",
+                    action: helpful)
             }
         }
         .padding(.horizontal, 6)
@@ -790,12 +834,27 @@ private func optionIsCompact(_ label: String) -> Bool {
 /// labels flow compactly; descriptive labels stack full-width.
 struct AgentPendingQuestionCard: View {
     let interaction: PendingInteraction
+    /// 1-based current question index.
     var step: Int
     var stepCount: Int
     var isMultiSelect: Bool = false
     var selectedOptionIds: Set<String> = []
     var choose: (String) -> Void
     var confirmMultiSelect: (() -> Void)? = nil
+    /// Back to the previous question (choices preserved by the owner).
+    var back: (() -> Void)? = nil
+    /// Cancel the whole ask (small secondary; the real
+    /// cancelInteraction path — nil hides it honestly).
+    var cancel: (() -> Void)? = nil
+
+    private var questions: [PendingAskQuestion] {
+        interaction.effectiveQuestions
+    }
+    private var currentQuestion: PendingAskQuestion? {
+        let list = questions
+        guard step >= 1, step <= list.count else { return list.first }
+        return list[step - 1]
+    }
 
     private var accent: Color {
         Color(red: 0x22 / 255.0, green: 0x64 / 255.0, blue: 0x4D / 255.0)
@@ -825,7 +884,7 @@ struct AgentPendingQuestionCard: View {
                     }
                 }
             }
-            Text(interaction.question)
+            Text(currentQuestion?.text ?? interaction.question)
                 .font(.subheadline.weight(.semibold))
                 .fixedSize(horizontal: false, vertical: true)
             if isMultiSelect {
@@ -834,6 +893,26 @@ struct AgentPendingQuestionCard: View {
                     .foregroundStyle(.secondary)
             }
             optionsView
+            if step > 1 || cancel != nil {
+                HStack {
+                    if let back, step > 1 {
+                        Button(action: back) {
+                            Label("Back", systemImage: "chevron.left")
+                                .font(.footnote)
+                        }
+                        .accessibilityLabel("Previous question")
+                    }
+                    Spacer(minLength: 0)
+                    if let cancel {
+                        Button(action: cancel) {
+                            Text("Cancel")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        .accessibilityLabel("Cancel this question")
+                    }
+                }
+            }
             if isMultiSelect, let confirmMultiSelect {
                 Button(action: confirmMultiSelect) {
                     Text("Confirm")
@@ -854,16 +933,17 @@ struct AgentPendingQuestionCard: View {
 
     @ViewBuilder
     private var optionsView: some View {
-        if interaction.options.allSatisfy(optionIsCompact) {
+        let options = currentQuestion?.options ?? []
+        if options.allSatisfy({ $0.label.count <= 24 }) {
             OptionFlowLayout(spacing: 8) {
-                ForEach(Array(interaction.options.enumerated()), id: \.offset) { pair in
-                    optionButton(label: pair.element, id: "\(pair.offset)")
+                ForEach(options) { option in
+                    optionButton(label: option.label, id: option.id)
                 }
             }
         } else {
             VStack(alignment: .leading, spacing: 8) {
-                ForEach(Array(interaction.options.enumerated()), id: \.offset) { pair in
-                    optionButton(label: pair.element, id: "\(pair.offset)", fullWidth: true)
+                ForEach(options) { option in
+                    optionButton(label: option.label, id: option.id, fullWidth: true)
                 }
             }
         }

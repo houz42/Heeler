@@ -6,15 +6,40 @@ import SwiftUI
 // §D draft tile rail (conversation redesign): the draft's attachments
 // and quotes as SMALL SQUARE tiles in ONE line above the composer —
 // corner x removes an individual draft item, tap opens the full
-// preview/metadata, a final +N tile collects overflow responsively
-// (no growing second row; every item preserved, not just visible ones).
-//
-// Model consumption: the single pending-image attachment from
-// ChatAttachmentDraftStore (imported verbatim from the attachments
-// lane). The multi-attachment items[] + structured quote tiles are
-// the approved model extension (routed through Main at integration);
-// the rail's layout is built for it — tiles flow through the same
-// wrapping layout and overflow counter either way.
+// preview/metadata, and a +N tile appears ONLY when real overflow
+// exists, opening the collection sheet (every item listed, removable
+// there). No item is ever silently dropped: what does not fit is
+// behind +N.
+
+/// One removable draft item the rail renders as a tile. The screen owns
+/// the array; Send composes the message from it (attachment paths ride
+/// ahead of the prose, quotes land block-quoted).
+enum ChatDraftItem: Identifiable, Equatable {
+    /// An uploaded image awaiting Send; previewData is the local
+    /// thumbnail bytes (paste) or nil (picker, loads on demand).
+    case image(id: String, remotePath: String, previewData: Data?)
+    /// An uploaded file awaiting Send.
+    case file(id: String, name: String, remotePath: String)
+    /// A quoted message held as a removable draft item.
+    case quote(id: String, text: String, author: String)
+
+    var id: String {
+        switch self {
+        case .image(let id, _, _), .file(let id, _, _), .quote(let id, _, _):
+            return id
+        }
+    }
+
+    var accessibilityLabel: String {
+        switch self {
+        case .image: return "Pending image attachment"
+        case .file(_, let name, _): return "Pending file attachment \(name)"
+        case .quote(_, let text, _):
+            let line = text.prefix(40)
+            return "Quoted message: \(line)"
+        }
+    }
+}
 
 /// One square draft tile: content (thumbnail or type glyph) with a
 /// corner-x remove button overlaying the top-trailing corner.
@@ -71,41 +96,34 @@ struct ChatDraftTileOverflow: View {
     }
 }
 
-/// The one-line tile rail: wrapping layout with the width-responsive
-/// +N cap. The wrapping keeps ONE visual row line-height (the design
-/// forbids a growing second row) by capping visible tiles to what fits
-/// and collecting the rest behind +N.
+/// The one-line tile rail: width-responsive cap, ONE visual row. All
+/// items render when they fit; the +N tile appears ONLY on real
+/// overflow (count > fits) and takes the last fitting slot.
 struct ChatDraftTileRail: View {
-    /// The pending image tile data (nil = no image in the draft).
-    var imagePreviewData: Data?
-    /// Quotes carried as draft items (each tile shows a quote glyph).
-    var quoteCount: Int = 0
-    /// Opens the tapped image's full preview.
-    var openImagePreview: () -> Void
-    /// Removes the image from the draft.
-    var removeImage: (() -> Void)?
+    var items: [ChatDraftItem]
+    var removeItem: (String) -> Void
+    var openPreview: (ChatDraftItem) -> Void
+    var openCollection: () -> Void
 
     var body: some View {
-        let tiles = tileIdentifiers
-        if tiles.isEmpty { EmptyView() } else {
+        if !items.isEmpty {
             GeometryReader { geo in
-                let slots = max(visibleSlots(width: geo.size.width, count: tiles.count), 1)
+                let fits = Self.fits(width: geo.size.width)
+                // Overflow arithmetic: +N appears ONLY when the items
+                // genuinely exceed the fitting tiles, and then occupies
+                // one slot itself.
+                let hasOverflow = items.count > fits
+                let visibleCount = hasOverflow ? fits - 1 : items.count
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
-        // The design's responsive cap: slots-1 tiles visible, then +N.
-                        ForEach(Array(tiles.prefix(slots - 1).enumerated()), id: \.element) { _, tile in
-                            tileView(tile)
+                        ForEach(items.prefix(visibleCount)) { item in
+                            tileView(item)
                         }
-                        if tiles.count > slots - 1 {
+                        if hasOverflow {
                             ChatDraftTileOverflow(
-                                hiddenCount: tiles.count - (slots - 1),
-                                total: tiles.count) {
-                                // The collection sheet lands with the
-                                // multi-attachment model extension; the
-                                // +N is honest (disabled) meanwhile.
-                                openCollectionStub()
-                            }
-                            .disabled(true)
+                                hiddenCount: items.count - visibleCount,
+                                total: items.count,
+                                openCollection: openCollection)
                         }
                     }
                 }
@@ -114,20 +132,18 @@ struct ChatDraftTileRail: View {
         }
     }
 
-    private var tileIdentifiers: [String] {
-        var ids: [String] = []
-        if imagePreviewData != nil { ids.append("image") }
-        ids.append(contentsOf: (0..<quoteCount).map { "quote-\($0)" })
-        return ids
+    static func fits(width: CGFloat) -> Int {
+        max(Int(width / (48 + 8)), 1)
     }
 
     @ViewBuilder
-    private func tileView(_ id: String) -> some View {
-        if id == "image" {
+    private func tileView(_ item: ChatDraftItem) -> some View {
+        switch item {
+        case .image(_, _, let previewData):
             ChatDraftTile(
                 content: {
                     Group {
-                        if let data = imagePreviewData,
+                        if let data = previewData,
                             let image = UIImage(data: data)
                         {
                             Image(uiImage: image).resizable().scaledToFill()
@@ -136,27 +152,213 @@ struct ChatDraftTileRail: View {
                         }
                     }
                 },
-                remove: removeImage)
-                .onTapGesture(perform: openImagePreview)
-        } else if id.hasPrefix("quote-") {
+                remove: { removeItem(item.id) })
+                .onTapGesture { openPreview(item) }
+                .accessibilityLabel(item.accessibilityLabel)
+        case .file(_, let name, _):
+            ChatDraftTile(
+                content: {
+                    VStack(spacing: 2) {
+                        Image(systemName: "doc")
+                            .font(.subheadline)
+                        Text(name)
+                            .font(.system(size: 7))
+                            .lineLimit(1)
+                            .frame(maxWidth: 40)
+                    }
+                },
+                remove: { removeItem(item.id) })
+                .accessibilityLabel(item.accessibilityLabel)
+        case .quote(_, let text, let author):
             ChatDraftTile(
                 content: {
                     VStack(spacing: 2) {
                         Image(systemName: "text.quote")
                             .font(.subheadline)
+                        Text(author)
+                            .font(.system(size: 7))
+                            .lineLimit(1)
+                            .frame(maxWidth: 40)
+                            .foregroundStyle(.secondary)
                     }
                 },
-                remove: nil)
+                remove: { removeItem(item.id) })
+                .onTapGesture { openPreview(item) }
+                .accessibilityLabel(item.accessibilityLabel)
+        }
+    }
+}
+
+/// The +N collection sheet: EVERY draft item listed full-width with
+/// its preview text/thumbnail and a remove action — nothing is
+/// reachable only from the rail's visible slice.
+struct ChatDraftCollectionSheet: View {
+    var items: [ChatDraftItem]
+    var removeItem: (String) -> Void
+    var openPreview: (ChatDraftItem) -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(items) { item in
+                    Button {
+                        openPreview(item)
+                    } label: {
+                        row(item)
+                    }
+                    .buttonStyle(.plain)
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button(role: .destructive) {
+                            removeItem(item.id)
+                        } label: {
+                            Label("Remove", systemImage: "trash")
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Draft items")
+            .navigationBarTitleDisplayMode(.inline)
         }
     }
 
-    /// Visible tile count from the width: floor(width / (tile + spacing)),
-    /// leaving one slot for the +N tile when overflow exists.
-    private func visibleSlots(width: CGFloat, count: Int) -> Int {
-        let unit: CGFloat = 48 + 8
-        let fits = Int(width / unit)
-        return min(fits, count + 1)
+    @ViewBuilder
+    private func row(_ item: ChatDraftItem) -> some View {
+        switch item {
+        case .image(_, _, let previewData):
+            HStack(spacing: 12) {
+                Group {
+                    if let data = previewData,
+                        let image = UIImage(data: data)
+                    {
+                        Image(uiImage: image).resizable().scaledToFill()
+                    } else {
+                        Image(systemName: "photo")
+                    }
+                }
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                Text("Image attachment")
+            }
+        case .file(_, let name, _):
+            HStack(spacing: 12) {
+                Image(systemName: "doc")
+                    .frame(width: 44, height: 44)
+                Text(name).lineLimit(2)
+            }
+        case .quote(_, let text, let author):
+            VStack(alignment: .leading, spacing: 4) {
+                Text(author).font(.caption).foregroundStyle(.secondary)
+                Text(text).font(.subheadline).lineLimit(3)
+            }
+        }
     }
+}
 
-    private func openCollectionStub() {}
+/// The tapped draft tile's full preview: an image zooms and pans; a
+/// quote shows its full text with the author; a file shows its name
+/// and remote path (the in-app reader for real files rides the
+/// openers' fetch surface).
+struct ChatDraftItemPreview: View {
+    let item: ChatDraftItem
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                switch item {
+                case .image(_, _, let previewData):
+                    if let data = previewData, let image = UIImage(data: data) {
+                        ZoomableImageView(image: image)
+                    } else {
+                        ContentUnavailableView(
+                            "Image attachment",
+                            systemImage: "photo",
+                            description: Text(
+                                "The thumbnail is not cached; it uploads with the message."))
+                    }
+                case .file(_, let name, let path):
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(name, systemImage: "doc")
+                            .font(.headline)
+                        Text(path)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity,
+                           alignment: .topLeading)
+                    .padding(16)
+                case .quote(_, let text, let author):
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(author)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Text(text)
+                                .font(.body)
+                                .textSelection(.enabled)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                    }
+                }
+            }
+            .navigationTitle("Draft item")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
+
+/// Pinch-zoom and pan for the image preview.
+struct ZoomableImageView: View {
+    let image: UIImage
+    @State private var scale: CGFloat = 1
+    @State private var lastScale: CGFloat = 1
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
+
+    var body: some View {
+        Image(uiImage: image)
+            .resizable()
+            .scaledToFit()
+            .scaleEffect(scale)
+            .offset(offset)
+            .gesture(
+                MagnificationGesture()
+                    .onChanged { value in
+                        scale = max(1, lastScale * value)
+                    }
+                    .onEnded { _ in
+                        lastScale = scale
+                        if scale <= 1 {
+                            withAnimation(.snappy) {
+                                scale = 1
+                                offset = .zero
+                                lastOffset = .zero
+                            }
+                            lastScale = 1
+                        }
+                    })
+            .simultaneousGesture(
+                DragGesture()
+                    .onChanged { value in
+                        guard scale > 1 else { return }
+                        offset = CGSize(
+                            width: lastOffset.width + value.translation.width,
+                            height: lastOffset.height + value.translation.height)
+                    }
+                    .onEnded { _ in
+                        lastOffset = offset
+                    })
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(.systemBackground))
+            .onTapGesture(count: 2) {
+                withAnimation(.snappy) {
+                    scale = scale > 1 ? 1 : 2.5
+                    lastScale = scale > 1 ? 2.5 : 1
+                    offset = .zero
+                    lastOffset = .zero
+                }
+            }
+            .accessibilityLabel("Image preview, pinch to zoom")
+    }
 }

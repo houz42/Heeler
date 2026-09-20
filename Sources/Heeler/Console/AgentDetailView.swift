@@ -460,7 +460,29 @@ struct AgentDetailView: View {
                 },
                 pendingUnsupported: !store.askSupported,
                 authorLabel: "Heeler · \(agent.agent.kind.lowercased())",
-                attachments: chatAttachments)
+                attachments: chatAttachments,
+                onAskAnswer: { interaction, payloads in
+                    Task {
+                        guard let store = brokerChat,
+                              let matched = store.interactions.first(where: {
+                                  $0.requestId == interaction.id })
+                        else { return }
+                        try? await store.answer(
+                            matched,
+                            answers: payloads.map { payload in
+                                AgentChatAnswer(
+                                    questionId: payload.questionId,
+                                    optionIds: payload.optionIds,
+                                    customText: nil, note: nil)
+                            })
+                    }
+                },
+                onAskCancel: { interaction in
+                    Task {
+                        try? await brokerChat?.cancelInteraction(
+                            requestId: interaction.id)
+                    }
+                })
                 .overlay(alignment: .bottom) {
                     if case .disconnected(let reason) = store.phase {
                         AgentChatStateBanner(
@@ -504,7 +526,16 @@ struct AgentDetailView: View {
             PendingInteraction(
                 id: interaction.requestId,
                 question: interaction.questions.first?.text ?? "",
-                options: interaction.questions.first?.options.map { $0.label } ?? [])
+                options: interaction.questions.first?.options.map { $0.label } ?? [],
+                questions: interaction.questions.map { question in
+                    PendingAskQuestion(
+                        id: question.id, text: question.text,
+                        multi: question.multi,
+                        options: question.options.map { option in
+                            PendingAskQuestion.Option(
+                                id: option.id, label: option.label)
+                        })
+                })
         } ?? []
         return content
     }
