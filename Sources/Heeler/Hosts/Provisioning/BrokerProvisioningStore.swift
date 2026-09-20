@@ -388,18 +388,18 @@ final class BrokerProvisioningStore {
     func upgrade(package: PreparedFile, version: String, sha256: String) async throws {
         try ensureMutable()
         let wasActive = state.status.isServiceActive
-        let prerequisitesMet = state.node.isSatisfied && state.omp.isSatisfied
+        let nodeStatus = state.node
+        let ompStatus = state.omp
         try await install(package: package, version: version, sha256: sha256)
-        // install's refresh re-inspects; on a Host whose probe answers
-        // race the new `current` marker, re-seed the facts this install
-        // just established so enable cannot read a stale "not installed".
+        // install's refresh re-inspects, so seed the post-upgrade state
+        // with the facts this upgrade just established: the new active
+        // version plus the unchanged prerequisites. The remote's OWN
+        // probe answers land at the next explicit refresh; seeding here
+        // only covers the gap between install and the optional enable.
         state.activeVersion = version
-        state.node = state.node.isSatisfied ? .satisfied : state.node
+        state.node = nodeStatus
+        state.omp = ompStatus
         if wasActive {
-            guard prerequisitesMet else {
-                throw BrokerProvisioningError.commandFailed(
-                    detail: "Missing prerequisites on the Host.")
-            }
             try await enable()
         }
     }
