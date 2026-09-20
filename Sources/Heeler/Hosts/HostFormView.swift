@@ -95,6 +95,11 @@ struct HostFormView: View {
                             .disabled(!draft.canSave(editing: editing))
                     }
                 }
+                // The swipe-down gesture cannot discard a dirty draft:
+                // interactive dismiss is disabled while edits exist, so
+                // the guarded Cancel is the only exit (approved behavior
+                // contract; the reviewer's dirty-dismiss residue).
+                .interactiveDismissDisabled(draft != initialDraft)
                 .sheet(item: routeEditorBinding) { route in
                     HostRouteEditView(
                         hostName: routeEditorHostName,
@@ -103,9 +108,11 @@ struct HostFormView: View {
                         onSave: { updated in
                             applyRouteEdit(updated)
                         },
-                        onRemove: { rowID in
-                            removeRoute(id: rowID)
-                        })
+                        onRemove: draft.addresses.count > 1
+                            ? { rowID in
+                                removeRoute(id: rowID)
+                            }
+                            : nil)
                 }
                 .sheet(isPresented: $isAddingRoute) {
                     // Add mode: a route not yet in the draft; created only

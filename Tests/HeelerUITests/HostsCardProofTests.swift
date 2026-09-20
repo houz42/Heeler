@@ -286,4 +286,81 @@ final class HostsCardProofTests: XCTestCase {
         }
         captureScreenshot(app, "route-removed", lifetime: .keepAlways)
     }
+
+    // MARK: Dirty swipe-dismiss is blocked
+
+    /// A dirty draft cannot be discarded by the swipe-down gesture:
+    /// interactive dismiss is disabled while edits exist; the guarded
+    /// Cancel is the only dirty exit (approved behavior contract).
+    func testDirtySwipeDismissIsBlocked() {
+        app = UITestApp.launchDemo(.hostForm)
+        waitToExist(app.navigationBars[UITestFixtures.hostFormTitle])
+
+        // Make the draft dirty with a real keystroke.
+        let name = app.textFields[UITestFixtures.hostFormNameField]
+        waitToExist(name)
+        name.tap()
+        app.waitForKeyboard()
+        name.typeText("x")
+
+        // Swipe down (the sheet-dismiss gesture): the form must stay.
+        app.navigationBars[UITestFixtures.hostFormTitle].swipeDown(velocity: .fast)
+        XCTAssertTrue(
+            app.navigationBars[UITestFixtures.hostFormTitle]
+                .waitForExistence(timeout: UITestTimeouts.standard),
+            "swipe-down dismissed a dirty host form")
+
+        // The guarded Cancel is the only dirty exit: it CONFIRMS.
+        app.buttons["Cancel"].firstMatch.tap()
+        let discard = app.buttons["Discard Changes"]
+        XCTAssertTrue(
+            discard.waitForExistence(timeout: UITestTimeouts.standard),
+            "dirty Cancel must confirm before discarding")
+        discard.tap()
+    }
+
+    // MARK: Final route: no successful-looking removal
+
+    /// The LAST remaining route's editor offers no Remove at all — a
+    /// removal-looking action must never exist for the floor route.
+    func testFinalRouteEditorOffersNoRemove() {
+        app = UITestApp.launchDemo(.hostForm)
+        waitToExist(app.navigationBars[UITestFixtures.hostFormTitle])
+
+        // Remove two of the three routes through the editor (each
+        // removal leaves more than one, so Remove is offered).
+        for routeLabel in ["VPN", "Bonjour"] {
+            let row = app.buttons.matching(
+                NSPredicate(
+                    format: "identifier BEGINSWITH 'host-form-route-' AND label CONTAINS %@", routeLabel)
+            ).firstMatch
+            waitToExist(row)
+            row.tap()
+            let editor = app.navigationBars["Edit route on Studio Mac"]
+            XCTAssertTrue(editor.waitForExistence(timeout: UITestTimeouts.standard))
+            let remove = app.buttons["route-editor-remove"]
+            waitToExist(remove)
+            remove.tap()
+            XCTAssertTrue(
+                app.navigationBars[UITestFixtures.hostFormTitle]
+                    .waitForExistence(timeout: UITestTimeouts.standard))
+        }
+
+        // One route remains (the primary). Its editor must offer NO
+        // Remove — the floor route cannot look removable.
+        let primary = app.buttons.matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH 'host-form-route-' AND label CONTAINS '192.168.31.71'")
+        ).firstMatch
+        waitToExist(primary)
+        primary.tap()
+        let editor = app.navigationBars["Edit route on Studio Mac"]
+        XCTAssertTrue(
+            editor.waitForExistence(timeout: UITestTimeouts.standard),
+            "primary route editor never appeared")
+        XCTAssertEqual(
+            app.buttons["route-editor-remove"].firstMatch.exists, false,
+            "the last remaining route must not offer Remove")
+        captureScreenshot(app, "final-route-editor", lifetime: .keepAlways)
+    }
 }
