@@ -220,7 +220,23 @@ struct HostListView: View {
                     HostRouteInspectorView(
                         host: host,
                         address: inspection.address,
-                        connectedAddress: connectedAddresses[inspection.hostID])
+                        connectedAddress: connectedAddresses[inspection.hostID],
+                        // In-context naming (device finding): the SAME
+                        // editor the form uses; the label persists to the
+                        // catalog, so the list row and inspector both
+                        // show the friendly name immediately.
+                        onEditRoute: { updated in
+                            var edited = host
+                            let label = updated.label.trimmingCharacters(in: .whitespaces)
+                            if label.isEmpty {
+                                edited.routeLabels.removeValue(forKey: updated.address)
+                            } else {
+                                edited.routeLabels[updated.address] = label
+                            }
+                            if edited != host {
+                                try? store.update(edited)
+                            }
+                        })
                 }
             }
             .sheet(
@@ -497,21 +513,18 @@ private struct HostCardSection: View {
                     openRouteInspector(address)
                 } label: {
                     HStack(spacing: 10) {
+                        // The dot IS the in-use signal (user decision:
+                        // the row stays quiet — no 'In use'/'Alternate'
+                        // text; the inspector keeps the words).
                         Image(systemName: "circle.fill")
                             .font(.system(size: 7))
                             .foregroundStyle(
                                 route.usage == .inUse ? Color.green : Color.secondary)
                             .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 6) {
-                                Text(route.name)
-                                    .font(.subheadline.weight(.medium))
-                                    .foregroundStyle(.primary)
-                                Text(route.stateLabel)
-                                    .font(.caption2)
-                                    .foregroundStyle(
-                                        route.usage == .inUse ? Color.green : Color.secondary)
-                            }
+                            Text(route.name)
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(.primary)
                             Text("\(route.address):\(String(host.port))")
                                 .font(.caption)
                                 .monospaced()
