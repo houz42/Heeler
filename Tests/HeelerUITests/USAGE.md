@@ -101,3 +101,23 @@ flow requires one.
 
 `app.captureScreenshot("name")` attaches to the result bundle
 (`.deleteOnSuccess` default — flip to `.keepAlways` when debugging).
+
+## Per-worker dedicated simulators (2026-09-20, user-authorized)
+
+Each worker OWNS one dedicated simulator — verification runs in PARALLEL, no take/release
+broadcasts within this session. Same-bundle contamination only ever happened on a SHARED sim;
+distinct sims with their own app install + own `-derivedDataPath` do not interfere.
+
+| Worker | Simulator | UDID |
+|---|---|---|
+| BrokerChatUI (conversation/capture) | heeler-broker | 08B6DE84-CDC1-4204-9F75-668D00432EC1 |
+| AgentsRedesign | heeler-agents | 607CAA04-C852-4FDA-8B23-74BDD81FC132 |
+| NavRedesign | heeler-nav | 36902D9F-1FF9-472C-B75A-5655302065FD |
+| HostsRedesign | heeler-hosts | F8544310-FBDF-4208-9535-0EED8F1AC8E5 |
+| Shared baseline (existing) | iPhone 17 | BA7D68CB-D0F1-491A-851A-E6230E790FA3 |
+| Shared wide-layout (existing) | iPad Pro 13 | B3376366-C8F6-45BD-ACDC-FC37C7144944 |
+
+Rules: use YOUR UDID in the destination + your own -derivedDataPath; never touch another
+worker's sim or any sim you didn't create; the cross-session isolation rule is unchanged
+(runtime session's sims are off-limits, ours are only these). If a worker needs a fresh state,
+erase YOUR OWN sim (`xcrun simctl erase <your-UDID>`), never someone else's.
