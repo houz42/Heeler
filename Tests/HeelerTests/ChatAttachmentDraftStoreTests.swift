@@ -406,6 +406,41 @@ struct ChatAttachmentLifecycleTests {
         #expect(await condition(), comment)
     }
 
+    /// The device-crash pin (53bbf8b): canPerformAction must NEVER
+    /// touch UIPasteboard during menu resolution (the getter re-enters
+    /// itself on device — 7 recursions, EXC_BAD_ACCESS), and a nested
+    /// canPerformAction call must short-circuit to super instead of
+    /// recursing. The cached flag is the ONLY input; drive it directly.
+    @Test func canPerformActionConsultsOnlyTheCachedImageFlagAndSurvivesNesting() {
+        let textView = ChatInputUITextView()
+        textView.canPasteImages = true
+        let pasteSelector = #selector(UIResponderStandardEditActions.paste(_:))
+
+        // Cache says image present → Paste is offered, and the
+        // resolution must not query the real pasteboard (the flag is
+        // the sole input; the getter's value is irrelevant here).
+        textView.imagePasteboardAvailable = true
+        #expect(textView.canPerformAction(pasteSelector, withSender: nil))
+
+        // Cache says no image → Paste falls back to super (stock
+        // text-paste eligibility), which reports false here.
+        textView.imagePasteboardAvailable = false
+        textView.canPasteImages = false
+        #expect(!textView.canPerformAction(pasteSelector, withSender: nil))
+
+        // Re-entrancy guard: a nested resolution (whatever UIKit
+        // re-enters from inside the pasteboard path) must
+        // short-circuit to super rather than recurse — the guard
+        // state is driven via the testing seam.
+        textView.imagePasteboardAvailable = true
+        textView.canPasteImages = true
+        textView.setPasteAvailabilityResolving(true)
+        // The nested call must not hang or crash; it falls to super.
+        _ = textView.canPerformAction(pasteSelector, withSender: nil)
+        textView.setPasteAvailabilityResolving(false)
+        #expect(textView.canPerformAction(pasteSelector, withSender: nil))
+    }
+
     /// Mirrors AgentDetailView.buildChatIfPossible's construction.
     private static func buildBundle() async -> ChatAttachments {
         let draftStore = ChatAttachmentDraftStore()

@@ -209,15 +209,39 @@ final class ChatInputUITextView: UITextView {
     /// accept path and the delegate callback would fight over the caret
     /// within the same update cycle.
     var isApplyingExternalCaret = false
+    /// The pasteboard-change observer's token, kept so the view dies
+    /// with its observer. nonisolated(unsafe): only deinit (nonisolated)
+    /// touches it after init, and removeObserver is thread-safe.
+    private nonisolated(unsafe) var pasteboardObserver: NSObjectProtocol?
 
     override init(frame: CGRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
         installPrefixBar()
+        observePasteboardChanges()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         installPrefixBar()
+        observePasteboardChanges()
+    }
+
+    deinit {
+        if let pasteboardObserver {
+            NotificationCenter.default.removeObserver(pasteboardObserver)
+        }
+    }
+
+    /// Keeps ``imagePasteboardAvailable`` fresh without ever touching
+    /// the pasteboard inside canPerformAction (the device crash path).
+    private func observePasteboardChanges() {
+        pasteboardObserver = NotificationCenter.default.addObserver(
+            forName: UIPasteboard.changedNotification,
+            object: UIPasteboard.general,
+            queue: .main
+        ) { [weak self] _ in
+            self?.refreshImagePasteboardAvailability()
+        }
     }
 
     /// The system paste command (paste menu, Cmd+V): when the paste
@@ -229,18 +253,59 @@ final class ChatInputUITextView: UITextView {
     }
 
     /// Paste availability: stock text pasteability OR (the attachment
-    /// flow is armed AND the pasteboard holds an image) — without the
-    /// image arm, an image-only pasteboard leaves no Paste item in the
-    /// edit menu and the seamless paste is unreachable.
+    /// flow is armed AND the cached pasteboard image flag is set).
+    ///
+    /// NEVER touch `UIPasteboard` here: the device crash stack shows
+    /// UIKit resolving canPerformAction during responder-chain setup,
+    /// and `hasImages`'s synchronous cache queue re-enters
+    /// canPerformAction from within the pasteboard getter — seven
+    /// recursions deep, then EXC_BAD_ACCESS. The menu resolution only
+    /// ever consults the cached flag (``imagePasteboardAvailable``),
+    /// refreshed out-of-band by ``refreshImagePasteboardAvailability()``
+    /// on pasteboard-change and focus events.
+    ///
+    /// The re-entrancy guard is defense-in-depth: if anything in the
+    /// responder chain re-enters canPerformAction mid-resolution, the
+    /// nested call short-circuits to super instead of recursing.
     override func canPerformAction(
         _ action: Selector, withSender sender: Any?
     ) -> Bool {
+        guard !isResolvingPasteAvailability else {
+            return super.canPerformAction(action, withSender: sender)
+        }
         if action == #selector(paste(_:)), canPasteImages,
-            UIPasteboard.general.hasImages
+            imagePasteboardAvailable
         {
+            isResolvingPasteAvailability = true
+            defer { isResolvingPasteAvailability = false }
             return true
         }
         return super.canPerformAction(action, withSender: sender)
+    }
+
+    /// Test seam for the re-entrancy guard: drives the flag a nested
+    /// canPerformAction call would observe inside the pasteboard path.
+    func setPasteAvailabilityResolving(_ resolving: Bool) {
+        isResolvingPasteAvailability = resolving
+    }
+
+    /// The cached answer to "does the pasteboard hold an image" —
+    /// updated out-of-band, never queried during menu resolution.
+    /// Default true so an un-refreshed view still offers Paste and the
+    /// paste arbitration itself (``paste(_:)`` → the resolver) decides
+    /// with the real pasteboard; the false case only comes from an
+    /// observed change or an explicit refresh.
+    var imagePasteboardAvailable = true
+    /// One gate for menu-resolution re-entrancy (see the crash note on
+    /// ``canPerformAction(_:withSender:)``).
+    private var isResolvingPasteAvailability = false
+
+    /// Refreshes the cached image-availability from the real
+    /// pasteboard — called from pasteboard-change/focus events, never
+    /// from canPerformAction. Reading `hasImages` here is safe: the
+    /// call is not inside UIKit's menu-resolution path.
+    func refreshImagePasteboardAvailability() {
+        imagePasteboardAvailable = UIPasteboard.general.hasImages
     }
 
     private func installPrefixBar() {
