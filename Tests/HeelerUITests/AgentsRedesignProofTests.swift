@@ -397,11 +397,15 @@ final class AgentsRedesignProofTests: XCTestCase {
             "the offline host's issue row must render in grouped mode")
         captureScreenshot(app, "agents-grouped-neutral-tint", lifetime: .keepAlways)
         issue.tap()
-        // The Hosts surface presents (HostListView owns its navigation
-        // stack, so its bar appears).
-        let hostsBar = app.navigationBars.firstMatch
-        XCTAssertTrue(hostsBar.waitForExistence(timeout: UITestTimeouts.standard),
-                      "tapping the issue row must present Hosts")
+        // Target-specific (follow-up review): the presented bar must be
+        // the HOSTS surface AT THE TAPPED HOST — HostListView receives
+        // the issue row's hostID and its detail page titles the bar with
+        // the host name, so assert the "Offline Server" bar specifically,
+        // not just any navigation bar.
+        let hostBar = app.navigationBars["Offline Server"].firstMatch
+        XCTAssertTrue(
+            hostBar.waitForExistence(timeout: UITestTimeouts.standard),
+            "tapping the issue row must present Hosts at the Offline Server page")
         captureScreenshot(app, "agents-grouped-issue-tapped-hosts", lifetime: .keepAlways)
     }
 
