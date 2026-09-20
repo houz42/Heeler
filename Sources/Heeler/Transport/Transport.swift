@@ -233,6 +233,17 @@ protocol Transport: Sendable {
         atPath path: String, offset: UInt64, length: Int
     ) async throws -> Data
 
+    /// Runs one provisioning shell command on the Host and returns its
+    /// stdout plus exit status. PROVISIONING-ONLY seam (the chat surface's
+    /// "no shell-over-SSH for ongoing chat traffic" stands: chat stays
+    /// direct-streamlocal to the broker socket). The SSH transport runs the
+    /// command through the ordinary exec-channel admission and `LC_ALL=C`,
+    /// mirroring `runExec`; the command's own exit status is surfaced instead
+    /// of mapped to `channelFailed`, because provisioning commands
+    /// COMMUNICATE through exit status — `systemctl is-active`'s "inactive"
+    /// answer must not read as a transport failure.
+    func runProvisioningCommand(_ command: String) async throws -> RemoteCommandResult
+
     /// Whether the underlying connection to the Host is still alive. The
     /// reconnect machinery (#18) decides "re-subscribe on this connection or
     /// re-establish it" from this flag.
@@ -241,6 +252,27 @@ protocol Transport: Sendable {
     /// Tears the connection down explicitly, ending every channel it
     /// carries. Terminal: a closed Transport is not reusable.
     func close() async throws
+}
+
+/// Result of one provisioning exec command. The exit status is the
+/// command's own, not the channel's — a nonzero exit is a legitimate
+/// observable answer (missing prerequisite, inactive service), never a
+/// transport failure.
+struct RemoteCommandResult: Sendable, Equatable {
+    let stdout: Data
+    let exitStatus: Int32
+
+    init(stdout: Data, exitStatus: Int32) {
+        self.stdout = stdout
+        self.exitStatus = exitStatus
+    }
+
+    /// The command's stdout as trimmed UTF-8 text, for probes whose answer
+    /// fits one line.
+    var trimmedText: String {
+        String(decoding: stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 extension Transport {
@@ -335,6 +367,13 @@ extension Transport {
     ) async throws -> WorktreeRemovedResponse {
         throw TransportError.channelFailed(
             detail: "This transport cannot remove worktrees.")
+    }
+
+    /// Non-SSH test doubles and alternative transports without a Host shell
+    /// report the seam's absence instead of emulating one.
+    func runProvisioningCommand(_ command: String) async throws -> RemoteCommandResult {
+        throw TransportError.channelFailed(
+            detail: "This transport cannot run provisioning commands.")
     }
 }
 
