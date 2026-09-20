@@ -121,22 +121,45 @@
         }
 
         private var consoleRoot: some View {
-            ConsoleView(
-                hosts: hosts,
-                console: console,
-                terminal: terminal,
-                inputMode: inputMode,
-                appearance: appearance,
-                pushRegistration: pushRegistration,
-                notificationPreferences: notificationPreferences,
-                relaySettings: relaySettings,
-                notificationRouter: notificationRouter,
-                bannerStore: bannerStore,
-                presentsSettingsOnAppear: DemoScreenshotMode.presentsSettings,
-                liveActivities: liveActivities,
-                activity: activity
+            // The production navigation surface, so headless captures see
+            // the same destination menu/sidebar chrome the app ships.
+            AppRootView(
+                agents: ConsoleView(
+                    hosts: hosts,
+                    console: console,
+                    terminal: terminal,
+                    inputMode: inputMode,
+                    appearance: appearance,
+                    pushRegistration: pushRegistration,
+                    notificationPreferences: notificationPreferences,
+                    relaySettings: relaySettings,
+                    notificationRouter: notificationRouter,
+                    bannerStore: bannerStore,
+                    presentsSettingsOnAppear: DemoScreenshotMode.presentsSettings,
+                    liveActivities: liveActivities,
+                    activity: activity
+                ),
+                hosts: HostListView(
+                    store: hosts,
+                    discovery: SessionDiscoveryStore(
+                        listSessions: { hostID in
+                            try await console.listSessions(on: hostID)
+                        })),
+                settings: SettingsView(
+                    terminal: terminal,
+                    appearance: appearance,
+                    pushRegistration: pushRegistration,
+                    notificationPreferences: notificationPreferences,
+                    relaySettings: relaySettings,
+                    liveActivities: liveActivities,
+                    console: console,
+                    hosts: hosts.hosts),
+                // Same focus gating as the production root (#A): while a
+                // page's own navigation covers the window — an Agent detail
+                // pushed in the Console — the destination chrome steps
+                // aside, and captures of the detail state show none.
+                isPageContentFocused: { notificationRouter.path.isEmpty }
             )
-            .preferredColorScheme(appearance.preferredColorScheme)
             .task {
                 console.setHosts(hosts.hosts)
                 notificationPreferences.setHosts(hosts.hosts)
@@ -317,6 +340,35 @@
                             paneID: "api:p7", status: .working,
                             workspaceID: "api", kind: "opencode",
                             name: "api-tests", title: "Harden webhook retries",
+                            cwd: "/workspace/payments-api"),
+                        // Overflow rows: a phone list of only five agents
+                        // never scrolls, so destination-switch state
+                        // retention needs enough rows to overflow the
+                        // viewport (the UI proofs scroll for real).
+                        agent(
+                            paneID: "api:p8", status: .idle,
+                            workspaceID: "api", kind: "omp",
+                            name: "perf-bench", title: "Benchmark retry path",
+                            cwd: "/workspace/payments-api"),
+                        agent(
+                            paneID: "api:p9", status: .done,
+                            workspaceID: "api", kind: "codex",
+                            name: "migration", title: "Migrate to v2 schema",
+                            cwd: "/workspace/payments-api"),
+                        agent(
+                            paneID: "api:p10", status: .working,
+                            workspaceID: "api", kind: "claude",
+                            name: "load-tests", title: "Load test checkout",
+                            cwd: "/workspace/payments-api"),
+                        agent(
+                            paneID: "api:p11", status: .idle,
+                            workspaceID: "api", kind: "gemini",
+                            name: "docs-api", title: "Document the API",
+                            cwd: "/workspace/payments-api"),
+                        agent(
+                            paneID: "api:p12", status: .done,
+                            workspaceID: "api", kind: "opencode",
+                            name: "cleanup", title: "Deprecate v1 endpoints",
                             cwd: "/workspace/payments-api"),
                     ],
                     workspaces: [

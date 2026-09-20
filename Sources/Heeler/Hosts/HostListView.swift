@@ -81,6 +81,20 @@ struct HostListView: View {
     /// (previews, Hosts without a Console connection).
     private let discovery: SessionDiscoveryStore?
     @State private var removal: HostRemovalStore
+    /// The approved compact top-left destination selector (#A). Present
+    /// when this page is mounted at top level by `AppRootView`; nil inside
+    /// the Console sheet/previews/tests keeps the plain "Hosts" title.
+    /// Omitted entirely while a pushed Host detail owns the window (#A).
+    /// NavRedesign hunk — merge arbitration with HostsRedesign's rewrite.
+    @Environment(\.appDestination) private var appDestination
+    @Environment(\.appDestinationMenuSuppressed) private var isMenuSuppressed
+    private var destinationMenu: AppDestinationMenu? {
+        guard !isMenuSuppressed else { return nil }
+        return appDestination.map { AppDestinationMenu(selection: $0) }
+    }
+    private var destinationMenuTitleFallback: String {
+        appDestination == nil ? "Hosts" : ""
+    }
     @State private var isAddingHost = false
     @State private var isScanningToPair = false
     @State private var manualFallbackRequested = false
@@ -156,8 +170,23 @@ struct HostListView: View {
                     }
                 }
             }
-            .navigationTitle("Hosts")
+            // The compact destination selector (#A) when this page is
+            // mounted at top level; the sheet presentation (Console,
+            // previews, tests) keeps the plain title. HostsRedesign owns
+            // the rest of this file's redesign — this one-toolbar-item
+            // hunk is the navigation slice's env-contract seam, flagged
+            // for merge arbitration.
+            .navigationTitle(destinationMenuTitleFallback)
+            // Report pushed-navigation state upward (#A): a pushed Host
+            // detail makes the root's destination chrome step aside.
+            .modifier(AppDestinationPageFocusModifier(
+                destination: .hosts, isContentPushed: !path.isEmpty))
             .toolbar {
+                if let destinationMenu {
+                    ToolbarItem(placement: .topBarLeading) {
+                        destinationMenu
+                    }
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Button("Scan to Pair", systemImage: "qrcode.viewfinder") {
                         isScanningToPair = true

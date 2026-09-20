@@ -62,6 +62,16 @@ struct SettingsView: View {
     let liveActivities: HostLiveActivityCoordinator
     let console: ConsoleStore
     let hosts: [Host]
+    /// The approved compact top-left destination selector (#A). Present
+    /// when Settings is a top-level page; nil inside sheets keeps Done.
+    /// Omitted entirely while a pushed sub-page owns the window (#A: no
+    /// destination chrome inside details).
+    @Environment(\.appDestination) private var appDestination
+    @Environment(\.appDestinationMenuSuppressed) private var isMenuSuppressed
+    private var destinationMenu: AppDestinationMenu? {
+        guard !isMenuSuppressed else { return nil }
+        return appDestination.map { AppDestinationMenu(selection: $0) }
+    }
 
     static let agentListDestination = SettingsAgentListDestination.fields
     static let headerLayoutDestination = SettingsHeaderLayoutDestination.header
@@ -121,35 +131,22 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             Form {
                 Section {
-                    NavigationLink {
-                        Self.agentListDestination.destinationView(console: console, hosts: hosts)
-                    } label: {
+                    NavigationLink(value: Self.agentListDestination.rawValue) {
                         Label("Agent List Fields", systemImage: "list.bullet.rectangle")
                     }
                     .accessibilityIdentifier(Self.agentListDestination.rawValue)
-                    NavigationLink {
-                        Self.headerLayoutDestination.destinationView(
-                            console: console, store: HeaderLayoutSettingsStore.shared)
-                    } label: {
+                    NavigationLink(value: Self.headerLayoutDestination.rawValue) {
                         Label("In-Agent Header", systemImage: "rectangle.topthird.inset.filled")
                     }
                     .accessibilityIdentifier(Self.headerLayoutDestination.rawValue)
-                    NavigationLink {
-                        NotificationSettingsView(
-                            pushRegistration: pushRegistration,
-                            notificationPreferences: notificationPreferences,
-                            relaySettings: relaySettings,
-                            liveActivities: liveActivities)
-                    } label: {
+                    NavigationLink(value: "settings.notifications") {
                         Label("Notifications", systemImage: "bell.badge")
                     }
                     appearancePicker
-                    NavigationLink {
-                        TerminalAppearanceSettingsView(terminal: terminal)
-                    } label: {
+                    NavigationLink(value: "settings.terminalAppearance") {
                         Label("Terminal Appearance", systemImage: "paintpalette")
                     }
                 }
@@ -162,15 +159,58 @@ struct SettingsView: View {
                     Text("About")
                 }
             }
-            .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+            .navigationDestination(for: String.self) { route in
+                switch route {
+                case Self.agentListDestination.rawValue:
+                    Self.agentListDestination.destinationView(console: console, hosts: hosts)
+                case Self.headerLayoutDestination.rawValue:
+                    Self.headerLayoutDestination.destinationView(
+                        console: console, store: HeaderLayoutSettingsStore.shared)
+                case "settings.notifications":
+                    NotificationSettingsView(
+                        pushRegistration: pushRegistration,
+                        notificationPreferences: notificationPreferences,
+                        relaySettings: relaySettings,
+                        liveActivities: liveActivities)
+                case "settings.terminalAppearance":
+                    TerminalAppearanceSettingsView(terminal: terminal)
+                case SettingsAboutDestination.acknowledgements.rawValue:
+                    // The Acknowledgements route resolves through the same
+                    // enum the row builds its link from — identity by case.
+                    AcknowledgementsView()
+                default:
+                    EmptyView()
                 }
             }
+            // As a top-level destination page the compact destination
+            // selector IS the page's heading (#A): one destination title,
+            // top-left — no duplicate centered title beside it. Embedded
+            // in a sheet (previews, Demo captures, in-Console presentation)
+            // the plain "Settings" title and Done button keep the sheet
+            // dismissable.
+            .navigationTitle(destinationMenu == nil ? "Settings" : "")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if let destinationMenu {
+                    ToolbarItem(placement: .topBarLeading) {
+                        destinationMenu
+                    }
+                } else {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                    }
+                }
+            }
+            // Report pushed-navigation state upward (#A): while a Settings
+            // sub-page is pushed, the root's destination chrome steps
+            // aside for this page too.
+            .modifier(AppDestinationPageFocusModifier(
+                destination: .settings, isContentPushed: !path.isEmpty))
         }
     }
+
+    /// The Settings stack's route ids, so pushed state reports upward.
+    @State private var path: [String] = []
 
     @ViewBuilder
     private func aboutRow(_ row: AboutRow) -> some View {
@@ -181,9 +221,7 @@ struct SettingsView: View {
             // Destination comes only from `aboutDestination(for:)` so the
             // route identity and `AcknowledgementsView` cannot drift apart.
             if let destination = Self.aboutDestination(for: row) {
-                NavigationLink {
-                    destination.destinationView
-                } label: {
+                NavigationLink(value: destination.rawValue) {
                     Label("Acknowledgements", systemImage: "doc.text")
                 }
                 .accessibilityIdentifier(destination.rawValue)
