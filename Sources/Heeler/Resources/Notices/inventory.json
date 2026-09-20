@@ -3,7 +3,7 @@
   "dependencyCoverage": {
     "packageResolved": {
       "libghostty-spm": ["libghostty-spm", "Ghostty", "GhosttyTheme"],
-      "markdownui": ["MarkdownUI"],
+      "swift-markdown-ui": ["MarkdownUI"],
       "msdisplaylink": ["MSDisplayLink"],
       "networkimage": ["NetworkImage"],
       "splash": ["Splash"],
