@@ -3,21 +3,25 @@ import SwiftUI
 // SPDX-License-Identifier: Apache-2.0
 //
 // The agent kind icon at the row's leading edge (user addendum, superseding
-// revision): it replaces the old task-initial avatar entirely. The kind
-// resolves ONLY from the snapshot's runtime metadata (`Agent.kind`, herdr's
-// detected agent program), never from the title; the human-readable name
-// stays in the accessibility label. No brand assets ship in this app, so
-// the icon set is SF Symbols only, with one neutral fallback for kinds this
-// build has no symbol for. Never a guessed value and never an avatar
-// initial.
+// revision + review rework): it replaces the old task-initial avatar
+// entirely. The kind resolves ONLY from the snapshot's runtime metadata
+// (`Agent.kind`, herdr's detected agent program), never from the title; the
+// human-readable name stays in the accessibility label. The three CORE
+// runtimes render the user-approved prototype glyphs (π / angle brackets /
+// sunburst, ported 1:1 in AgentKindGlyphs); the long tail uses neutral SF
+// Symbols; unrecognized kinds get the neutral fallback. Never a guessed
+// value and never an avatar initial.
 
 /// Pure presentation for the kind badge, so what the row renders and what
 /// VoiceOver reads stay unit-testable.
 struct AgentKindBadgeModel: Equatable, Sendable {
     /// The snapshot's agent kind, verbatim (`Agent.kind`).
     let kind: String
+    /// The approved prototype glyph for the three core runtimes
+    /// (omp→π, codex→brackets, claude→sunburst); nil for every other kind.
+    let glyph: AgentKindGlyph?
     /// SF Symbol name for the badge; the neutral fallback for unrecognized
-    /// kinds.
+    /// kinds, and the long-tail set for kinds without a prototype mark.
     let systemImage: String
     /// The runtime name VoiceOver reads ("Claude Code", "Codex", "OMP", …),
     /// from the supported-kinds catalog when it knows the kind, otherwise
@@ -32,6 +36,7 @@ struct AgentKindBadgeModel: Equatable, Sendable {
         self.kind = kind
         let known = SupportedAgentKind(rawValue: kind.lowercased())
         isRecognized = known != nil
+        glyph = Self.glyph(for: kind)
         systemImage = Self.symbol(for: kind)
         accessibilityLabel = known?.displayName ?? kind
     }
@@ -40,10 +45,20 @@ struct AgentKindBadgeModel: Equatable, Sendable {
         self.init(kind: agent.agent.kind)
     }
 
-    /// One neutral, recognizable SF Symbol per supported kind. The symbols
-    /// describe the runtime family, not any vendor's brand: no brand marks
-    /// ship with the app. Distinct symbols for the kinds the user runs
-    /// today; shared shapes only between kinds that genuinely read alike.
+    /// The user-approved prototype marks for the core runtimes; ported
+    /// 1:1 from the design's SVG geometry (see AgentKindGlyphs).
+    private static func glyph(for kind: String) -> AgentKindGlyph? {
+        switch SupportedAgentKind(rawValue: kind.lowercased()) {
+        case .pi, .omp, .opencode: .pi
+        case .codex, .copilot: .brackets
+        case .claude: .sunburst
+        default: nil
+        }
+    }
+
+    /// The long-tail symbol set: neutral SF Symbols for kinds without a
+    /// prototype mark. The symbols describe the runtime family, not any
+    /// vendor's brand; no brand assets ship with the app.
     private static func symbol(for kind: String) -> String {
         guard let supported = SupportedAgentKind(rawValue: kind.lowercased()) else {
             return fallbackSystemImage
@@ -69,19 +84,25 @@ struct AgentKindBadgeModel: Equatable, Sendable {
 }
 
 /// The leading kind icon. Fixed square footprint (28 pt) so rows align; the
-/// runtime name rides the accessibility label and the tooltip.
+/// runtime name rides the accessibility label and the tooltip. Core
+/// runtimes draw their approved prototype glyph; the rest their symbol.
 struct AgentKindBadgeIcon: View {
     let model: AgentKindBadgeModel
     /// Set on tree rows: the row's depth padding already separates the icon
     /// from the edge.
     var omitsLeadingPadding = false
 
+    @ViewBuilder
     private var icon: some View {
-        Image(systemName: model.systemImage)
-            .font(.system(size: 15, weight: .medium))
-            .foregroundStyle(Color.secondary)
-            .frame(width: 21, height: 21)
-            .accessibilityHidden(true)
+        if let glyph = model.glyph {
+            AgentKindGlyphView(glyph: glyph)
+        } else {
+            Image(systemName: model.systemImage)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Color.secondary)
+                .frame(width: 21, height: 21)
+                .accessibilityHidden(true)
+        }
     }
 
     var body: some View {

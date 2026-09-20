@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 
 @testable import Heeler
@@ -156,12 +157,12 @@ struct AgentKindBadgeTests {
         #expect(claude.isRecognized)
         let omp = AgentKindBadgeModel(kind: "omp")
         #expect(omp.accessibilityLabel == "OMP")
-        #expect(omp.systemImage == "infinity")
     }
 
     @Test func unrecognizedKindGetsNeutralFallbackAndRawName() {
         let unknown = AgentKindBadgeModel(kind: "some-new-runtime")
         #expect(!unknown.isRecognized)
+        #expect(unknown.glyph == nil)
         #expect(unknown.systemImage == AgentKindBadgeModel.fallbackSystemImage)
         // The raw runtime kind stays the label — never a guessed value.
         #expect(unknown.accessibilityLabel == "some-new-runtime")
@@ -179,10 +180,59 @@ struct AgentKindBadgeTests {
         #expect(badge.accessibilityLabel == "OMP")
     }
 
-    @Test func distinctKindsGetDistinctSymbols() {
-        let symbols = Set(
-            ["omp", "claude", "codex", "gemini", "cursor", "devin", "cline", "kimi", "droid", "grok"]
-                .map { AgentKindBadgeModel(kind: $0).systemImage })
-        #expect(symbols.count > 1)
+    @Test func coreRuntimesRenderTheApprovedPrototypeGlyphs() {
+        // The user-approved prototype marks, ported 1:1: omp → π,
+        // codex → angle brackets, claude → sunburst.
+        #expect(AgentKindBadgeModel(kind: "omp").glyph == .pi)
+        #expect(AgentKindBadgeModel(kind: "pi").glyph == .pi)
+        #expect(AgentKindBadgeModel(kind: "opencode").glyph == .pi)
+        #expect(AgentKindBadgeModel(kind: "codex").glyph == .brackets)
+        #expect(AgentKindBadgeModel(kind: "copilot").glyph == .brackets)
+        #expect(AgentKindBadgeModel(kind: "claude").glyph == .sunburst)
+        // Long-tail kinds keep the symbol set, no glyph.
+        #expect(AgentKindBadgeModel(kind: "gemini").glyph == nil)
+        #expect(AgentKindBadgeModel(kind: "gemini").systemImage == "sparkles")
+    }
+
+    @Test func approvedGlyphGeometryMatchesThePrototype() {
+        // The π mark: bar + left leg + curved right leg, in 24×24 space.
+        let pi = AgentKindGlyphShape(glyph: .pi).path(
+            in: CGRect(x: 0, y: 0, width: 24, height: 24))
+        // Path.Element.line carries only its end point (the start is the
+        // subpath's current point); collect the drawing sequence in order.
+        var sequence: [Path.Element] = []
+        pi.forEach { sequence.append($0) }
+        // The π: move(5,7) → line(19,7) [the bar], move(9,7) → line(9,17)
+        // [the left leg] — the prototype's exact geometry.
+        #expect(sequence.count >= 4)
+        if case .move(to: let first) = sequence[0] {
+            #expect(first == CGPoint(x: 5, y: 7))
+        } else {
+            Issue.record("π must begin its bar at (5,7)")
+        }
+        if case .line(to: let bar) = sequence[1] {
+            #expect(bar == CGPoint(x: 19, y: 7))
+        } else {
+            Issue.record("π's bar must end at (19,7)")
+        }
+        if case .move(to: let legStart) = sequence[2] {
+            #expect(legStart == CGPoint(x: 9, y: 7))
+        } else {
+            Issue.record("π's left leg must start at (9,7)")
+        }
+        if case .line(to: let leg) = sequence[3] {
+            #expect(leg == CGPoint(x: 9, y: 17))
+        } else {
+            Issue.record("π's left leg must end at (9,17)")
+        }
+    }
+
+    @Test func distinctKindsGetDistinctPresentation() {
+        let presents = ["omp", "claude", "codex", "gemini", "cursor", "devin", "cline", "kimi", "droid", "grok"]
+            .map { kind in
+                let model = AgentKindBadgeModel(kind: kind)
+                return "\(model.glyph.map(String.init(describing:)) ?? model.systemImage)"
+            }
+        #expect(Set(presents).count > 3)
     }
 }
