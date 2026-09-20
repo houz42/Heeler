@@ -222,7 +222,7 @@ struct BrokerProvisioningTests {
                 exitStatus: 0))
         // Adapter env read: absent (cat of missing file → exit 1, empty).
         await transport.addScript(
-            layout.readAdapterEnvironmentCommand,
+            layout.readAdapterShimCommand,
             result: RemoteCommandResult(stdout: Data(), exitStatus: 1))
 
         await store.inspect()
@@ -256,9 +256,11 @@ struct BrokerProvisioningTests {
                     ).utf8),
                 exitStatus: 0))
         await transport.addScript(
-            layout.readAdapterEnvironmentCommand,
+            layout.readAdapterShimCommand,
             result: RemoteCommandResult(
-                stdout: Data("HEELER_CHAT_SOCKET=/run/broker.sock\n".utf8),
+                stdout: Data(
+                    "// Managed by Heeler. Replaces the broker-adapter extension shim.\n"
+                        .utf8),
                 exitStatus: 0))
 
         await store.inspect()
@@ -283,7 +285,7 @@ struct BrokerProvisioningTests {
             result: RemoteCommandResult(
                 stdout: Data(inspectOutput(version: "1.2.0").utf8), exitStatus: 0))
         await transport.addScript(
-            layout.readAdapterEnvironmentCommand,
+            layout.readAdapterShimCommand,
             result: RemoteCommandResult(stdout: Data(), exitStatus: 1))
 
         await store.inspect()
@@ -422,7 +424,7 @@ struct BrokerProvisioningTests {
         let store = makeStore(transport: transport, layout: layout)
         store.state.layout = layout
 
-        for bad in ["", "1.0.0; rm -rf /", "1.0.0`x`", "1.0.0$(x)", "a b c"] {
+        for bad in ["", ".", "..", "1.0.0; rm -rf /", "1.0.0`x`", "1.0.0$(x)", "a b c"] {
             await #expect(throws: BrokerProvisioningError.invalidPackageVersion) {
                 try await store.install(
                     package: try makePackageFixture(contents: "x"),
@@ -596,68 +598,101 @@ struct BrokerProvisioningTests {
 
     // MARK: - Adapter configuration
 
-    @Test func adapterConfigDefaultsAskWrapperOff() async throws {
+    @Test func adapterShimDefaultsAskWrapperOff() async throws {
         let transport = ScriptedProvisioningTransport()
         let layout = makeLayout(suffix: "t16")
         let store = makeStore(transport: transport, layout: layout)
         store.state.layout = layout
+        store.state.activeVersion = "1.1.0"
 
         try await store.configureAdapter(askWrapperOptIn: false)
 
-        let write = await transport.commands.first {
-            $0.contains("adapter") && $0.contains("base64")
-        }
-        // Decode the base64 payload and verify the flag is absent.
-        let command = try #require(write)
+        // The shim write targets the helper-owned shim path, and its
+        // decoded payload carries the versioned import but NOT the
+        // ask-wrapper flag (absent = OFF).
+        let write = try #require(
+            await transport.commands.first {
+                $0.contains(layout.adapterShimPath) && $0.contains("base64")
+            })
         let payload = try #require(
-            command.split(separator: "'").first { $0.count > 40 })
-        let decoded = Data(base64Encoded: String(payload))
-        #expect(decoded != nil)
-        let text = String(decoding: decoded!, as: UTF8.self)
-        #expect(text.contains("HEELER_CHAT_SOCKET="))
+            write.split(separator: "'").first { $0.count > 40 })
+        let text = String(
+            decoding: try #require(Data(base64Encoded: String(payload))),
+            as: UTF8.self)
+        #expect(text.contains("Managed by Heeler"))
+        #expect(
+            text.contains(
+                "from \"\(layout.versionsDirectory)/1.1.0/broker/adapters/omp/extension.ts\""))
         #expect(!text.contains("HEELER_CHAT_ASK_WRAPPER"))
     }
 
-    @Test func adapterConfigWritesOptInOnlyOnExplicitRequest() async throws {
+    @Test func adapterShimWritesOptInOnlyOnExplicitRequest() async throws {
         let transport = ScriptedProvisioningTransport()
         let layout = makeLayout(suffix: "t17")
         let store = makeStore(transport: transport, layout: layout)
         store.state.layout = layout
+        store.state.activeVersion = "1.1.0"
 
         try await store.configureAdapter(askWrapperOptIn: true)
 
-        let write = await transport.commands.first {
-            $0.contains("adapter") && $0.contains("base64")
-        }
-        let command = try #require(write)
+        let write = try #require(
+            await transport.commands.first {
+                $0.contains(layout.adapterShimPath) && $0.contains("base64")
+            })
         let payload = try #require(
-            command.split(separator: "'").first { $0.count > 40 })
-        let decoded = Data(base64Encoded: String(payload))
-        let text = String(decoding: decoded!, as: UTF8.self)
-        #expect(text.contains("HEELER_CHAT_ASK_WRAPPER=1"))
+            write.split(separator: "'").first { $0.count > 40 })
+        let text = String(
+            decoding: try #require(Data(base64Encoded: String(payload))),
+            as: UTF8.self)
+        #expect(text.contains("process.env.HELER_CHAT_ASK_WRAPPER = \"1\""))
     }
 
     // MARK: - Development-vs-production layout safety
+
+    @Test func macOSUnitWriteSubstitutesNodeDirHostSide() throws {
+        // The launchd write pipes the base64 body through a host-side
+        // sed that substitutes the __HEELER_NODE_DIR__ placeholder with
+        // the discovered node directory — plists carry literal paths only.
+        let layout = makeLayout(platform: .macOS, suffix: "nodepath")
+        let command = try layout.writeUnitCommand(activeVersion: "0.1.0")
+        #expect(command.contains("sed \"s|__HEELER_NODE_DIR__|$(dirname \"$(command -v node)\")|\""))
+        #expect(command.contains("base64 -d"))
+    }
 
     @Test func developmentLayoutUsesDisposableRootsAndTestServiceNames() {
         let layout = makeLayout(suffix: "safety")
         #expect(layout.dataRoot.contains("heeler-chat-test-safety"))
         #expect(layout.serviceName.contains("heeler-chat-test"))
-        // Production layout names the real footprint.
+        #expect(!layout.usesXDGRuntimeDir)
+        #expect(!layout.usesRealLaunchAgentsDir)
+        // Production layout names the real footprint, with the XDG socket
+        // template expanded on the Host.
         let production = BrokerProvisioningLayout.standard(
             platform: .linux, homeDirectory: "/home/dev")
         #expect(production.dataRoot == "/home/dev/.local/share/heeler-chat")
         #expect(production.serviceName == "heeler-chat-broker")
-        #expect(production.socketPath == "/home/dev/.local/state/heeler-chat/broker.sock")
+        #expect(production.usesXDGRuntimeDir)
+        #expect(
+            production.shellSocketPath
+                == "${XDG_RUNTIME_DIR:-/home/dev/.local/state/heeler-chat}/broker.sock")
+        #expect(
+            production.adapterShimPath
+                == "/home/dev/.omp/agent/extensions/heeler-chat.ts")
     }
 
-    @Test func macOSStandardLayoutUsesApplicationSupport() {
+    @Test func macOSStandardLayoutUsesApplicationSupportAndLocalStateSocket() {
         let production = BrokerProvisioningLayout.standard(
             platform: .macOS, homeDirectory: "/Users/dev")
         #expect(
             production.dataRoot
                 == "/Users/dev/Library/Application Support/HeelerChat")
         #expect(production.serviceName == "com.heeler.chat.broker")
+        // Binding: the macOS socket mirrors Linux's ~/.local/state, NOT
+        // the Application Support tree.
+        #expect(
+            production.socketPath
+                == "/Users/dev/.local/state/heeler-chat/broker.sock")
+        #expect(production.usesRealLaunchAgentsDir)
     }
 
     // MARK: - Fixtures

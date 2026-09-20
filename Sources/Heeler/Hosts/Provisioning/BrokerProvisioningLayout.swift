@@ -27,37 +27,54 @@ enum RemoteHostPlatform: String, Sendable, Equatable {
 /// development-testing rule (disposable dirs + service names) is a matter
 /// of swapping the instance, and a layout change is one place.
 ///
-/// Linux layout (XDG):
-/// - install: `<dataRoot>/versions/<version>/`, active version in the
-///   `current` marker FILE (atomic via tmp+rename; a symlink swap needs
-///   GNU-only `mv -T` and would corrupt on BSD mv).
-/// - config: `~/.config/heeler-chat/` (`broker.env`, `adapter/`)
-/// - state:  `~/.local/state/heeler-chat/` (socket, logs)
-///
-/// macOS layout (no XDG):
-/// - `~/Library/Application Support/HeelerChat/` — versions/current/logs
-/// - socket in the same tree (dir 0700)
+/// Runtime-owner-confirmed contract:
+/// - Linux: install `~/.local/share/heeler-chat/versions/<v>/` + `current`
+///   marker FILE; config `~/.config/heeler-chat/`; socket
+///   `${XDG_RUNTIME_DIR:-$HOME/.local/state}/heeler-chat/broker.sock`.
+/// - macOS: install `~/Library/Application Support/HeelerChat/`; socket
+///   `~/.local/state/heeler-chat/broker.sock` (NOT the Application
+///   Support tree); logs in the Application Support tree.
+/// - The broker entrypoint resolves its paths RELATIVE TO ITS VERSIONED
+///   directory; `current` is a text marker, never a symlink.
+/// - launchd plists carry absolute paths only (no shell expansion).
+/// - The adapter shim is ONE helper-owned file,
+///   `~/.omp/agent/extensions/heeler-chat.ts`, importing the versioned
+///   extension path; other user extensions/config are never touched.
 struct BrokerProvisioningLayout: Sendable, Equatable {
     /// Fixed socket name; chat connects direct-streamlocal to this path.
     static let socketName = "broker.sock"
     /// The ask-wrapper opt-in flag; OFF (absent) by default, per the
     /// adapter-config contract.
     static let askWrapperEnvironmentKey = "HEELER_CHAT_ASK_WRAPPER"
-    /// Minimum Node major version the broker package declares.
+    /// Minimum Node major version the broker package declares
+    /// (runtime-owner confirmed: the artifact is JS/TS source, Node is
+    /// an explicit prerequisite, not a bundled runtime).
     static let minimumNodeMajorVersion = 22
 
     let platform: RemoteHostPlatform
     /// Absolute install root that holds `versions/` and `current`.
     let dataRoot: String
-    /// Absolute config dir (`broker.env`, `adapter/`).
+    /// Absolute config dir (`broker.env`).
     let configRoot: String
-    /// Absolute state dir (socket, logs).
+    /// Absolute state dir (socket fallback on Linux, logs everywhere).
     let stateRoot: String
     /// Service name: `heeler-chat-broker` (systemd) or
     /// `com.heeler.chat.broker` (launchd).
     let serviceName: String
+    /// True only for the production Linux layout: the socket directory is
+    /// `${XDG_RUNTIME_DIR:-$HOME/.local/state}/heeler-chat`, expanded ON
+    /// THE HOST (binding: the app never expands it). Every other layout
+    /// (macOS, dev roots) uses `stateRoot` directly.
+    let usesXDGRuntimeDir: Bool
+    /// The single helper-owned adapter shim file. Production:
+    /// `~/.omp/agent/extensions/heeler-chat.ts` (runtime-owner specified);
+    /// dev layouts point at the disposable root instead.
+    let adapterShimPath: String
+    /// True only for the production macOS layout: launchd requires the
+    /// real `~/Library/LaunchAgents`. Dev layouts stage plists under their
+    /// own root so development never touches the user's real agents.
+    let usesRealLaunchAgentsDir: Bool
 
-    /// The production layout for one platform.
     static func standard(platform: RemoteHostPlatform, homeDirectory: String) -> BrokerProvisioningLayout {
         switch platform {
         case .linux:
@@ -66,18 +83,26 @@ struct BrokerProvisioningLayout: Sendable, Equatable {
                 dataRoot: "\(homeDirectory)/.local/share/heeler-chat",
                 configRoot: "\(homeDirectory)/.config/heeler-chat",
                 stateRoot: "\(homeDirectory)/.local/state/heeler-chat",
-                serviceName: "heeler-chat-broker")
+                serviceName: "heeler-chat-broker",
+                usesXDGRuntimeDir: true,
+                adapterShimPath: "\(homeDirectory)/.omp/agent/extensions/heeler-chat.ts",
+                usesRealLaunchAgentsDir: false)
         case .macOS:
+            // Socket state deliberately mirrors Linux (`~/.local/state`),
+            // per the runtime owner: NOT inside Application Support.
             return BrokerProvisioningLayout(
                 platform: platform,
                 dataRoot: "\(homeDirectory)/Library/Application Support/HeelerChat",
                 configRoot: "\(homeDirectory)/Library/Application Support/HeelerChat/config",
-                stateRoot: "\(homeDirectory)/Library/Application Support/HeelerChat",
-                serviceName: "com.heeler.chat.broker")
+                stateRoot: "\(homeDirectory)/.local/state/heeler-chat",
+                serviceName: "com.heeler.chat.broker",
+                usesXDGRuntimeDir: false,
+                adapterShimPath: "\(homeDirectory)/.omp/agent/extensions/heeler-chat.ts",
+                usesRealLaunchAgentsDir: true)
         }
     }
 
-    /// Disposable development layout: a test root under /tmp and a
+    /// Disposable development layout: a test root and a
     /// `heeler-chat-test-` service name. Production code never constructs
     /// this; tests use it to honor "never install into the user's normal
     /// remote setup during development".
@@ -88,7 +113,10 @@ struct BrokerProvisioningLayout: Sendable, Equatable {
             dataRoot: "\(base)/data",
             configRoot: "\(base)/config",
             stateRoot: "\(base)/state",
-            serviceName: "heeler-chat-test-\(suffix)")
+            serviceName: "heeler-chat-test-\(suffix)",
+            usesXDGRuntimeDir: false,
+            adapterShimPath: "\(base)/config/heeler-chat.ts",
+            usesRealLaunchAgentsDir: false)
     }
 
     var versionsDirectory: String { "\(dataRoot)/versions" }
@@ -96,9 +124,21 @@ struct BrokerProvisioningLayout: Sendable, Equatable {
     /// version string, one line).
     var currentVersionMarkerPath: String { "\(dataRoot)/current" }
     var logsDirectory: String { "\(stateRoot)/logs" }
-    var socketPath: String { "\(stateRoot)/\(Self.socketName)" }
     var brokerEnvironmentFilePath: String { "\(configRoot)/broker.env" }
-    var adapterDirectory: String { "\(configRoot)/adapter" }
+
+    /// The socket path as it appears inside shell commands. Production
+    /// Linux expands `$XDG_RUNTIME_DIR` ON THE HOST (binding: the app
+    /// never expands it); every other layout is a literal absolute path.
+    var shellSocketPath: String {
+        usesXDGRuntimeDir
+            ? "${XDG_RUNTIME_DIR:-\(stateRoot)}/\(Self.socketName)"
+            : "\(stateRoot)/\(Self.socketName)"
+    }
+
+    /// The literal socket path for layouts where it is known without
+    /// host-side expansion. Production Linux resolves it through the
+    /// inspect probe's published `socket=` line instead of this.
+    var socketPath: String { "\(stateRoot)/\(Self.socketName)" }
 
     /// Where the active install's broker entrypoint lives, given the
     /// version the `current` marker names.
@@ -152,7 +192,7 @@ struct BrokerProvisioningLayout: Sendable, Equatable {
         let ompProbe = "command -v omp >/dev/null 2>&1 && printf present || printf absent"
         let nodeProbe = "node --version 2>/dev/null || printf none"
         let installProbe = "test -f \(currentVersionMarkerPath) && printf present || printf absent"
-        let socketProbe = "test -S \(socketPath) && printf present || printf absent"
+        let socketProbe = "test -S \(shellSocketPath) && printf present || printf absent"
         let serviceProbe = serviceActiveProbeCommand
         return "/bin/sh -c '"
             + "printf \"platform=%s\\n\" \"$(uname)\"; "
@@ -209,7 +249,7 @@ struct BrokerProvisioningLayout: Sendable, Equatable {
     /// `mkdir -p` with owner-only permissions (0700) for every directory
     /// in the footprint. Idempotent; existing dirs are chmod'ed to 0700.
     var ensureDirectoriesCommand: String {
-        let dirs = [versionsDirectory, dataRoot, configRoot, stateRoot, logsDirectory, adapterDirectory]
+        let dirs = [versionsDirectory, dataRoot, configRoot, stateRoot, logsDirectory, adapterShimDirectory]
         let makes = dirs.map { "mkdir -p \($0) && chmod 700 \($0)" }.joined(separator: "; ")
         return "/bin/sh -c '\(makes); exit 0'"
     }
@@ -230,7 +270,7 @@ struct BrokerProvisioningLayout: Sendable, Equatable {
         environment: [String: String]
     ) throws -> String {
         var lines: [String] = [
-            "HEELER_CHAT_SOCKET=\(socketPath)",
+            "HEELER_CHAT_SOCKET=\(shellSocketPath)",
             "HEELER_CHAT_LOG_DIR=\(logsDirectory)",
         ]
         for (key, value) in environment.sorted(by: { $0.key < $1.key }) {
@@ -244,34 +284,45 @@ struct BrokerProvisioningLayout: Sendable, Equatable {
         return writePrivateFileCommand(path: brokerEnvironmentFilePath, base64Contents: base64)
     }
 
-    /// The adapter env file path (inside the adapter dir, our shim space).
-    var adapterEnvironmentFilePath: String {
-        "\(adapterDirectory)/adapter.env"
+    /// The shim's parent dir (created 0700 by ensureDirectories; the
+    /// extensions dir convention is omp's own, already 0755 or stricter).
+    var adapterShimDirectory: String {
+        (adapterShimPath as NSString).deletingLastPathComponent
     }
 
-    /// Writes the adapter env file. The ask-wrapper flag is written only
-    /// when the user explicitly opted in — its absence is the OFF default,
-    /// so an upgrade that forgets to re-request it stays off.
-    func writeAdapterEnvironmentCommand(askWrapperOptIn: Bool) -> String {
-        var lines = ["HEELER_CHAT_SOCKET=\(socketPath)"]
-        if askWrapperOptIn {
-            lines.append("\(Self.askWrapperEnvironmentKey)=1")
-        }
-        let contents = lines.joined(separator: "\n") + "\n"
+    /// Writes the ONE helper-owned adapter shim. Runtime-owner contract:
+    /// `~/.omp/agent/extensions/heeler-chat.ts` importing the versioned
+    /// extension path; other user extensions/config are never touched.
+    /// The ask-wrapper flag is env-borne and written only on explicit
+    /// opt-in — its absence is the OFF default.
+    func writeAdapterShimCommand(activeVersion: String, askWrapperOptIn: Bool) -> String {
+        // Binding: the real package ships the omp adapter at
+        // broker/adapters/omp/extension.ts (verified against the real
+        // artifact). The import names the VERSIONED path, never `current`.
+        let extensionModule = "\(versionsDirectory)/\(activeVersion)/broker/adapters/omp/extension.ts"
+        let wrapperLine = askWrapperOptIn
+            ? "process.env.\(Self.askWrapperEnvironmentKey) = \"1\";\n"
+            : ""
+        let contents = """
+        // Managed by Heeler. Replaces the broker-adapter extension shim.
+        // Imports the active VERSIONED extension; adapter config for omp.
+        \(wrapperLine)export { default } from \"\(extensionModule)\";
+        """
         let base64 = Data(contents.utf8).base64EncodedString()
-        return writePrivateFileCommand(
-            path: adapterEnvironmentFilePath, base64Contents: base64)
+        return writePrivateFileCommand(path: adapterShimPath, base64Contents: base64)
     }
 
-    /// Reads the adapter env file (stdout is its raw text; empty when
-    /// absent) — the inspect probe's "adapter configured" evidence.
-    var readAdapterEnvironmentCommand: String {
-        "cat \(adapterEnvironmentFilePath) 2>/dev/null"
+    /// Reads the shim (stdout is its raw text; empty when absent) — the
+    /// inspect probe's "adapter configured" evidence.
+    var readAdapterShimCommand: String {
+        "cat \(adapterShimPath) 2>/dev/null"
     }
 
     /// The systemd unit body. `ExecStart` points at the active version's
-    /// broker entrypoint via the `current` marker, so a version swap needs
-    /// a service restart (surfaced as `restartsRequired`).
+    /// broker entrypoint, which execs `node` from PATH — systemd user
+    /// sessions inherit a minimal PATH, so the unit prepends the Node
+    /// directory discovered at enable time (`$(dirname $(command -v node))`,
+    /// expanded ON THE HOST while writing the unit).
     func systemdUnitBody(activeVersion: String) -> String {
         """
         [Unit]
@@ -280,6 +331,7 @@ struct BrokerProvisioningLayout: Sendable, Equatable {
         [Service]
         Type=simple
         ExecStart=\(brokerExecutablePath(activeVersion: activeVersion))
+        Environment=PATH=$(dirname "$(command -v node)"):/usr/local/bin:/usr/bin:/bin
         EnvironmentFile=\(brokerEnvironmentFilePath)
         Restart=on-failure
         RestartSec=2
@@ -289,14 +341,19 @@ struct BrokerProvisioningLayout: Sendable, Equatable {
         """
     }
 
-    /// The launchd plist body for macOS.
-    func launchdPlistBody(activeVersion: String) -> String {
+    /// The launchd plist body for macOS. Same Node-PATH requirement: the
+    /// plist carries literal absolute values only, so the Node directory
+    /// must be RESOLVED host-side before the plist bytes are written —
+    /// `writeUnitCommand` substitutes `__HEELER_NODE_DIR__` via a host-side
+    /// shell expansion at write time.
+    func launchdPlistBody(activeVersion: String, resolvedNodeDirectory: String) -> String {
         let escaped = { (value: String) -> String in
             value.replacingOccurrences(of: "&", with: "&amp;")
                 .replacingOccurrences(of: "<", with: "&lt;")
                 .replacingOccurrences(of: ">", with: "&gt;")
                 .replacingOccurrences(of: "\"", with: "&quot;")
         }
+        let servicePath = "\(resolvedNodeDirectory):/usr/local/bin:/usr/bin:/bin"
         return """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -310,6 +367,8 @@ struct BrokerProvisioningLayout: Sendable, Equatable {
             </array>
             <key>EnvironmentVariables</key>
             <dict>
+                <key>PATH</key>
+                <string>\(escaped(servicePath))</string>
                 <key>HEELER_CHAT_SOCKET</key>
                 <string>\(escaped(socketPath))</string>
                 <key>HEELER_CHAT_LOG_DIR</key>
@@ -328,28 +387,30 @@ struct BrokerProvisioningLayout: Sendable, Equatable {
         """
     }
 
-    /// The unit file path as the platform writes it (used for both the
-    /// unit write and uninstall).
-    var unitInstallPath: String {
-        switch platform {
-        case .linux: "\(configRoot)/../systemd/user/\(serviceName).service"
-        case .macOS:
-            // macOS has no HOME-independent shortcut here; the store
-            // resolves HOME before building commands.
-            "~/Library/LaunchAgents/\(serviceName).plist"
-        }
-    }
-
-    /// Writes the service unit (systemd user unit or launchd plist)
-    /// atomically, given the active version the unit should start.
+    /// Writes the service unit atomically. The Node directory is resolved
+    /// ON THE HOST inside the writing command (`$(dirname "$(command -v
+    /// node)")`), substituted into the plist body — launchd refuses shell
+    /// expansion, so the written file must already be literal.
     func writeUnitCommand(activeVersion: String) throws -> String {
-        let body: String
+        let rawBody: String
         switch platform {
-        case .linux: body = systemdUnitBody(activeVersion: activeVersion)
-        case .macOS: body = launchdPlistBody(activeVersion: activeVersion)
+        case .linux:
+            rawBody = systemdUnitBody(activeVersion: activeVersion)
+            let base64 = Data(rawBody.utf8).base64EncodedString()
+            return writePrivateFileCommand(path: unitInstallPath, base64Contents: base64)
+        case .macOS:
+            rawBody = launchdPlistBody(
+                activeVersion: activeVersion,
+                resolvedNodeDirectory: "__HEELER_NODE_DIR__")
+            let base64 = Data(rawBody.utf8).base64EncodedString()
+            // Substitute the placeholder host-side, after base64 decoding
+            // but inside the same atomic tmp+mv pipeline.
+            return "printf '%s' '\(base64)' | base64 -d "
+                + "| sed \"s|__HEELER_NODE_DIR__|$(dirname \"$(command -v node)\")|\" "
+                + "> \(unitInstallPath).tmp "
+                + "&& chmod 600 \(unitInstallPath).tmp "
+                + "&& mv \(unitInstallPath).tmp \(unitInstallPath)"
         }
-        let base64 = Data(body.utf8).base64EncodedString()
-        return writePrivateFileCommand(path: unitInstallPath, base64Contents: base64)
     }
 
     /// Enables and starts the service (user-level only; no sudo).
@@ -448,6 +509,6 @@ struct BrokerProvisioningLayout: Sendable, Equatable {
         }
         return "/bin/sh -c '\(disable); \(rmUnit); "
             + "rm -rf \(dataRoot) \(configRoot); "
-            + "rm -f \(socketPath); exit 0'"
+            + "rm -f \(shellSocketPath); exit 0'"
     }
 }
