@@ -203,12 +203,15 @@ struct HostListView: View {
             }
             .sheet(item: $inspectedRoute) { inspection in
                 // Tapping a route on a Host card: the inspector targets
-                // THAT Host's THAT route, never a global connection.
+                // THAT Host's THAT route, never a global connection. The
+                // item's own store survives every content-closure re-run
+                // on parent status ticks (device bug #5).
                 if let host = store.hosts.first(where: { $0.id == inspection.hostID }) {
                     HostRouteInspectorView(
                         host: host,
                         address: inspection.address,
                         connectedAddress: connectedAddresses[inspection.hostID],
+                        ownedStore: inspection.store,
                         // In-context naming (device finding): the SAME
                         // editor the form uses; the label persists to the
                         // catalog, so the list row and inspector both
@@ -338,6 +341,10 @@ struct HostListView: View {
             openDetail: { path.append(host.id) },
             openEditor: { editingHost = host },
             openRouteInspector: { address in
+                // The inspection item owns its store for the lifetime of
+                // one presentation (device bug #5): status ticks re-run
+                // the sheet's content closure, but the item — and its
+                // store — stay put until the sheet dismisses.
                 inspectedRoute = HostRouteInspection(hostID: host.id, address: address)
             })
     }
@@ -396,10 +403,27 @@ struct HostListView: View {
 /// routes. Distinct from `HostRoutePresentation` (pure display) — this
 /// carries identity only, resolved against the live catalog when the
 /// sheet builds.
-struct HostRouteInspection: Identifiable, Equatable {
+@MainActor
+private struct HostRouteInspectionStoreCarrier {
+    /// The probe/trust store OWNED by one inspection for the lifetime of
+    /// one presentation (device bug #5): the sheet's content closure
+    /// re-runs on every parent status tick, and a store created inside
+    /// the closure had its view-@State identity reset mid-probe —
+    /// silently discarding the user's check verdict. Carrying it on the
+    /// item means one presentation owns one store, period: the item is
+    /// set once at the tap and does not change while the sheet is open.
+    let store = HostRouteInspectorStore()
+}
+
+@MainActor
+struct HostRouteInspection: Identifiable {
     let hostID: Host.ID
     let address: String
-    var id: String { "\(hostID.uuidString)|\(address)" }
+    private let carrier = HostRouteInspectionStoreCarrier()
+    nonisolated var id: String { "\(hostID.uuidString)|\(address)" }
+
+    /// The owned store: one presentation owns one store, period.
+    var store: HostRouteInspectorStore { carrier.store }
 }
 
 /// One Host as a card (handoff §E): heading with name + connection chip
