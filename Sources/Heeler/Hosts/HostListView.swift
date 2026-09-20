@@ -81,11 +81,16 @@ struct HostListView: View {
     /// (previews, Hosts without a Console connection).
     private let discovery: SessionDiscoveryStore?
     @State private var removal: HostRemovalStore
-    /// The approved compact top-left destination selector (#A). Present
-    /// when this page is mounted at top level by `AppRootView`; nil inside
-    /// the Console sheet/previews/tests keeps the plain "Hosts" title.
-    /// Omitted entirely while a pushed Host detail owns the window (#A).
-    /// NavRedesign hunk — merge arbitration with HostsRedesign's rewrite.
+    @State private var isAddingHost = false
+    @State private var isScanningToPair = false
+    @State private var manualFallbackRequested = false
+    @State private var path: [Host.ID] = []
+    /// The Host being edited from a card's scoped Edit action (§E 3):
+    /// the host form sheet always targets exactly this Host.
+    @State private var editingHost: Host?
+    @State private var inspectedRoute: HostRouteInspection?
+    /// Top-level destination selector (handoff §A): mounted by the app
+    /// root; nil in sheets/tests keeps the plain "Hosts" title.
     @Environment(\.appDestination) private var appDestination
     @Environment(\.appDestinationMenuSuppressed) private var isMenuSuppressed
     private var destinationMenu: AppDestinationMenu? {
@@ -95,10 +100,6 @@ struct HostListView: View {
     private var destinationMenuTitleFallback: String {
         appDestination == nil ? "Hosts" : ""
     }
-    @State private var isAddingHost = false
-    @State private var isScanningToPair = false
-    @State private var manualFallbackRequested = false
-    @State private var path: [Host.ID] = []
     @State private var quickAddError: String?
 
     init(
@@ -152,36 +153,23 @@ struct HostListView: View {
                 } else {
                     List {
                         ForEach(store.hosts) { host in
-                            NavigationLink(value: host.id) {
-                                HostRow(
-                                    host: host,
-                                    connectionStatus: connectionStatuses[host.id],
-                                    standingFailure: standingFailures[host.id],
-                                    latency: latencies[host.id],
-                                    isRetryInFlight: manualReconnectInFlightHostIDs
-                                        .contains(host.id),
-                                    retryConnection: retryConnection.map { retry in
-                                        { await retry(host.id) }
-                                    })
-                            }
+                            hostCard(for: host)
                         }
                         .onDelete(perform: removeHosts)
                         quickAddSection
                     }
+                    .listStyle(.insetGrouped)
+                    .listSectionSpacing(12)
                 }
             }
-            // The compact destination selector (#A) when this page is
-            // mounted at top level; the sheet presentation (Console,
-            // previews, tests) keeps the plain title. HostsRedesign owns
-            // the rest of this file's redesign — this one-toolbar-item
-            // hunk is the navigation slice's env-contract seam, flagged
-            // for merge arbitration.
             .navigationTitle(destinationMenuTitleFallback)
             // Report pushed-navigation state upward (#A): a pushed Host
             // detail makes the root's destination chrome step aside.
             .modifier(AppDestinationPageFocusModifier(
                 destination: .hosts, isContentPushed: !path.isEmpty))
             .toolbar {
+                // Handoff §A: the top-left compact destination selector
+                // replaces the title when the app root mounts this page.
                 if let destinationMenu {
                     ToolbarItem(placement: .topBarLeading) {
                         destinationMenu
@@ -218,6 +206,21 @@ struct HostListView: View {
             .sheet(isPresented: $isAddingHost) {
                 HostFormView(store: store) { saved in
                     path.append(saved.id)
+                }
+            }
+            .sheet(item: $editingHost) { host in
+                // A card's scoped Edit (§E 3): the form edits exactly the
+                // Host the user tapped, keyed by that Host value.
+                HostFormView(store: store, editing: host)
+            }
+            .sheet(item: $inspectedRoute) { inspection in
+                // Tapping a route on a Host card: the inspector targets
+                // THAT Host's THAT route, never a global connection.
+                if let host = store.hosts.first(where: { $0.id == inspection.hostID }) {
+                    HostRouteInspectorView(
+                        host: host,
+                        address: inspection.address,
+                        connectedAddress: connectedAddresses[inspection.hostID])
                 }
             }
             .sheet(
@@ -316,10 +319,25 @@ struct HostListView: View {
         return { await retryConnection(id) }
     }
 
-    /// Sessions/Hosts blending (Phase 5): unclaimed herdr sessions found on
-    /// a connected Host's machine, offered as one-tap Host entries. Adding
-    /// keeps every connection coordinate and the auth method, changing only
-    /// the session.
+    /// One Host card, split from `body` so the list stays type-checkable.
+    private func hostCard(for host: Host) -> some View {
+        HostCardSection(
+            host: host,
+            connectionStatus: connectionStatuses[host.id],
+            standingFailure: standingFailures[host.id],
+            latency: latencies[host.id],
+            connectedAddress: connectedAddresses[host.id],
+            isRetryInFlight: manualReconnectInFlightHostIDs.contains(host.id),
+            retryConnection: retryConnection.map { retry in
+                { await retry(host.id) }
+            },
+            openDetail: { path.append(host.id) },
+            openEditor: { editingHost = host },
+            openRouteInspector: { address in
+                inspectedRoute = HostRouteInspection(hostID: host.id, address: address)
+            })
+    }
+
     @ViewBuilder
     private var quickAddSection: some View {
         if let discovery {
@@ -370,29 +388,34 @@ struct HostListView: View {
     }
 }
 
-private struct HostRow: View {
+/// The sheet target for a tapped route: which Host and which of its
+/// routes. Distinct from `HostRoutePresentation` (pure display) — this
+/// carries identity only, resolved against the live catalog when the
+/// sheet builds.
+struct HostRouteInspection: Identifiable, Equatable {
+    let hostID: Host.ID
+    let address: String
+    var id: String { "\(hostID.uuidString)|\(address)" }
+}
+
+/// One Host as a card (handoff §E): heading with name + connection chip
+/// and an Edit button, then one row per NAMED route — exact address plus
+/// honest in-use/alternate state — each tapping into the route
+/// inspector. Chat service state belongs to the Host, not a route, so
+/// its row targets the Host (provisioning integration point, below).
+private struct HostCardSection: View {
     let host: Host
     let connectionStatus: EventsSessionStatus?
     let standingFailure: TransportError?
     let latency: Duration?
+    let connectedAddress: String?
     let isRetryInFlight: Bool
     let retryConnection: (@MainActor @Sendable () async -> Void)?
-
-    init(
-        host: Host,
-        connectionStatus: EventsSessionStatus?,
-        standingFailure: TransportError?,
-        latency: Duration?,
-        isRetryInFlight: Bool = false,
-        retryConnection: (@MainActor @Sendable () async -> Void)? = nil
-    ) {
-        self.host = host
-        self.connectionStatus = connectionStatus
-        self.standingFailure = standingFailure
-        self.latency = latency
-        self.isRetryInFlight = isRetryInFlight
-        self.retryConnection = retryConnection
-    }
+    let openDetail: () -> Void
+    /// Scoped Edit: opens the host form for THIS host, straight from the
+    /// card (approved §E: host edit targets the selected host).
+    let openEditor: () -> Void
+    let openRouteInspector: (String) -> Void
 
     /// Terminal stopped-auto-retry state: failed, or connecting while a
     /// standing failure is being served. Retry offers exactly one dial.
@@ -404,48 +427,113 @@ private struct HostRow: View {
         }
     }
 
-    var body: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(host.displayAliasName)
-                    .font(.headline)
-                Text(subtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 0)
-            if isRetryable {
-                Button {
-                    Task { await retryConnection?() }
-                } label: {
-                    if isRetryInFlight {
-                        ProgressView()
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                }
-                .buttonStyle(.bordered)
-                .tint(.orange)
-                .disabled(isRetryInFlight)
-                .accessibilityLabel("Retry connecting to \(host.displayAliasName)")
-            }
-            HostConnectionIndicator(
-                presentation: HostConnectionPresentation(
-                    status: connectionStatus,
-                    standingFailure: standingFailure,
-                    latency: latency))
-        }
-        .padding(.vertical, 2)
+    private var connectionPresentation: HostConnectionPresentation {
+        HostConnectionPresentation(
+            status: connectionStatus,
+            standingFailure: standingFailure,
+            latency: latency)
     }
 
-    private var subtitle: String {
-        var text = "\(host.username)@\(host.address)"
-        if host.port != 22 { text += ":\(host.port)" }
-        if case .namedSession(let session) = host.socketLocation {
-            text += " · session \(session)"
+    var body: some View {
+        Section {
+            // The heading row: tapping the name area opens the Host
+            // detail (onboarding/preflight); the scoped Edit button sits
+            // BESIDE it as a sibling (a Button nested inside another
+            // Button's label never fires its own action). Both target
+            // THIS host.
+            HStack(spacing: 12) {
+                Button {
+                    openDetail()
+                } label: {
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(host.displayAliasName)
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                            HostConnectionIndicator(presentation: connectionPresentation)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(
+                    "Open details for \(host.displayAliasName), "
+                        + connectionPresentation.accessibilityLabel)
+                if isRetryable {
+                    Button {
+                        Task { await retryConnection?() }
+                    } label: {
+                        if isRetryInFlight {
+                            ProgressView()
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.orange)
+                    .disabled(isRetryInFlight)
+                    .accessibilityLabel("Retry connecting to \(host.displayAliasName)")
+                }
+                // Scoped Edit for THIS host, directly on the card
+                // (§E requirement 3): opens the host form editing
+                // exactly this Host, never a hardcoded one.
+                Button("Edit") { openEditor() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityLabel("Edit \(host.displayAliasName)")
+                    .accessibilityIdentifier("host-card-edit")
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+
+            // One row per named route: exact address and honest
+            // in-use/alternate state; tap inspects THAT route.
+            ForEach(host.candidateAddresses, id: \.self) { address in
+                let route = HostRoutePresentation(
+                    host: host, address: address, connectedAddress: connectedAddress)
+                Button {
+                    openRouteInspector(address)
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "circle.fill")
+                            .font(.system(size: 7))
+                            .foregroundStyle(
+                                route.usage == .inUse ? Color.green : Color.secondary)
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text(route.name)
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(.primary)
+                                Text(route.stateLabel)
+                                    .font(.caption2)
+                                    .foregroundStyle(
+                                        route.usage == .inUse ? Color.green : Color.secondary)
+                            }
+                            Text("\(route.address):\(String(host.port))")
+                                .font(.caption)
+                                .monospaced()
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(
+                    "Route \(route.name), \(route.address):\(String(host.port)), "
+                        + (route.usage == .inUse
+                            ? "currently in use"
+                            : "alternate route, reachability unknown until checked"))
+                .accessibilityIdentifier("host-route-\(route.address)")
+            }
         }
-        return text
     }
 }
 
