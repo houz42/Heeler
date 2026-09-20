@@ -538,13 +538,21 @@ actor HeelerSSHTransport: Transport {
             throw TransportError.sshUnreachable(
                 detail: "The SSH connection is closed.")
         }
-        do {
-            return try await connection.openStreamLocal(
-                socketPath: socketPath, timeout: requestTimeout)
-        } catch SSHError.streamLocalOpenFailed {
-            throw try await classifyStreamLocalOpenFailure(socketPath: socketPath)
-        } catch let error as SSHError {
-            throw await mapOperationError(error)
+        // Admission lease, held for the channel's whole lifetime like
+        // Events: the broker channel is a long-lived
+        // ordinary-forwarding slot, not a fire-and-forget exchange.
+        // withChannel releases the lease when the OPEN operation
+        // returns; the wrapper's lifetime accounting is the app
+        // layer's close.
+        return try await channelAdmission.withChannel(.ordinaryForwarding) {
+            do {
+                return try await self.connection.openStreamLocal(
+                    socketPath: socketPath, timeout: self.requestTimeout)
+            } catch SSHError.streamLocalOpenFailed {
+                throw try await self.classifyStreamLocalOpenFailure(socketPath: socketPath)
+            } catch let error as SSHError {
+                throw await self.mapOperationError(error)
+            }
         }
     }
 
