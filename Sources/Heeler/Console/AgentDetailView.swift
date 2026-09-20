@@ -289,9 +289,13 @@ struct AgentDetailView: View {
     /// surface, so agents whose integration registers after first render
     //  still get a chat.
     private func buildChatIfPossible() async {
+        Self.diagFileWrite("build enter: agent=\(agent.id) kind=\(agent.agent.agentSession?.kind.rawValue ?? "nil") hasBroker=\(console.host(for: agent.hostID)?.hasBrokerChat ?? false)")
         guard chat == nil,
             agent.agent.agentSession?.kind == AgentSessionRefKind.path
-        else { return }
+        else {
+            Self.diagFileWrite("guard REJECTED: kind=\(agent.agent.agentSession?.kind.rawValue ?? "nil")")
+            return
+        }
 
         // Broker backend: only when this Host configured a broker socket
         // path. One store per agent identity; started here so surface
@@ -341,6 +345,7 @@ struct AgentDetailView: View {
         // The chat input's router: / # @ ! classification + plain delivery
         // through agent.prompt. The scratch-shell pane for ! is created
         // lazily on first use by the store.
+        Self.diagFileWrite("pre-router: chat=\(chat != nil)")
         chatRouter = ComposerRouterStore(
             dependencies: ComposerRouterStore.makeChatDependencies(
                 console: console, agent: agent,
@@ -467,7 +472,12 @@ struct AgentDetailView: View {
                 // steps, Back, multi-select confirm — with a no-op
                 // delivery seam. Production paths pass real seams.
                 onAskAnswer: Self.demoAskSeamsEnabled ? { _, _ in } : nil,
-                onAskCancel: Self.demoAskSeamsEnabled ? { _ in } : nil)
+                onAskCancel: Self.demoAskSeamsEnabled ? { _ in } : nil,
+                fetch: { path in
+                    try await console.readRemoteFile(
+                        at: path, on: agent.hostID)
+                },
+                diagRouterProbe: diagProbeState)
         } else {
             ChatUnavailablePlaceholder()
         }
@@ -476,6 +486,27 @@ struct AgentDetailView: View {
     /// The broker-backed chat surface: honest state surfaces for every
     /// non-ready phase, and the SAME row/bubble rendering (ChatScreen
     /// reused, not forked) when content is live.
+    /// TEMP diagnostic (revert with the capture harness): sim-app
+    /// stdout does not pass through XCUITest, file writes do.
+    private static func diagFileWrite(_ line: String) {
+        let url = URL(fileURLWithPath: "/tmp/heeler-proof-signals/build-diag.txt")
+        let stamped = "\(ISO8601DateFormatter().string(from: Date())) \(line)\n"
+        let data = stamped.data(using: .utf8) ?? Data()
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: data)
+        } else if let handle = try? FileHandle(forWritingTo: url) {
+            defer { try? handle.close() }
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: data)
+        }
+    }
+
+    /// TEMP diagnostic (revert with the capture harness).
+    private var diagProbeState: String? {
+        "router=\(chatRouter != nil);broker=\(brokerChat != nil);chat=\(chat != nil);kind=\(agent.agent.agentSession?.kind.rawValue ?? "nil")"
+    }
+    
+
     @ViewBuilder
     private func brokerChatSurface(_ store: AgentChatStore) -> some View {
         switch store.phase {
@@ -500,32 +531,42 @@ struct AgentDetailView: View {
                 authorLabel: "Heeler · \(agent.agent.kind.lowercased())",
                 attachments: chatAttachments,
                 onAskAnswer: { interaction, payloads in
-                    Task {
-                        guard let store = brokerChat,
-                              let matched = store.interactions.first(where: {
-                                  $0.requestId == interaction.id })
-                        else { return }
-                        try? await store.answer(
-                            matched,
-                            answers: payloads.map { payload in
-                                AgentChatAnswer(
-                                    questionId: payload.questionId,
-                                    optionIds: payload.optionIds,
-                                    customText: nil, note: nil)
-                            })
+                    guard let store = brokerChat,
+                          let matched = store.interactions.first(where: {
+                              $0.requestId == interaction.id })
+                    else {
+                        throw AgentChatError.wire(
+                            code: "stale_interaction",
+                            message: "This ask is no longer pending.",
+                            retryable: false)
                     }
+                    try await store.answer(
+                        matched,
+                        answers: payloads.map { payload in
+                            AgentChatAnswer(
+                                questionId: payload.questionId,
+                                optionIds: payload.optionIds,
+                                customText: nil, note: nil)
+                        })
                 },
                 onAskCancel: { interaction in
-                    Task {
-                        try? await brokerChat?.cancelInteraction(
-                            requestId: interaction.id)
+                    guard let store = brokerChat else {
+                        throw AgentChatError.wire(
+                            code: "stale_interaction",
+                            message: "This ask is no longer pending.",
+                            retryable: false)
                     }
+                    try await store.cancelInteraction(requestId: interaction.id)
                 },
                 imageFetcher: { ref in
                     guard let store = brokerChat else {
                         throw CocoaError(.fileNoSuchFile)
                     }
                     return try await store.readBlob(blobId: ref)
+                },
+                fetch: { path in
+                    try await console.readRemoteFile(
+                        at: path, on: agent.hostID)
                 })
                 .overlay(alignment: .bottom) {
                     if case .disconnected(let reason) = store.phase {

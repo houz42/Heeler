@@ -273,6 +273,14 @@ final class ConsoleStore {
     func availableAgentKinds(on hostID: Host.ID) async throws -> [SupportedAgentKind] {
         try await projection(for: hostID).availableAgentKinds()
     }
+    /// Reads one whole remote file (the chat openers' fetch seam:
+    /// Markdown/text previews and file links route through here).
+    func readRemoteFile(at path: String, on hostID: Host.ID) async throws -> Data {
+        try await projection(for: hostID).session.withTransport { transport in
+            try await transport.readTranscriptFile(atPath: path)
+        }
+    }
+
     /// Resolves the Host's remote home directory for the New Workspace
     /// directory browser (#280). Throws the error's own presentation,
     /// including homeDirectoryUnresolvable when the probe fails.

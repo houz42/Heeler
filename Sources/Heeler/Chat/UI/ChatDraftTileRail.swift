@@ -41,6 +41,42 @@ enum ChatDraftItem: Identifiable, Equatable {
     }
 }
 
+/// Pure Send composition for the draft items + prose: every item
+/// rides EXACTLY ONCE and the prose is preserved verbatim minus the
+/// picker-inserted path strings. Extracted so the send contract is
+/// unit-testable.
+enum ChatDraftComposer {
+    static func messageText(items: [ChatDraftItem], draft: String) -> String {
+        var paths: [String] = []
+        var quotes: [String] = []
+        for item in items {
+            switch item {
+            case .image(_, let path, _), .file(_, _, let path):
+                paths.append(path)
+            case .quote(_, let text, _):
+                quotes.append(ChatQuote.draft(for: text))
+            }
+        }
+        var prose = draft
+        for item in items {
+            switch item {
+            case .image(_, let path, _), .file(_, _, let path):
+                while let range = prose.range(of: path) {
+                    prose.removeSubrange(range)
+                }
+            case .quote:
+                break
+            }
+        }
+        var parts: [String] = []
+        parts.append(contentsOf: paths)
+        parts.append(contentsOf: quotes)
+        let trimmed = prose.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { parts.append(trimmed) }
+        return parts.joined(separator: "\n")
+    }
+}
+
 /// One square draft tile: content (thumbnail or type glyph) with a
 /// corner-x remove button overlaying the top-trailing corner.
 struct ChatDraftTile<Content: View>: View {
@@ -132,8 +168,13 @@ struct ChatDraftTileRail: View {
         }
     }
 
+    /// Boundary-correct: n tiles + (n-1) gaps fit the width — the
+    /// unit is the tile+LEADING gap; the last tile needs no trailing
+    /// gap. 2x48 + 8 = 104 fits exactly, floor(104/56)=1 is wrong.
     static func fits(width: CGFloat) -> Int {
-        max(Int(width / (48 + 8)), 1)
+        let tile: CGFloat = 48, gap: CGFloat = 8
+        guard width >= tile else { return 0 }
+        return Int((width + gap) / (tile + gap))
     }
 
     @ViewBuilder

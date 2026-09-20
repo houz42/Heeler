@@ -95,25 +95,41 @@ struct ChatUITests {
         }
     }
 
-    @Test func l1AddsCollapsedToolCallNamesOnly() {
+    @Test func l1CollapsesWorkIntoTheInspectorSummary() {
+        // The redesigned L1: rows still carry the calls (with their
+        // paired results — the Work inspector's sheet needs them), but
+        // visibleItems collapses them into ONE summary item. Thinking
+        // stays hidden at L1.
         let rows = ChatFiltering.visibleRows(
             messages: [assistantTurn()], toolResults: pairedResults(), level: .l1)
-
         let toolRows = rows.filter {
             if case .toolCall = $0 { return true } else { return false }
         }
         #expect(toolRows.count == 1)
         guard case .toolCall(_, _, let call, let result)? = toolRows.first else {
-            Issue.record("L1 must surface the tool call row")
+            Issue.record("L1 must surface the tool call row for the inspector")
             return
         }
         #expect(call.name == "read")
-        // L1 is names only: the result is NOT paired in yet, and thinking is
-        // still hidden.
-        #expect(result == nil)
+        // The result IS paired at L1 now — the inspector sheet shows it.
+        #expect(result?.toolCallId == call.id)
         #expect(rows.allSatisfy {
             if case .thinking = $0 { return false } else { return true }
         })
+
+        // The item level collapses the calls into one Work summary.
+        let items = ChatFiltering.visibleItems(from: rows, level: .l1)
+        let summaries = items.filter {
+            if case .workSummary = $0 { return true } else { return false }
+        }
+        #expect(summaries.count == 1)
+        guard case .workSummary(_, let calls)? = summaries.first else {
+            Issue.record("L1 must collapse tool calls into one Work summary")
+            return
+        }
+        #expect(calls.count == 1)
+        #expect(calls.first?.name == "read")
+        #expect(calls.first?.result?.toolCallId == call.id)
     }
 
     @Test func l2PairsToolResultByToolCallId() {

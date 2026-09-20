@@ -140,18 +140,35 @@ internal struct ChatBubble: Sendable, Equatable, Identifiable {
 /// What the transcript renders: bubbles for conversation text, plain rows
 /// for everything else. Ordering is the row order; bubbles only replace
 /// the consecutive `.text` runs they were built from.
+/// One call in an L1 Work-inspector summary.
+internal struct ChatWorkEntry: Sendable, Equatable, Identifiable {
+    let id: String
+    let name: String
+    let result: ToolResult?
+
+    init(index: Int, name: String, result: ToolResult?) {
+        self.id = "\(name)#\(index)"
+        self.name = name
+        self.result = result
+    }
+}
+
 internal enum ChatTranscriptItem: Sendable, Equatable, Identifiable {
     case bubble(ChatBubble)
     case row(ChatRow)
     /// The L1 Work inspector: consecutive tool calls collapsed into one
-    /// compact summary (names only). L2+ renders the per-call cards.
-    case workSummary(id: String, names: [String])
+    /// compact summary; the inspector's sheet shows each call's result.
+    case workSummary(id: String, calls: [ChatWorkEntry])
+    /// One message's consecutive image blocks as a single small-square
+    /// gallery (not one tile per row).
+    case imageGallery(id: String, images: [ChatImageRef])
 
     var id: String {
         switch self {
         case .bubble(let bubble): bubble.id
         case .row(let row): row.id
         case .workSummary(let id, _): id
+        case .imageGallery(let id, _): id
         }
     }
 }
@@ -227,9 +244,11 @@ internal enum ChatFiltering {
                     case .thinking(let text) where level >= .l3:
                         rows.append(.thinking(messageID: message.id, blockIndex: index, text: text))
                     case .toolCall(let call) where level >= Self.visibilityLevel(for: call):
-                        // The result only pairs in at L2; L1 is the
-                        // name-only line.
-                        let result = level >= .l2 ? resultsByCall[call.id] : nil
+                        // Results pair at every level: at L1 the call
+                        // collapses into the Work-inspector summary,
+                        // whose sheet needs the result; at L2+ the
+                        // per-call card shows it inline.
+                        let result = resultsByCall[call.id]
                         rows.append(.toolCall(messageID: message.id, blockIndex: index, call: call, result: result))
                     case .image(let image):
                         rows.append(.image(messageID: message.id, blockIndex: index, image: image))
@@ -313,7 +332,17 @@ internal enum ChatFiltering {
         // L1 Work-inspector grouping: consecutive tool rows collapse
         // into ONE compact summary. Non-tool rows and L2+ keep the
         // per-row shapes.
-        var workNames: [String] = []
+        var workCalls: [ChatWorkEntry] = []
+        // Consecutive image rows of one message collect into a single
+        // gallery item.
+        var galleryImages: [ChatImageRef] = []
+
+        func flushGallery() {
+            guard !galleryImages.isEmpty else { return }
+            items.append(.imageGallery(
+                id: "gallery-\(items.count)", images: galleryImages))
+            galleryImages = []
+        }
 
         func flush() {
             // The loop only ever buffers user/assistant `.text` rows
@@ -327,10 +356,10 @@ internal enum ChatFiltering {
         }
 
         func flushWork() {
-            guard !workNames.isEmpty else { return }
+            guard !workCalls.isEmpty else { return }
             items.append(.workSummary(
-                id: "work-summary-\(items.count)", names: workNames))
-            workNames = []
+                id: "work-summary-\(items.count)", calls: workCalls))
+            workCalls = []
         }
 
         for row in rows {
@@ -341,17 +370,27 @@ internal enum ChatFiltering {
             }
             if isWorkRow, level == .l1 {
                 flush()
+                flushGallery()
                 switch row {
-                case .toolCall(_, _, let call, _):
-                    workNames.append(call.name)
+                case .toolCall(_, _, let call, let result):
+                    workCalls.append(ChatWorkEntry(
+                        index: workCalls.count, name: call.name, result: result))
                 case .orphanResult(let result):
-                    workNames.append(result.toolName)
+                    workCalls.append(ChatWorkEntry(
+                        index: workCalls.count, name: result.toolName, result: result))
                 default:
                     break
                 }
                 continue
             }
+            if case .image(_, _, let image) = row {
+                flush()
+                flushWork()
+                galleryImages.append(image)
+                continue
+            }
             flushWork()
+            flushGallery()
             if case .text(let messageID, _, let role, _) = row,
                 role == .user || role == .assistant,
                 let previous = run.last,
@@ -371,6 +410,7 @@ internal enum ChatFiltering {
             }
         }
         flushWork()
+        flushGallery()
         flush()
         return items
     }

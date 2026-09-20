@@ -857,6 +857,9 @@ struct AgentPendingQuestionCard: View {
     /// Cancel the whole ask (small secondary; the real
     /// cancelInteraction path — nil hides it honestly).
     var cancel: (() -> Void)? = nil
+    /// A failed/stale submit or cancel — surfaced HERE; choices are
+    /// retained so the user can retry or Back.
+    var errorMessage: String? = nil
 
     private var questions: [PendingAskQuestion] {
         interaction.effectiveQuestions
@@ -904,6 +907,11 @@ struct AgentPendingQuestionCard: View {
                     .foregroundStyle(.secondary)
             }
             optionsView
+            if let errorMessage {
+                Label(errorMessage, systemImage: "exclamationmark.triangle")
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
             if step > 1 || cancel != nil {
                 HStack {
                     if let back, step > 1 {
@@ -979,6 +987,57 @@ struct AgentPendingQuestionCard: View {
     }
 }
 
+// MARK: - L1 Work inspector
+
+/// The tapped Work summary's payload: every call in the run with its
+/// paired result (nil while still running).
+struct ChatWorkCallDetail: Identifiable {
+    struct Entry: Identifiable {
+        let id = UUID().uuidString
+        let name: String
+        let result: ToolResult?
+    }
+    let id: String
+    let entries: [Entry]
+}
+
+/// The inspector sheet: one row per call, its result body inline —
+/// the L1 surface for call results.
+struct ChatWorkInspectorSheet: View {
+    let detail: ChatWorkCallDetail
+
+    var body: some View {
+        NavigationStack {
+            List(detail.entries) { entry in
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Image(systemName: entry.result == nil
+                            ? "gear" : (entry.result?.isError == true
+                                ? "exclamationmark.triangle" : "checkmark.circle"))
+                            .foregroundStyle(
+                                entry.result?.isError == true ? .red : .secondary)
+                        Text(entry.name)
+                            .font(.system(.footnote, design: .monospaced))
+                    }
+                    if let result = entry.result {
+                        ChatResultBody(result: result)
+                    } else {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("Running…")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .navigationTitle("Work · \(detail.entries.count) calls")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
+
 // MARK: - Transcript image tiles + reader (§D fix 3)
 
 /// One square gallery tile for an image block. Loads bytes through the
@@ -987,6 +1046,8 @@ struct AgentPendingQuestionCard: View {
 struct ChatTranscriptImageTile: View {
     let image: ChatImageRef
     var fetch: ((String) async throws -> Data)?
+    /// The square's side (56 in galleries, 96 standalone).
+    var side: CGFloat = 96
     var openReader: () -> Void
 
     @State private var loadedImage: UIImage?
@@ -1013,7 +1074,7 @@ struct ChatTranscriptImageTile: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .frame(width: 96, height: 96)
+            .frame(width: side, height: side)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)

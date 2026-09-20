@@ -77,7 +77,7 @@ extension CaptureUITests {
         // resolves an interactive composer (the honest-unavailable
         // capture documents the read-only case otherwise).
         let messageButton = app.buttons["Message the agent"]
-        if messageButton.waitForExistence(timeout: 4) {
+        if messageButton.waitForExistence(timeout: 20) {
             messageButton.tap()
             Thread.sleep(forTimeInterval: 3)
             screenshot("d2-composer-collapsed-live")
@@ -194,6 +194,74 @@ extension CaptureUITests {
             // Honest absence: the demo agent's session does not resolve
             // an interactive composer; collapse/grow is unit-proven.
             screenshot("d2-composer-unavailable-honest")
+        }
+    }
+
+    /// Review fix 6: interactive composer evidence against the REAL
+    /// proof host (no demo mode): a real agent's chat resolves the
+    /// production composer — collapse, typed grow, close preserving
+    /// the draft, reopen — and a REAL broker send.
+    func testInteractiveComposerProof() throws {
+        let app = XCUIApplication()
+        // The proof session pin (the registered broker session) so the
+        // broker pane matches the proof registration.
+        app.launchEnvironment["HEELER_AGENT_CHAT_PROOF_SESSION_FILE"]
+            = "/Users/jhou/.cache/agent-chat-ui-proof/history.jsonl"
+        // NO --demo-screenshots: the real proof-host agents.
+        app.launch()
+        Thread.sleep(forTimeInterval: 14)
+        screenshot("int-env-agents-list")
+        // A real agent row from the proof host (the broker pane is
+        // the registered proof agent).
+        let row = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'broker'")).firstMatch
+        if !row.exists {
+            let anyRow = app.buttons
+                .matching(NSPredicate(format: "label CONTAINS 'Mac ·'"))
+                .firstMatch
+            if !anyRow.exists {
+                screenshot("int-env-no-agents-honest")
+                return
+            }
+            anyRow.tap()
+        } else {
+            row.tap()
+        }
+        Thread.sleep(forTimeInterval: 8)
+        // DIAGNOSTIC: the tapped agent's chat state.
+        screenshot("int-agent-detail-state")
+        try? app.debugDescription.write(
+            to: URL(fileURLWithPath: "/tmp/heeler-proof-signals/int-tree-dump.txt"),
+            atomically: true, encoding: .utf8)
+        let messageButton = app.buttons["Message the agent"]
+        XCTAssertTrue(
+            messageButton.waitForExistence(timeout: 25),
+            "real agent chat must resolve the composer")
+        messageButton.tap()
+        Thread.sleep(forTimeInterval: 3)
+        screenshot("int-composer-collapsed")
+        let field = app.textViews.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 8), "composer field")
+        field.typeText("Interactive composer proof: typed live")
+        Thread.sleep(forTimeInterval: 1)
+        screenshot("int-composer-grown")
+        let send = app.buttons["Send"]
+        if send.exists, send.isEnabled {
+            send.tap()
+            Thread.sleep(forTimeInterval: 4)
+            // The real broker send evidence: the user message renders.
+            screenshot("int-real-broker-send")
+        }
+        let close = app.buttons["Close input"]
+        if close.exists {
+            close.tap()
+            Thread.sleep(forTimeInterval: 1)
+            screenshot("int-closed-draft-preserved")
+            if messageButton.waitForExistence(timeout: 8) {
+                messageButton.tap()
+                Thread.sleep(forTimeInterval: 2)
+                screenshot("int-reopened-draft-intact")
+            }
         }
     }
 

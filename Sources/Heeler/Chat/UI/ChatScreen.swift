@@ -82,9 +82,11 @@ struct ChatScreen: View {
         pendingUnsupported: Bool = false,
         authorLabel: String = "",
         attachments: ChatAttachments? = nil,
-        onAskAnswer: ((PendingInteraction, [PendingAskAnswerPayload]) -> Void)? = nil,
-        onAskCancel: ((PendingInteraction) -> Void)? = nil,
-        imageFetcher: ((String) async throws -> Data)? = nil
+        onAskAnswer: ((PendingInteraction, [PendingAskAnswerPayload]) async throws -> Void)? = nil,
+        onAskCancel: ((PendingInteraction) async throws -> Void)? = nil,
+        imageFetcher: ((String) async throws -> Data)? = nil,
+        fetch: RemoteFileFetcher? = nil,
+        diagRouterProbe: String? = nil
     ) {
         self.paneID = paneID
         self.agentName = agentName
@@ -102,6 +104,8 @@ struct ChatScreen: View {
         self.onAskAnswer = onAskAnswer
         self.onAskCancel = onAskCancel
         self.imageFetcher = imageFetcher
+        self.fetch = fetch
+        self.diagRouterProbe = diagRouterProbe
         self._level = State(initialValue: initialLevel)
     }
 
@@ -237,6 +241,20 @@ struct ChatScreen: View {
             ChatTranscriptImageReader(image: image, fetch: imageFetcher)
                 .presentationDetents([.large])
         }
+        // The L1 Work inspector's call details.
+        .sheet(item: $inspectedWork) { detail in
+            ChatWorkInspectorSheet(detail: detail)
+                .presentationDetents([.medium, .large])
+        }
+        .overlay(alignment: .top) {
+            if let diagRouterProbe {
+                Text(diagRouterProbe)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.red)
+                    .padding(.top, 120)
+                    .accessibilityLabel("diag-probe")
+            }
+        }
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
         // Hiding the back button also disables the interactive pop gesture;
@@ -368,48 +386,95 @@ struct ChatScreen: View {
             } else if case .pending(let interaction) = row {
                 askCard(interaction)
             } else if case .image(_, _, let image) = row {
+                // Non-consecutive singles still render as one tile
+                // (they arrive grouped via .imageGallery otherwise).
                 ChatTranscriptImageTile(
-                    image: image, fetch: imageFetcher)
+                    image: image, fetch: imageFetcher, side: 56)
                 { viewingImage = image }
             } else {
                 LinkifiedChatRow(row: row, router: openRouter)
             }
-        case .workSummary(_, let names):
-            // The L1 Work inspector: one compact summary of the call
-            // run. The level switcher expands to per-call cards (L2).
-            HStack(spacing: 6) {
-                Label(
-                    "Work · \(names.count) call\(names.count == 1 ? "" : "s")",
-                    systemImage: "wrench.and.screwdriver")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 4) {
-                        ForEach(Array(names.enumerated()), id: \.offset) { _, name in
-                            Text(name)
-                                .font(.caption2.monospaced())
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(
-                                    Color.secondary.opacity(0.08),
-                                    in: Capsule())
-                                .foregroundStyle(.secondary)
-                        }
+        case .imageGallery(_, let images):
+            // One message's images as a single small-square gallery.
+            HStack(spacing: 8) {
+                ForEach(images.prefix(5)) { image in
+                    ChatTranscriptImageTile(
+                        image: image, fetch: imageFetcher, side: 56)
+                    { viewingImage = image }
+                }
+                if images.count > 5 {
+                    Button {
+                        viewingImage = images[5]
+                    } label: {
+                        Text("+\(images.count - 5)")
+                            .font(.footnote.weight(.medium))
+                            .frame(width: 56, height: 56)
+                            .background(
+                                Color.secondary.opacity(0.1),
+                                in: RoundedRectangle(cornerRadius: 8))
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(
+                        "\(images.count - 5) more images")
                 }
             }
             .padding(.horizontal, 12)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Work summary: \(names.count) tool calls")
+        case .workSummary(_, let calls):
+            let names = calls.map { $0.name }
+            // The L1 Work inspector: one compact summary of the call
+            // run, TAPPABLE — the sheet lists every call with its
+            // result. The level switcher expands to per-call rows (L2).
+            Button {
+                inspectedWork = ChatWorkCallDetail(
+                    id: "inspector",
+                    entries: calls.map { call in
+                        ChatWorkCallDetail.Entry(
+                            name: call.name, result: call.result)
+                    })
+            } label: {
+                HStack(spacing: 6) {
+                    Label(
+                        "Work · \(names.count) call\(names.count == 1 ? "" : "s")",
+                        systemImage: "wrench.and.screwdriver")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 4) {
+                            ForEach(Array(names.enumerated()), id: \.offset) { _, name in
+                                Text(name)
+                                    .font(.caption2.monospaced())
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(
+                                        Color.secondary.opacity(0.08),
+                                        in: Capsule())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Work summary: \(names.count) tool calls, opens details")
         }
     }
 
     // -- Pending ask flow (real multi-question, requestId-keyed) --
 
-    /// The ask delivery seam: nil keeps the card read-only (options
-    /// render, choosing does nothing, Cancel hidden — honest).
-    var onAskAnswer: ((PendingInteraction, _ answers: [PendingAskAnswerPayload]) -> Void)? = nil
-    var onAskCancel: ((PendingInteraction) -> Void)? = nil
+    /// The ask delivery seams: nil keeps the card read-only (options
+    /// render, choosing does nothing, Cancel hidden — honest). THROWS:
+    /// a failed/stale submission RETAINS every choice and surfaces the
+    /// error on the card; nothing is silently swallowed.
+    var onAskAnswer: ((PendingInteraction, _ answers: [PendingAskAnswerPayload]) async throws -> Void)? = nil
+    var onAskCancel: ((PendingInteraction) async throws -> Void)? = nil
+    /// The last ask seam failure, rendered on the card; choices stay.
+    @State private var askError: String?
 
     /// 1-based step per requestId (a re-ask after resolution starts
     /// fresh because the id changes).
@@ -441,29 +506,37 @@ struct ChatScreen: View {
             },
             confirmMultiSelect:
                 (question.multi && onAskAnswer != nil)
-                ? { submitAsk(interaction) } : nil,
+                ? { confirmMultiAsk(interaction) } : nil,
             back: step > 1 ? {
                 askStepByRequest[interaction.id] = step - 1
             } : nil,
             cancel: onAskCancel.map { cancel in
-                { cancel(interaction) }
-            })
+                { Task { @MainActor in
+                    do { try await cancel(interaction) }
+                    catch { askError = "Cancel failed: \(error.localizedDescription)" }
+                } } as () -> Void
+            },
+            errorMessage: askError)
     }
 
-    /// Single-choice auto-advances; multi-select toggles the set.
+    /// Choosing records the answer; ANY question (single or multi)
+    /// advances — only the LAST question's choice submits the whole
+    /// payload once. Multi-select toggles still submit via Confirm.
     private func chooseAskOption(
         _ interaction: PendingInteraction,
         question: PendingAskQuestion, optionId: String
     ) {
+        var perQuestion = askChoices[interaction.id] ?? [:]
         if question.multi {
-            var perQuestion = askChoices[interaction.id] ?? [:]
+            // Multi questions NEVER advance on a toggle (the user may
+            // want more selections); their explicit Confirm both
+            // advances (middle questions) and submits (the last one).
             var set = perQuestion[question.id] ?? []
             if set.contains(optionId) { set.remove(optionId) }
             else { set.insert(optionId) }
             perQuestion[question.id] = set
             askChoices[interaction.id] = perQuestion
         } else {
-            var perQuestion = askChoices[interaction.id] ?? [:]
             perQuestion[question.id] = [optionId]
             askChoices[interaction.id] = perQuestion
             let step = askStepByRequest[interaction.id] ?? 1
@@ -476,18 +549,45 @@ struct ChatScreen: View {
         }
     }
 
-    /// The final answer delivery: all recorded choices become payloads
-    /// and the owner's seam takes over.
+    /// A multi question's Confirm: ADVANCES to the next question when
+    /// more remain (choices preserved), SUBMITS the full payload when
+    /// this was the last one. The card's Confirm is disabled until the
+    /// current set is non-empty; earlier steps all recorded.
+    private func confirmMultiAsk(_ interaction: PendingInteraction) {
+        let step = askStepByRequest[interaction.id] ?? 1
+        let questions = interaction.effectiveQuestions
+        guard step >= 1, step <= questions.count else { return }
+        let current = questions[step - 1]
+        guard let set = askChoices[interaction.id]?[current.id], !set.isEmpty
+        else { return }
+        if step >= questions.count {
+            submitAsk(interaction)
+        } else {
+            askStepByRequest[interaction.id] = step + 1
+        }
+    }
+
+    /// The final answer delivery: EVERY question must carry a choice —
+    /// a partial payload is never sent (the caller's Confirm gates the
+    /// last multi question; earlier single-choice steps all recorded).
     private func submitAsk(_ interaction: PendingInteraction) {
         guard let onAskAnswer else { return }
         let perQuestion = askChoices[interaction.id] ?? [:]
         var payloads: [PendingAskAnswerPayload] = []
         for question in interaction.effectiveQuestions {
-            guard let ids = perQuestion[question.id], !ids.isEmpty else { continue }
+            guard let ids = perQuestion[question.id], !ids.isEmpty else { return }
             payloads.append(PendingAskAnswerPayload(
                 questionId: question.id, optionIds: ids.sorted()))
         }
-        onAskAnswer(interaction, payloads)
+        Task { @MainActor in
+            do {
+                try await onAskAnswer(interaction, payloads)
+                askError = nil
+            } catch {
+                // Retain every choice; the user re-submits or Backs.
+                askError = "Answer failed: \(error.localizedDescription)"
+            }
+        }
     }
 
     /// The message-actions selection (final interaction spec): the one
@@ -610,7 +710,7 @@ struct ChatScreen: View {
             if isPasteImageAttachment {
                 // Paste image: the path the staging store inserted into
                 // the draft mirror comes OUT of the draft (the tile is
-                // the visible attachment) and lands as a draft item.
+                // the visible attachment) and lands as ONE draft item.
                 draft = attachments.draftStore.draft
                 if let range = draft.range(of: outcome.path) {
                     draft.removeSubrange(range)
@@ -621,22 +721,24 @@ struct ChatScreen: View {
                     previewData: pendingImagePreviewData))
                 pendingImagePreviewData = nil
                 isPasteImageAttachment = false
-            }
-            // Picker paths keep the staging store's caret-faithful
-            // path insert in the draft AND record a draft item, so the
-            // tile's corner-x can remove the path from the draft too.
-            switch outcome.medium {
-            case .image:
-                draftItems.append(.image(
-                    id: UUID().uuidString,
-                    remotePath: outcome.path,
-                    previewData: nil))
-            case .file:
-                let name = pendingFileURL?.lastPathComponent ?? "File"
-                draftItems.append(.file(
-                    id: UUID().uuidString,
-                    name: name, remotePath: outcome.path))
-                pendingFileURL = nil
+            } else {
+                // Picker paths keep the staging store's caret-faithful
+                // path insert in the draft AND record a draft item, so
+                // the tile's corner-x can remove the path from the
+                // draft too. Exactly one item per completion.
+                switch outcome.medium {
+                case .image:
+                    draftItems.append(.image(
+                        id: UUID().uuidString,
+                        remotePath: outcome.path,
+                        previewData: nil))
+                case .file:
+                    let name = pendingFileURL?.lastPathComponent ?? "File"
+                    draftItems.append(.file(
+                        id: UUID().uuidString,
+                        name: name, remotePath: outcome.path))
+                    pendingFileURL = nil
+                }
             }
         case nil:
             break
@@ -684,8 +786,14 @@ struct ChatScreen: View {
     /// Resolves a wire image ref to bytes (broker blob.read). Nil =
     /// images render as honest unavailable tiles.
     var imageFetcher: ((String) async throws -> Data)? = nil
+    /// TEMP diagnostic (revert with the capture harness): the surface
+    /// owner's wiring state, rendered for interactive-proof debugging.
+    /// Nil (all release paths) = never rendered.
+    var diagRouterProbe: String? = nil
     /// The transcript image being read full-size.
     @State private var viewingImage: ChatImageRef?
+    /// The L1 work inspector's call detail (tapped summary row).
+    @State private var inspectedWork: ChatWorkCallDetail?
 
     // -- Attachment flow state (the + button's pickers and the image
     // paste share the staging pipeline; the pending-image tile rides
@@ -935,18 +1043,14 @@ struct ChatScreen: View {
     /// The message Send delivers: each held quote as a block-quoted
     /// prefix, then the draft's own text. Attachment paths ride ahead
     /// (the reference convention the agent already reads).
+    /// The message Send delivers, built so every draft item rides
+    /// EXACTLY ONCE and the user's text is preserved verbatim:
+    /// each attachment's remote path (paste images never had one in
+    /// the draft; picker items do — the path is stripped from the
+    /// draft text as it is emitted into the message), then quotes
+    /// block-quoted, then the remaining prose.
     private func composedMessageText() -> String {
-        var parts: [String] = []
-        if case .image(_, let path, _)? = draftItems.first, draft.isEmpty {
-            // Image-only send: the path reference is the message.
-            return path
-        }
-        for case .quote(_, let text, _) in draftItems {
-            parts.append(ChatQuote.draft(for: text))
-        }
-        let draftText = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !draftText.isEmpty { parts.append(draftText) }
-        return parts.joined(separator: "\n\n")
+        ChatDraftComposer.messageText(items: draftItems, draft: draft)
     }
 
     private func clearDraftAfterSend() {
