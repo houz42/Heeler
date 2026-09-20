@@ -20,14 +20,26 @@ final class SettingsReadingProofTests: XCTestCase {
     }
 
     private func openSettings() {
-        let trigger = app.buttons[UITestFixtures.navigationTrigger].firstMatch
-        XCTAssertTrue(
-            trigger.waitForExistence(timeout: UITestTimeouts.launch))
-        trigger.tap()
-        let settings = app.buttons["Settings"].firstMatch
-        XCTAssertTrue(
-            settings.waitForExistence(timeout: UITestTimeouts.standard))
-        settings.tap()
+        // Width-aware: wide layouts show the reserved sidebar directly
+        // (reveal the agents column first on iPad, where the Console
+        // opens detail-only); phone opens the drawer from the trigger.
+        let wideSidebar = app.otherElements["App destinations"].firstMatch
+        if wideSidebar.waitForExistence(timeout: 2) {
+            let settings = wideSidebar.buttons["Settings"].firstMatch
+            XCTAssertTrue(
+                settings.waitForExistence(timeout: UITestTimeouts.standard),
+                "the wide sidebar must offer Settings")
+            settings.tap()
+        } else {
+            let trigger = app.buttons[UITestFixtures.navigationTrigger].firstMatch
+            XCTAssertTrue(
+                trigger.waitForExistence(timeout: UITestTimeouts.launch))
+            trigger.tap()
+            let settings = app.buttons["Settings"].firstMatch
+            XCTAssertTrue(
+                settings.waitForExistence(timeout: UITestTimeouts.standard))
+            settings.tap()
+        }
         XCTAssertTrue(
             app.staticTexts["Notifications"].firstMatch
                 .waitForExistence(timeout: UITestTimeouts.standard),
