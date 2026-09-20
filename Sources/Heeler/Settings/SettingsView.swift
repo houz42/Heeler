@@ -71,6 +71,10 @@ struct SettingsView: View {
     /// default conversation detail level.
     @State private var readingTextSize = ReadingTextSizeSettings()
     @State private var defaultDetailLevel = DefaultDetailLevelSettings()
+    /// Direct focus report to the root (see AppNavigationFocusReport):
+    /// fired on path changes; the root suppresses ALL destination chrome
+    /// while any page's sub-page is pushed.
+    @Environment(\.appNavigationFocusReport) private var focusReport
 
     static let agentListDestination = SettingsAgentListDestination.fields
     static let headerLayoutDestination = SettingsHeaderLayoutDestination.header
@@ -208,11 +212,15 @@ struct SettingsView: View {
             .navigationTitle(appDestination == nil ? "Settings" : "")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if appDestination != nil, !isMenuSuppressed {
+                // Toolbar items can MISS environment updates (#A v2
+                // lesson), so the heading's visibility is driven by the
+                // page's OWN path state — root shows the trigger, a
+                // pushed sub-page shows only its own back button.
+                if appDestination != nil, path.isEmpty {
                     ToolbarItem(placement: .topBarLeading) {
                         AppDestinationHeading(pageTitle: "Settings")
                     }
-                } else {
+                } else if appDestination == nil {
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Done") { dismiss() }
                     }
@@ -223,6 +231,9 @@ struct SettingsView: View {
             // aside for this page too.
             .modifier(AppDestinationPageFocusModifier(
                 destination: .settings, isContentPushed: !path.isEmpty))
+            .onChange(of: path, initial: true) { _, newPath in
+                focusReport?(.settings, !newPath.isEmpty)
+            }
         }
     }
 

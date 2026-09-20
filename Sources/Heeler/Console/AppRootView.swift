@@ -115,6 +115,9 @@ struct AppRootView: View {
             .environment(\.appDestination, $destination)
             .environment(\.appNavigationTrigger, triggerContext(isWide: isWide))
             .environment(\.appNavigationTriggerFocus, $isTriggerFocused)
+            // Direct focus reports: preferences do not reliably cross
+            // navigationDestination boundaries, so pages ALSO report
+            // their pushed state through this closure (onChange-driven).
             .environment(
                 \.appNavigationFocusReport,
                 AppNavigationFocusReport { page, isPushed in
@@ -210,6 +213,16 @@ private struct AppDestinationPageFocusKey: PreferenceKey {
 /// The modifier a page applies to report pushed-navigation state upward.
 /// Applied INSIDE the page (on the NavigationStack's content), so hidden
 /// pages report too — their detail is real state even while not visible.
+/// A page's direct focus report to the root. Preferences do not cross
+/// navigationDestination boundaries; this closure does.
+struct AppNavigationFocusReport {
+    var report: (AppDestination, Bool) -> Void
+
+    func callAsFunction(_ page: AppDestination, _ isPushed: Bool) {
+        report(page, isPushed)
+    }
+}
+
 struct AppDestinationPageFocusModifier: ViewModifier {
     let destination: AppDestination
     let isContentPushed: Bool
@@ -236,6 +249,11 @@ extension EnvironmentValues {
     /// True while a page's pushed detail owns the window — ALL global
     /// destination chrome (trigger, drawer, sidebar) hides (#A).
     @Entry var appDestinationMenuSuppressed: Bool = false
+    /// Direct per-page focus reporting: pages call this when their own
+    /// pushed-navigation state changes. `isPushed` true = the page's
+    /// detail owns the window.
+    @Entry var appNavigationFocusReport:
+        AppNavigationFocusReport? = nil
     /// Focus return (#A): the drawer hands focus back to the trigger on
     /// dismissal. Optional — nil outside `AppRootView`, where the heading
     /// simply does not participate in focus return.

@@ -94,6 +94,7 @@ struct HostListView: View {
     /// "Hosts" title.
     @Environment(\.appDestination) private var appDestination
     @Environment(\.appDestinationMenuSuppressed) private var isMenuSuppressed
+    @Environment(\.appNavigationFocusReport) private var focusReport
     private var destinationMenuTitleFallback: String {
         appDestination == nil ? "Hosts" : ""
     }
@@ -164,11 +165,16 @@ struct HostListView: View {
             // detail makes the root's destination chrome step aside.
             .modifier(AppDestinationPageFocusModifier(
                 destination: .hosts, isContentPushed: !path.isEmpty))
+            .onChange(of: path, initial: true) { _, newPath in
+                focusReport?(.hosts, !newPath.isEmpty)
+            }
             .toolbar {
                 // Handoff §A revision: the root heading (trigger + plain
                 // title) replaces the selector when the app root mounts
                 // this page; sheets keep the plain title.
-                if appDestination != nil, !isMenuSuppressed {
+                // Visibility driven by the page's OWN path state —
+                // toolbar items can miss environment updates (#A v2).
+                if appDestination != nil, path.isEmpty {
                     ToolbarItem(placement: .topBarLeading) {
                         AppDestinationHeading(pageTitle: "Hosts")
                     }
