@@ -41,6 +41,33 @@ final class AgentsRedesignProofTests: XCTestCase {
         app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
     }
 
+    /// THE destination-navigation seam (merge-check follow-up): opens the
+    /// destination surface for `destination` ("Hosts"/"Settings"). The
+    /// integrated UI's compact destination menu lives behind the title
+    /// ("Agents, switch destination"); when NavRedesign's drawer revision
+    /// changes the interaction again, THIS helper is the one-line update.
+    private func navigateToDestination(_ destination: String) {
+        // Integrated tree: the compact destination menu behind the title
+        // ("Agents, switch destination"). Branch tree: the sheet-era
+        // toolbar buttons. Either path lands the same destination.
+        let menu = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "switch destination")).firstMatch
+        if menu.waitForExistence(timeout: UITestTimeouts.standard) {
+            menu.tap()
+            let option = app.buttons[destination].firstMatch
+            XCTAssertTrue(
+                option.waitForExistence(timeout: UITestTimeouts.standard),
+                "the menu must offer \(destination)")
+            option.tap()
+            return
+        }
+        let toolbarButton = app.buttons[destination].firstMatch
+        XCTAssertTrue(
+            toolbarButton.waitForExistence(timeout: UITestTimeouts.standard),
+            "neither the destination menu nor a \(destination) button is reachable")
+        toolbarButton.tap()
+    }
+
     /// The on-screen keyboard's search key: the phone's real Enter
     /// (submitLabel(.search)) — HID-injected return does not route through
     /// the software keyboard's submit path on this simulator.
@@ -211,8 +238,8 @@ final class AgentsRedesignProofTests: XCTestCase {
         app.waitForKeyboard()
         searchField.typeText("Pol")
         sleep(1)
-        // Open Hosts (a destination-style surface): keyboard must resign.
-        app.buttons["Hosts"].firstMatch.tap()
+        // Open Hosts via the destination menu: keyboard must resign.
+        navigateToDestination("Hosts")
         XCTAssertTrue(app.waitForKeyboardDismissal(),
                       "the keyboard must resign when Hosts opens")
         captureScreenshot(app, "agents-dest-hosts-no-keyboard", lifetime: .keepAlways)
@@ -235,7 +262,7 @@ final class AgentsRedesignProofTests: XCTestCase {
         // Settings arrival: same blur rule.
         searchField.tap()
         app.waitForKeyboard()
-        app.buttons["Settings"].firstMatch.tap()
+        navigateToDestination("Settings")
         XCTAssertTrue(app.waitForKeyboardDismissal(),
                       "the keyboard must resign when Settings opens")
         captureScreenshot(app, "agents-dest-settings-no-keyboard", lifetime: .keepAlways)
