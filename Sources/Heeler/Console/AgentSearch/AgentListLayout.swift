@@ -138,16 +138,12 @@ enum AgentListLayout {
         agent.agent.stateChangeSeq ?? 0
     }
 
-    /// The row's title identity for A–Z ordering: the server-reported name
-    /// when the snapshot carried one, else the terminal titles (the same
-    /// identity search scores). The detected kind is not a title — a
-    /// nameless agent sorts by what its row shows, not by its program.
+    /// The row's title for A–Z ordering (re-review finding #1): THE
+    /// shared visible-title projection the card renders —
+    /// `AgentCardRowTitle` — so the sort key is exactly the text on
+    /// screen.
     private static func rowTitle(_ agent: ConsoleAgent) -> String {
-        if let name = agent.agent.name, !name.isEmpty { return name }
-        let stripped = agent.agent.terminalTitleStripped ?? ""
-        if !stripped.isEmpty { return stripped }
-        if !agent.agent.title.isEmpty { return agent.agent.title }
-        return agent.agent.paneTitle ?? agent.agent.displayName
+        AgentCardRowTitle.title(for: agent)
     }
 
     private static func snapshotOrder(_ agent: ConsoleAgent) -> Int {

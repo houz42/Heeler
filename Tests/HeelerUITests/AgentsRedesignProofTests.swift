@@ -211,9 +211,16 @@ final class AgentsRedesignProofTests: XCTestCase {
         // A broad query yields many suggestions; the list must stay bounded.
         searchField.typeText("e")
         sleep(1)
+        // The demo fixture yields MORE than 5 suggestions for a broad
+        // query: the list is bounded (~5 rows) and every deep row stays
+        // reachable by scrolling (and, with a hardware keyboard, the
+        // highlight-follow scrollTo brings the arrowed row into view —
+        // that follow is onChange-implemented; arrow arithmetic is
+        // unit-pinned in the store tests).
+        let suggestionButtons = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'agents' OR label CONTAINS ':'")).count
+        XCTAssertGreaterThanOrEqual(suggestionButtons, 3, "a broad query yields several suggestions")
         captureScreenshot(app, "agents-bounded-suggestions", lifetime: .keepAlways)
-        // The bounded list keeps the first row visible above the keyboard;
-        // scroll it and find a deep row still reachable.
         let suggestionList = app.scrollViews.firstMatch
         if suggestionList.exists {
             suggestionList.swipeUp(velocity: .fast)

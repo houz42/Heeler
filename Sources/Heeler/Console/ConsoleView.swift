@@ -516,6 +516,14 @@ struct ConsoleView: View {
                     }
                 }
                 .listStyle(.plain)
+                // Re-review finding #3: the grouped mode's approved compact
+                // strip — native plain-List section spacing is far looser
+                // than the design; tighten the section spacing and the
+                // minimum header/row heights while Dynamic Type still
+                // scales fonts and tap targets keep their minimums. The
+                // flat list keeps its native spacing.
+                .modifier(CompactGroupedListSpacing(
+                    applies: agentListLayout.grouping != .none))
             }
         }
     }
@@ -744,6 +752,26 @@ struct ConsoleView: View {
         await console.retryHost(id)
         try? await Task.sleep(for: .milliseconds(1_200))
         manualReconnectInFlightHostIDs.remove(id)
+    }
+}
+
+/// Re-review finding #3: the grouped Agents list's approved compact strip.
+/// Native plain-List sections carry large default gaps; tighten the
+/// section spacing and the minimum header/row heights for the grouped
+/// mode only (flat keeps native spacing). Fonts still follow Dynamic
+/// Type and the group toggle keeps a 44pt-scale hit area.
+private struct CompactGroupedListSpacing: ViewModifier {
+    let applies: Bool
+
+    func body(content: Content) -> some View {
+        if applies {
+            content
+                .listSectionSpacing(2)
+                .environment(\.defaultMinListHeaderHeight, 8)
+                .environment(\.defaultMinListRowHeight, 8)
+        } else {
+            content
+        }
     }
 }
 

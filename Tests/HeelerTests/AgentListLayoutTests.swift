@@ -80,6 +80,23 @@ struct AgentListLayoutTests {
         #expect(ordered.map(\.agent.paneID) == ["needs", "working", "idle", "done"])
     }
 
+    @Test func titleOrderFollowsTheRenderedTitleNotTheName() {
+        // Review finding #1: A–Z must sort the text the row RENDERS (the
+        // conversation title), not the server-reported name — the two can
+        // alphabetically disagree.
+        let agents = [
+            makeAgent(title: "Zulu task", name: "alpha", paneID: "name-first"),
+            makeAgent(title: "About page", name: "zulu", paneID: "title-first"),
+        ]
+        let ordered = AgentListLayout.ordered(agents, by: .title)
+        #expect(ordered.map { (row: ConsoleAgent) in row.agent.paneID }
+            == ["title-first", "name-first"],
+            "the rendered title (About) must sort before (Zulu)")
+        // And the rendered rows use the same projection.
+        #expect(AgentCardRowTitle.title(for: agents[0]) == "Zulu task")
+        #expect(AgentCardRowTitle.title(for: agents[1]) == "About page")
+    }
+
     @Test func titleOrderIsAlphabeticalStable() {
         let agents = [
             makeAgent(title: "beta", paneID: "b"),

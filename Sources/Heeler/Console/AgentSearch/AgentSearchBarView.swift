@@ -175,35 +175,44 @@ struct AgentSearchBarView: View {
         }
     }
 
-    /// The suggestion list (review finding #6): bounded and scrollable —
-    /// at most ~5 rows visible, so a raised keyboard can never wall the
-    /// results off.
+    /// The suggestion list (review finding #6 + re-review #2): bounded,
+    /// scrollable, and the keyboard highlight FOLLOWED — arrowing past
+    /// the visible window scrolls it into view, so Enter always accepts
+    /// a choice the user can see.
     @ViewBuilder
     private var suggestionsList: some View {
         let suggestions = store.engine.suggestions(over: agents)
         if !suggestions.isEmpty {
-            ScrollView {
-                VStack(spacing: 0) {
-                    Text(store.suggestionsHelp)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 4)
-                    ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, suggestion in
-                        AgentSearchSuggestionRow(
-                            suggestion: suggestion,
-                            isHighlighted: index == store.highlightIndex,
-                            isSelected: suggestion.kind == .value
-                                && store.engine.filters.contains {
-                                    $0.field == suggestion.field && $0.value == suggestion.value
-                                })
-                            .onTapGesture { store.accept(suggestion) }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        Text(store.suggestionsHelp)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 4)
+                        ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, suggestion in
+                            AgentSearchSuggestionRow(
+                                suggestion: suggestion,
+                                isHighlighted: index == store.highlightIndex,
+                                isSelected: suggestion.kind == .value
+                                    && store.engine.filters.contains {
+                                        $0.field == suggestion.field && $0.value == suggestion.value
+                                    })
+                                .id(suggestion.id)
+                                .onTapGesture { store.accept(suggestion) }
+                        }
                     }
                 }
+                .frame(maxHeight: 5 * 44)
+                .background(Color(.secondarySystemBackground))
+                // Focus-follow: the highlighted row scrolls into view.
+                .onChange(of: store.highlightIndex) { _, highlighted in
+                    guard highlighted >= 0 else { return }
+                    proxy.scrollTo(suggestions[highlighted].id, anchor: .center)
+                }
             }
-            .frame(maxHeight: 5 * 44)
-            .background(Color(.secondarySystemBackground))
         }
     }
 }
