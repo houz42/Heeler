@@ -81,12 +81,7 @@ struct ConsoleView: View {
     /// destination chrome inside chat/terminal/details — not even a
     /// plain title, which the native toolbar would wrap in its own
     /// capsule chrome).
-    @Environment(\.appDestination) private var appDestination
     @Environment(\.appDestinationMenuSuppressed) private var isMenuSuppressed
-    private var destinationMenu: AppDestinationMenu? {
-        guard !isMenuSuppressed else { return nil }
-        return appDestination.map { AppDestinationMenu(selection: $0) }
-    }
 
     var body: some View {
         // A split view instead of a plain stack for the iPad's sake: regular
@@ -134,6 +129,13 @@ struct ConsoleView: View {
                 // the Console's live connections.
                 discovery: SessionDiscoveryStore(
                     listSessions: { hostID in try await console.listSessions(on: hostID) }))
+            // A sheet is NOT a top-level page: strip the root's nav env so
+            // the sheet keeps its own plain title, Done-style chrome, and
+            // target-specific pushes (the host-issue row's Offline Server
+            // detail) exactly as before the destination redesign.
+            .environment(\.appDestination, nil)
+            .environment(\.appNavigationTrigger, nil)
+            .environment(\.appDestinationMenuSuppressed, false)
             .modifier(ConsoleSheetPresentationModifier(
                 presentation: ConsoleSheetPresentation(
                     horizontalSizeClass: horizontalSizeClass)))
@@ -228,15 +230,14 @@ struct ConsoleView: View {
     // graph small enough for the type-checker.
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        // The approved compact destination selector, top left; the
-        // sheet-based Hosts/Settings buttons it replaces are gone (Nav
-        // slice). The host-filter menu is gone too — search's host: chip
-        // subsumed it (user directive). Ordering/grouping live in the
-        // list's own view sheet (§B).
-        if let destinationMenu {
-            ToolbarItem(placement: .topBarLeading) {
-                destinationMenu
-            }
+        // The root page's heading (#A v2 revision): hamburger trigger +
+        // PLAIN page title, one ToolbarItem so the native toolbar keeps
+        // them adjacent. The v1 destination title-dropdown is gone. The
+        // host-filter menu is gone too — search's host: chip subsumed it
+        // (user directive). Ordering/grouping live in the list's own
+        // view sheet (§B).
+        ToolbarItem(placement: .topBarLeading) {
+            AppDestinationHeading(pageTitle: "Agents")
         }
         if !hosts.hosts.isEmpty {
             ToolbarItem(placement: .primaryAction) {

@@ -89,6 +89,10 @@ struct ContentView: View {
             // the destination chrome steps aside entirely (#A).
             isPageContentFocused: { notificationRouter.path.isEmpty }
         )
+        // The reading-text-size choice (#A settings revision), applied at
+        // the window root so every surface follows it. nil = System: the
+        // device's Dynamic Type flows through untouched.
+        .modifier(ReadingTextSizeModifier(clamp: app.readingTextSize.dynamicTypeSizeClamp))
         .environment(\.sceneWindow, window)
         .environment(
             \.agentSceneRouting,

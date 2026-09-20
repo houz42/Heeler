@@ -65,24 +65,23 @@ enum UITestApp {
     }
 }
 enum UITestFixtures {
-    /// Agent row labels as the card renders them: workspace label · agent
-    /// name (the seeded global default layout). Keep in sync with
-    /// DemoScreenshotMode.swift's fixture.
+    /// Agent row headlines as the merged Agents redesign renders them
+    /// (title, agent kind, status). Keep in sync with the demo fixture.
     static let agentRows = [
-        "Checkout · reviewer",
-        "Payments API · api-tests",
-        "iOS App · ios-polish",
-        "iOS App · accessibility",
-        "Product Docs · docs-review",
+        "Checkout review",
+        "Harden webhook retries",
+        "Polish the Attach experience",
+        "Benchmark retry path",
+        "Migrate to v2 schema",
     ]
     /// The chat-bearing agent's row (tap target for chat proofs).
-    static let chatAgentRow = "iOS App · ios-polish"
+    static let chatAgentRow = "Polish the Attach experience"
     /// The multipath Host the form routes edit.
     static let hostFormTitle = "Edit Host"
     static let hostFormExistingAddress = "192.168.31.71"
-    /// The compact top-left destination selector on the Console (#A): the
-    /// sheet-era Hosts/Settings toolbar buttons it replaced are gone.
-    static let destinationSelector = "Agents, switch destination"
+    /// The root heading's hamburger trigger (#A revision): "Open
+    /// navigation" on phone, "Collapse/Expand navigation sidebar" on wide.
+    static let navigationTrigger = "Open navigation"
     /// The redesigned Host form's labelled fields (handoff §E): the
     /// display-name field's label, and the SSH username field's.
     static let hostFormNameField = "Display name"

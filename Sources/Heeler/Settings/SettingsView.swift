@@ -62,16 +62,15 @@ struct SettingsView: View {
     let liveActivities: HostLiveActivityCoordinator
     let console: ConsoleStore
     let hosts: [Host]
-    /// The approved compact top-left destination selector (#A). Present
-    /// when Settings is a top-level page; nil inside sheets keeps Done.
-    /// Omitted entirely while a pushed sub-page owns the window (#A: no
-    /// destination chrome inside details).
+    /// The root nav seam (#A revision): the heading trigger replaces the
+    /// title-dropdown; sheets/tests without the app root keep the plain
+    /// "Settings" title and Done button.
     @Environment(\.appDestination) private var appDestination
     @Environment(\.appDestinationMenuSuppressed) private var isMenuSuppressed
-    private var destinationMenu: AppDestinationMenu? {
-        guard !isMenuSuppressed else { return nil }
-        return appDestination.map { AppDestinationMenu(selection: $0) }
-    }
+    /// Reading & appearance (#A settings revision): text size and the
+    /// default conversation detail level.
+    @State private var readingTextSize = ReadingTextSizeSettings()
+    @State private var defaultDetailLevel = DefaultDetailLevelSettings()
 
     static let agentListDestination = SettingsAgentListDestination.fields
     static let headerLayoutDestination = SettingsHeaderLayoutDestination.header
@@ -145,10 +144,25 @@ struct SettingsView: View {
                     NavigationLink(value: "settings.notifications") {
                         Label("Notifications", systemImage: "bell.badge")
                     }
-                    appearancePicker
                     NavigationLink(value: "settings.terminalAppearance") {
                         Label("Terminal Appearance", systemImage: "paintpalette")
                     }
+                }
+
+                // Reading & appearance (#A settings revision): the
+                // designed group. The EXISTING appearance picker moves
+                // here unchanged; text size and the default conversation
+                // detail join below it. Every pre-existing row stays.
+                Section {
+                    appearancePicker
+                    NavigationLink(value: "settings.textSize") {
+                        Label("Text Size", systemImage: "textformat.size")
+                    }
+                    NavigationLink(value: "settings.defaultDetail") {
+                        Label("Default Conversation Detail", systemImage: "list.bullet.indent")
+                    }
+                } header: {
+                    Text("Reading & Appearance")
                 }
 
                 Section {
@@ -174,6 +188,10 @@ struct SettingsView: View {
                         liveActivities: liveActivities)
                 case "settings.terminalAppearance":
                     TerminalAppearanceSettingsView(terminal: terminal)
+                case "settings.textSize":
+                    ReadingTextSizeSettingsView(settings: readingTextSize)
+                case "settings.defaultDetail":
+                    DefaultDetailLevelSettingsView(settings: defaultDetailLevel)
                 case SettingsAboutDestination.acknowledgements.rawValue:
                     // The Acknowledgements route resolves through the same
                     // enum the row builds its link from — identity by case.
@@ -182,18 +200,17 @@ struct SettingsView: View {
                     EmptyView()
                 }
             }
-            // As a top-level destination page the compact destination
-            // selector IS the page's heading (#A): one destination title,
-            // top-left — no duplicate centered title beside it. Embedded
-            // in a sheet (previews, Demo captures, in-Console presentation)
+            // As a top-level destination page the heading trigger + plain
+            // title replace the title-dropdown (#A revision). Embedded in
+            // a sheet (previews, Demo captures, in-Console presentation)
             // the plain "Settings" title and Done button keep the sheet
             // dismissable.
-            .navigationTitle(destinationMenu == nil ? "Settings" : "")
+            .navigationTitle(appDestination == nil ? "Settings" : "")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if let destinationMenu {
+                if appDestination != nil, !isMenuSuppressed {
                     ToolbarItem(placement: .topBarLeading) {
-                        destinationMenu
+                        AppDestinationHeading(pageTitle: "Settings")
                     }
                 } else {
                     ToolbarItem(placement: .confirmationAction) {
@@ -265,4 +282,75 @@ struct SettingsView: View {
         let build = info?["CFBundleVersion"] as? String
         return build.map { "\(version) (\($0))" } ?? version
     }
+}
+
+/// Text Size (#A settings revision): System (default — follows Dynamic
+/// Type, no override) plus explicit reading-size choices. The choice is
+/// applied at the app root as `.dynamicTypeSize` — a READING size, never a
+/// chrome rescale.
+struct ReadingTextSizeSettingsView: View {
+    @Bindable var settings: ReadingTextSizeSettings
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Text Size", selection: Binding(
+                    get: { settings.selection },
+                    set: { settings.select($0) })
+                ) {
+                    ForEach(ReadingTextSize.allCases) { size in
+                        Text(size.title).tag(size)
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } footer: {
+                Text(
+                    "System follows your device’s text size. An explicit "
+                        + "choice applies to reading text across the app.")
+            }
+        }
+        .navigationTitle("Text Size")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// Default Conversation Detail (#A settings revision): the level new
+/// conversations start at. Persists through the EXISTING
+/// ChatDetailLevelStore (its "default" pseudo-pane key) — the same store
+/// the per-agent level switcher writes to, so formats and location cannot
+/// drift.
+struct DefaultDetailLevelSettingsView: View {
+    @Bindable var settings: DefaultDetailLevelSettings
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Default Detail Level", selection: Binding(
+                    get: { settings.level },
+                    set: { settings.level = $0 })
+                ) {
+                    ForEach(DetailLevel.allCases, id: \.rawValue) { level in
+                        Text(Self.labels[level] ?? "Level \(level.rawValue)")
+                            .tag(level)
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } footer: {
+                Text(
+                    "The detail level conversations open at. Per-conversation "
+                        + "changes still take precedence.")
+            }
+        }
+        .navigationTitle("Default Conversation Detail")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private static let labels: [DetailLevel: String] = [
+        .l0: "L0 — Conversation",
+        .l1: "L1 — Work Summary",
+        .l2: "L2 — Tool Results & Diffs",
+        .l3: "L3 — Everything",
+    ]
 }

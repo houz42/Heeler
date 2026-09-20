@@ -21,8 +21,8 @@ final class ChatSmokeTests: XCTestCase {
     func testChatShowsTranscriptAndComposer() {
         // Tap through the row's enclosing cell (the NavigationLink's hit
         // target).
-        let cell = app.cells.containing(
-            NSPredicate(format: "label CONTAINS %@", "ios-polish")
+        let cell = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "Polish the Attach experience")
         ).firstMatch
         waitToExist(cell)
         cell.tap()

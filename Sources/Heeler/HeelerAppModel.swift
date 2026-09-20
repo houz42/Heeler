@@ -32,6 +32,7 @@ final class HeelerAppModel {
     let snippets: SnippetStore
     let appearance: AppAppearanceSettings
     let inputMode: AgentInputModeSettings
+    let readingTextSize = ReadingTextSizeSettings()
     let relaySettings: NotificationRelaySettings
     let bannerStore: AgentNotificationBannerStore
     let liveActivities: HostLiveActivityCoordinator

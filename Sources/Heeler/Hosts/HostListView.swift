@@ -89,14 +89,11 @@ struct HostListView: View {
     /// the host form sheet always targets exactly this Host.
     @State private var editingHost: Host?
     @State private var inspectedRoute: HostRouteInspection?
-    /// Top-level destination selector (handoff §A): mounted by the app
-    /// root; nil in sheets/tests keeps the plain "Hosts" title.
+    /// Top-level nav seam (handoff §A revision): the heading trigger is
+    /// env-driven; sheets/tests without the app root keep the plain
+    /// "Hosts" title.
     @Environment(\.appDestination) private var appDestination
     @Environment(\.appDestinationMenuSuppressed) private var isMenuSuppressed
-    private var destinationMenu: AppDestinationMenu? {
-        guard !isMenuSuppressed else { return nil }
-        return appDestination.map { AppDestinationMenu(selection: $0) }
-    }
     private var destinationMenuTitleFallback: String {
         appDestination == nil ? "Hosts" : ""
     }
@@ -168,11 +165,12 @@ struct HostListView: View {
             .modifier(AppDestinationPageFocusModifier(
                 destination: .hosts, isContentPushed: !path.isEmpty))
             .toolbar {
-                // Handoff §A: the top-left compact destination selector
-                // replaces the title when the app root mounts this page.
-                if let destinationMenu {
+                // Handoff §A revision: the root heading (trigger + plain
+                // title) replaces the selector when the app root mounts
+                // this page; sheets keep the plain title.
+                if appDestination != nil, !isMenuSuppressed {
                     ToolbarItem(placement: .topBarLeading) {
-                        destinationMenu
+                        AppDestinationHeading(pageTitle: "Hosts")
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
