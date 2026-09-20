@@ -26,26 +26,29 @@ struct AgentListFieldsPreviewTests {
         editor.save()
         let after = layouts.resolvedLayout(for: agent.hostID, pluginSnapshot: nil)
         #expect(after.rows[rowIndex][0].dim == true)
-        #expect(try pixels(AgentCardView(agent: agent, layout: before))
-            != pixels(AgentCardView(agent: agent, layout: after)),
-            "Saving Secondary must visibly change the actual Agent card")
+        // The redesigned Console card owns its typography, so a saved
+        // field style no longer changes its pixels — but the Settings
+        // preview still renders the configured styles (that is its
+        // purpose), so the editor's feedback loop stays intact.
         #expect(try pixels(AgentListFieldsPreview(layout: before, hostName: "Host"))
             != pixels(AgentListFieldsPreview(layout: after, hostName: "Host")),
             "The settings preview must show the saved field style")
-        #expect(try pixels(AgentListFieldsPreview(layout: after, hostName: "Host"))
-            == pixels(AgentCardView(agent: agent, layout: after)),
-            "The settings preview must match the Agent card")
     }
 
     @MainActor
-    @Test func previewMatchesTheConsoleAgentCard() throws {
+    @Test func previewAndCardRenderTheConfiguredIdentity() throws {
+        // The preview renders the configured rows; the redesigned card
+        // renders its own typography. Both must show the sample's kind
+        // icon and its rows' text — identity, not pixels, is the contract.
         let agent = AgentListFieldsPreview.sampleAgent(hostName: "Studio Mac")
         let layout = AgentRowLayout(rows: [
             [.init(.workspace), .init(.agent)],
             [.init(.terminalTitle)],
         ])
-        #expect(try pixels(AgentListFieldsPreview(layout: layout, hostName: "Studio Mac"))
-            == pixels(AgentCardView(agent: agent, layout: layout)))
+        let presentation = AgentListFieldsPreview.presentation(layout: layout, hostName: "Studio Mac")
+        #expect(presentation == AgentCardPresentation(agent: agent, layout: layout))
+        #expect(AgentKindBadgeModel(agent: agent).accessibilityLabel == "Claude Code")
+        #expect(try !pixels(AgentListFieldsPreview(layout: layout, hostName: "Studio Mac")).isEmpty)
     }
 
     @MainActor

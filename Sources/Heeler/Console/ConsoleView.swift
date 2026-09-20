@@ -45,10 +45,15 @@ struct ConsoleView: View {
     @State private var searchText = ""
     @State private var isSearchPresented = false
     @FocusState private var isSearchFocused: Bool
+    // The redesigned Agents list surface: search state, view-menu layout.
+    // Both live as plain state so query/filters/layout SURVIVE navigation.
+    @State private var agentSearch = AgentSearchBarStore()
+    @State private var agentListLayout = AgentListLayoutStore()
+    // Retained (inert) until the NAV arbitration prunes them: the legacy
+    // searchable wiring. `isSearchFocused` is re-bound to the new search
+    // bar below, keeping commandTarget.focusSearch functional.
     @State private var commandRegistry = ConsoleCommandRegistry()
-    /// Owns flat/grouped mode and per-Host collapsed state (#245).
     @State private var listPresentation = ConsoleListPresentationStore()
-    /// Owns the hierarchical list's per-group fold state.
     @State private var treeFolds = AgentTreeFoldStore()
     /// Outlives the detail column's rebuilds, which is the whole point: it
     /// carries the raised keyboard from one Attach screen to the next.
@@ -132,32 +137,10 @@ struct ConsoleView: View {
                                 .hoverEffect(.highlight)
                             }
                         }
-                        if !hosts.hosts.isEmpty {
-                            ToolbarItem(placement: .primaryAction) {
-                                Menu {
-                                    Picker("Presentation", selection: presentationModeBinding) {
-                                        ForEach(ConsoleListPresentationMode.allCases) { mode in
-                                            Text(mode.title).tag(mode)
-                                        }
-                                    }
-                                } label: {
-                                    // Swift disallows switch expressions in
-                                    // argument position — extract to a let.
-                                    let icon = switch listPresentation.mode {
-                                    case .flat: "list.bullet"
-                                    case .grouped: "list.bullet.rectangle"
-                                    case .tree: "sidebar.leading"
-                                    }
-                                    Label("Presentation", systemImage: icon)
-                                }
-                                .hoverEffect(.highlight)
-                                .accessibilityLabel("Agent list presentation")
-                                .accessibilityValue(listPresentation.mode.title)
-                            }
-                        }
-                        // The prototype keeps + directly reachable in the
-                        // populated list (#A review): the empty detail and
-                        // keyboard commands are not equivalent on phone.
+                        // Ordering/grouping live in the Agents list's own
+                        // view menu (§B); destinations live in the compact
+                        // selector (#A). The sheet-era buttons and the old
+                        // presentation picker are both superseded.
                         if !hosts.hosts.isEmpty {
                             ToolbarItem(placement: .primaryAction) {
                                 Button("New Agent", systemImage: "plus") {
@@ -280,12 +263,13 @@ struct ConsoleView: View {
             context: {
                 .init(
                     selection: notificationRouter.path.last,
-                    agents: listPresentation.mode == .flat
-                        ? filteredAgents.map(\.id)
-                        : listPresentation.mode == .grouped
-                            ? hostSections.filter { !$0.isCollapsed }
-                                .flatMap { $0.agents.map(\.id) }
-                            : treeRows.compactMap(\.agent).map(\.id),
+                    // The list the user sees: search + view-menu layout,
+                    // collapse state honored for grouped views.
+                    agents: agentListLayout.grouping == .none
+                        ? searchedAgents.map(\.id)
+                        : agentGroupSections
+                            .filter { !agentListLayout.isCollapsed($0.id) }
+                            .flatMap { $0.agents.map(\.id) },
                     isSearchFocused: isSearchFocused,
                     isCovered: hostSheet != nil || isStartingAgent || isShowingSettings,
                     inputMode: inputMode.mode)
@@ -300,7 +284,9 @@ struct ConsoleView: View {
                 notificationRouter.path = [id]
             },
             focusSearch: {
-                isSearchPresented = true
+                // The redesigned in-list search bar owns focus now; the
+                // legacy isSearchPresented/isSearchFocused declarations
+                // stay (inert) for the NAV arbitration.
                 isSearchFocused = true
             },
             newAgent: { isStartingAgent = true },
@@ -476,32 +462,127 @@ struct ConsoleView: View {
                     .hoverEffect(.highlight)
             }
         case .noSearchResults:
+            // The redesigned surface owns the copy and the clear action.
+            VStack(spacing: 0) {
+                AgentSearchBarView(
+                    store: agentSearch,
+                    agents: searchUniverse,
+                    isFocused: $isSearchFocused)
+                emptySearchState
+            }
+        case .rows:
+            agentListSurface
+        }
+    }
+
+    /// The redesigned Agents list region (§B): search bar, count + view
+    /// menu, rows or groups, empty state. Query/filters/layout live in
+    /// @State above, so they survive navigation by construction.
+    private var agentListSurface: some View {
+        VStack(spacing: 0) {
+            AgentSearchBarView(
+                store: agentSearch,
+                agents: searchUniverse,
+                isFocused: $isSearchFocused)
+            AgentListCountBarView(
+                matchCount: searchedAgents.count,
+                totalCount: searchUniverse.count,
+                layoutStore: agentListLayout,
+                onReset: { agentSearch.clearAll() })
+            if searchedAgents.isEmpty {
+                emptySearchState
+            } else if agentListLayout.grouping == .none {
+                List(selection: selectedAgent) {
+                    visibleHostIssueRows
+                    ForEach(searchedAgents) { agent in
+                        agentRow(agent)
+                    }
+                }
+                .listStyle(.plain)
+            } else {
+                // Density re-review (final directive): native List/Section
+                // chrome cannot reach the prototype's ~40px heading strip,
+                // so the grouped mode renders in a ScrollView+LazyVStack
+                // with EXPLICIT compact rows — the header strip is exactly
+                // its content height, agent rows are plain, and the header
+                // keeps the 44pt-scale toggle target with Dynamic Type.
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2, pinnedViews: []) {
+                        visibleHostIssuesView
+                        ForEach(agentGroupSections) { section in
+                            AgentListGroupHeaderView(
+                                section: section,
+                                isCollapsed: isEffectivelyCollapsed(section.id)
+                            ) {
+                                toggleAgentListGroup(section.id)
+                            }
+                            .padding(.horizontal, 16)
+                            // Review finding #4: an active search or filter
+                            // forces matching groups OPEN — the stored
+                            // collapse applies only unconstrained, and
+                            // survives the search for when it clears.
+                            if !isEffectivelyCollapsed(section.id) {
+                                ForEach(section.agents) { agent in
+                                    agentRow(agent)
+                                        .padding(.horizontal, 16)
+                                        .padding(.vertical, 2)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The empty state the approved design specifies: no matching agents.
+    @ViewBuilder
+    private var emptySearchState: some View {
+        if agentSearch.isConstrained {
             ContentUnavailableView {
-                Label("No Results", systemImage: "magnifyingglass")
+                Label("No Matching Agents", systemImage: "magnifyingglass")
             } description: {
-                Text("No agents match \"\(searchText)\".")
+                Text("Change your search or remove a filter.")
             } actions: {
-                Button("Clear Search") { searchText = "" }
+                Button("Clear Search") { agentSearch.clearAll() }
                     .buttonStyle(.borderedProminent)
                     .hoverEffect(.highlight)
             }
-        case .rows:
-            List(selection: selectedAgent) {
-                switch listPresentation.mode {
-                case .flat:
-                    flatAgentListRows
-                case .grouped:
-                    groupedAgentListRows
-                case .tree:
-                    treeAgentListRows
-                }
+        } else {
+            ContentUnavailableView {
+                Label("No Agents", systemImage: "rectangle.on.rectangle.slash")
+            } description: {
+                Text("Agents detected on your Hosts appear here.")
             }
-            .listStyle(.plain)
+        }
+    }
+
+    /// Host issues in the ScrollView grouped path: the SAME functional
+    /// rows as the flat list (re-review regression #2 — the earlier
+    /// version dropped the Button wrapper and left a dead chevron).
+    @ViewBuilder
+    private var visibleHostIssuesView: some View {
+        ForEach(visibleHostIssues) { issue in
+            if issue.navigates {
+                Button {
+                    presentHosts(issue.hostID)
+                } label: {
+                    hostIssueRow(issue, showsChevron: true)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens this Host's settings.")
+                .padding(.horizontal, 16)
+                .padding(.vertical, 2)
+            } else {
+                hostIssueRow(issue, showsChevron: false)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 2)
+            }
         }
     }
 
     @ViewBuilder
-    private var flatAgentListRows: some View {
+    private var visibleHostIssueRows: some View {
         ForEach(visibleHostIssues) { issue in
             if issue.navigates {
                 Button { presentHosts(issue.hostID) } label: {
@@ -513,112 +594,49 @@ struct ConsoleView: View {
                 hostIssueRow(issue, showsChevron: false)
             }
         }
-        ForEach(filteredAgents) { agent in
-            agentRow(agent)
-        }
     }
 
-    @ViewBuilder
-    private var groupedAgentListRows: some View {
-        ForEach(hostSections) { section in
-            Section {
-                if !section.isCollapsed {
-                    ForEach(section.agents) { agent in
-                        agentRow(agent)
-                    }
-                }
-            } header: {
-                ConsoleHostSectionHeaderView(
-                    presentation: ConsoleHostSectionHeaderPresentation(section: section)
-                ) {
-                    toggleHostSection(section.hostID)
-                }
-                .textCase(nil)
-            }
-        }
+    /// Search + filters apply over the Host-filtered universe.
+    private var searchUniverse: [ConsoleAgent] {
+        guard let hostFilter else { return console.agents }
+        return console.agents.filter { $0.hostID == hostFilter }
     }
 
-    /// The hierarchical list: Host → session → workspace → tab → Agents,
-    /// with single-child chains collapsed into merged rows. The depth-0
-    /// row — bare Host or merged chain head — renders as the Host section
-    /// header so an empty or disconnected Host keeps its readiness state
-    /// exactly like the grouped mode's sections; the tree fold store owns
-    /// its disclosure state.
-    @ViewBuilder
-    private var treeAgentListRows: some View {
-        ForEach(treeRows) { row in
-            switch row {
-            case .group(let id, let label, let depth, let count, let aggregate, let isFolded):
-                if depth == 0, let section = hostSection(forTreeGroup: id) {
-                    ConsoleHostSectionHeaderView(
-                        presentation: ConsoleHostSectionHeaderPresentation(
-                            section: section, title: label, isCollapsed: isFolded)
-                    ) {
-                        toggleTreeGroup(id)
-                    }
-                    .listRowInsets(Self.treeRowInsets)
-                } else {
-                    AgentTreeGroupRowView(
-                        id: id, label: label, depth: depth, count: count,
-                        aggregateState: aggregate, isFolded: isFolded
-                    ) {
-                        toggleTreeGroup(id)
-                    }
-                    .listRowInsets(Self.treeRowInsets)
-                }
-            case .agent(let agent, let depth, let tabLabel):
-                agentRow(
-                    agent, mergedTabLabel: tabLabel,
-                    leadingIndent: CGFloat(depth) * Self.treeIndentStep
-                        + Self.treeChevronGutter)
-                    .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
-                    .listRowInsets(Self.treeRowInsets)
-            }
-        }
+    /// The engine's result (review finding #5): a nonempty TEXT query
+    /// outranks the view-menu sort with relevance; chips-only searches
+    /// keep the chosen sort; unconstrained lists use the chosen sort.
+    private var searchedAgents: [ConsoleAgent] {
+        let matched = agentSearch.engine.matches(over: searchUniverse)
+        guard !agentSearch.engine.isTextQuery else { return matched }
+        return AgentListLayout.ordered(matched, by: agentListLayout.order)
     }
 
-    /// The tree's compact row chrome: rows sit closer together than the
-    /// flat/grouped lists, and every level shares one leading base so the
-    /// `depth`-scaled paddings align group and Agent rows.
-    fileprivate static let treeRowInsets = EdgeInsets(top: 2, leading: 12, bottom: 2, trailing: 12)
-    fileprivate static let treeIndentStep: CGFloat = 14
-    /// A group row's label sits one chevron gutter (12-wide chevron + 8
-    /// spacing) right of its row edge. Agent rows skip the chevron, so
-    /// without this offset a depth-N agent would land LEFT of its
-    /// depth-(N-1) group's label and read as unindented.
-    private static let treeChevronGutter: CGFloat = 20
-
-    /// The tree rows over the same filtered Agents the flat/grouped lists
-    /// show — `hostSections` owns the per-Host connection state and the
-    /// search/Host-filter policy, so the tree inherits both. Below each
-    /// Host, everything sorts alphabetically by group label, with
-    /// `AgentTree` owning that policy.
-    private var treeRows: [AgentTreeRow] {
-        AgentTree.rows(
-            agents: hostSections.flatMap { $0.agents },
-            foldedIDs: treeFolds.foldedIDs,
-            emptyHosts: hostSections.map { ($0.hostID, $0.hostDisplayName) })
+    /// Groups the (already filtered) result. While searching, matching
+    /// groups stay open.
+    private var agentGroupSections: [AgentListSection] {
+        AgentListLayout.grouped(searchedAgents, by: agentListLayout.grouping)
     }
 
-    /// The catalog section whose Host a tree group id names. Only the
-    /// caller knows whether the row is Host-level (depth 0); this resolves
-    /// the id's Host component either way, so a merged chain head
-    /// ("h/<host>/s/…") and a bare Host id ("h/<host>") both find their
-    /// section.
-    private func hostSection(forTreeGroup groupID: String) -> ConsoleHostSection? {
-        guard let id = AgentTree.hostID(ofGroupID: groupID) else { return nil }
-        return hostSections.first { $0.hostID == id }
+    /// Review finding #4: while a search or filter is active, matching
+    /// groups render OPEN regardless of the stored collapse state.
+    private func isEffectivelyCollapsed(_ groupID: String) -> Bool {
+        if agentSearch.isConstrained { return false }
+        return agentListLayout.isCollapsed(groupID)
     }
 
-    private func toggleTreeGroup(_ groupID: String) {
+    private func toggleAgentListGroup(_ groupID: String) {
+        // The approved preview's rule: collapse is a no-op while search or
+        // filters are active — matching groups stay open.
+        guard !agentSearch.isConstrained else { return }
         if reduceMotion {
-            treeFolds.toggle(groupID)
+            agentListLayout.toggleCollapsed(groupID)
         } else {
             withAnimation(.snappy) {
-                treeFolds.toggle(groupID)
+                agentListLayout.toggleCollapsed(groupID)
             }
         }
     }
+
 
     /// `mergedTabLabel` carries the tab group label a tree row folded
     /// into this Agent's row. The prefix renders only when the card's
@@ -644,6 +662,11 @@ struct ConsoleView: View {
             // NavigationLink itself is dropped by List row layout.
             .padding(.leading, leadingIndent)
         }
+        // Re-review regression #1: outside a List's plain rows (the
+        // grouped ScrollView path), NavigationLink renders the accent
+        // link tint — the approved look is neutral. `.plain` restores
+        // the flat rows' colors everywhere; the press affordance stays.
+        .buttonStyle(.plain)
         .hoverEffect(.highlight)
         .contextMenu {
             let pinned = console.pins.isPinned(
@@ -691,49 +714,15 @@ struct ConsoleView: View {
         ConsoleAgentsSurface(
             hostCount: hosts.hosts.count,
             filteredHostName: hostFilter == nil ? nil : filteredHostName,
-            filteredAgentCount: filteredAgents.count,
+            filteredAgentCount: searchedAgents.count,
             visibleIssueCount: visibleHostIssues.count,
-            presentationMode: listPresentation.mode,
-            projectedSectionCount: hostSections.count,
-            searchQuery: searchText)
+            projectedSectionCount: agentGroupSections.count,
+            searchQuery: agentSearch.engine.rawQuery)
     }
 
-    private var hostSections: [ConsoleHostSection] {
-        listPresentation.sections(
-            hosts: hosts.hosts,
-            console: console,
-            filteredHostID: hostFilter,
-            searchQuery: searchText)
-    }
-
-    private var presentationModeBinding: Binding<ConsoleListPresentationMode> {
-        Binding(
-            get: { listPresentation.mode },
-            set: { listPresentation.select($0) })
-    }
-
-    private func toggleHostSection(_ hostID: Host.ID) {
-        if reduceMotion {
-            listPresentation.toggleCollapsed(hostID)
-        } else {
-            withAnimation(.snappy) {
-                listPresentation.toggleCollapsed(hostID)
-            }
-        }
-    }
-
-    private var filteredAgents: [ConsoleAgent] {
-        let hostFiltered: [ConsoleAgent]
-        if let hostFilter {
-            hostFiltered = console.agents.filter { $0.hostID == hostFilter }
-        } else {
-            hostFiltered = console.agents
-        }
-        let needle = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !needle.isEmpty else { return hostFiltered }
-        return hostFiltered.filter { $0.matchesAgentSearch(needle) }
-    }
-
+    // (Legacy flat/grouped/tree presentation — retained unused until the
+    // NAV arbitration prunes it; the redesigned list renders from
+    // `agentListSurface`.)
     /// Host issues shown in the list: all of them, or the filtered Host's
     /// only — a filtered Console should not nag about other machines.
     private var visibleHostIssues: [ConsoleHostStatusPresentation] {
@@ -1053,7 +1042,7 @@ private struct AgentTreeGroupRowView: View {
                 }
             }
             .contentShape(Rectangle())
-            .padding(.leading, CGFloat(depth) * ConsoleView.treeIndentStep)
+            .padding(.leading, CGFloat(depth) * 14)
             .padding(.vertical, 3)
         }
         .buttonStyle(.plain)

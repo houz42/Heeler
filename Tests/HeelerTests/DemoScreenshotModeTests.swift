@@ -21,11 +21,13 @@
             let profiles = DemoScreenshotFixture.profiles
             let agents = hosts.flatMap { profiles[$0.id]?.snapshot.agents ?? [] }
 
-            #expect(hosts.map(\.displayName) == ["Studio Mac", "Build Server"])
+            #expect(hosts.map(\.displayName)
+                == ["Studio Mac", "Build Server", "Offline Server"])
             #expect(
                 hosts.map(\.id) == [
                     DemoScreenshotFixture.studioHostID,
                     DemoScreenshotFixture.buildHostID,
+                    DemoScreenshotFixture.offlineHostID,
                 ])
             #expect(Set(agents.map(\.agentStatus)) == [.blocked, .working, .done, .idle])
             #expect(
@@ -41,9 +43,13 @@
             await composition.console.resume()
             defer { composition.console.setHosts([]) }
 
+            // The Offline Server never connects (no demo profile), so
+            // its snapshot legitimately never arrives — wait on the
+            // connectable Hosts only.
             while composition.console.agents.count != 5
-                || composition.hosts.hosts.contains(where: {
-                    composition.console.sidebarSnapshots.snapshot(for: $0.id) == nil
+                || composition.hosts.hosts.contains(where: { host in
+                    host.id != DemoScreenshotFixture.offlineHostID
+                        && composition.console.sidebarSnapshots.snapshot(for: host.id) == nil
                 })
             {
                 let changes = AsyncStream<Void>.makeStream()
@@ -60,9 +66,15 @@
             #expect(composition.console.agents.count == 5)
             #expect(composition.console.agents.first?.agent.status == .blocked)
             #expect(composition.console.agents.first?.hostName == "Build Server")
-            #expect(composition.console.hostStatuses.values.allSatisfy { $0 == .connected })
+            // The Offline Server never connects by design; the rest
+            // must all be connected.
+            #expect(composition.console.hostStatuses
+                .filter { key, _ in key != DemoScreenshotFixture.offlineHostID }
+                .values.allSatisfy { $0 == .connected })
+            #expect(composition.console.hostStatuses[DemoScreenshotFixture.offlineHostID] != .connected)
 
-            for host in composition.hosts.hosts {
+            for host in composition.hosts.hosts
+            where host.id != DemoScreenshotFixture.offlineHostID {
                 let bytes = try await composition.console.withNotificationTransport(for: host.id) {
                     try await $0.readSidebarLayout()
                 }

@@ -303,6 +303,7 @@
                 name: "Studio Mac",
                 address: "studio.demo.invalid",
                 username: "developer",
+                sessionName: "main",
                 additionalAddresses: ["studio.lan.demo.invalid"],
                 routeLabels: [
                     "studio.demo.invalid": "Primary",
@@ -312,8 +313,24 @@
                 id: buildHostID,
                 name: "Build Server",
                 address: "build.demo.invalid",
-                username: "builder"),
+                username: "builder",
+                sessionName: "ci"),
+            // A third machine that fails to connect (no demo profile):
+            // the Console's deterministic host-issue row — the flat and
+            // grouped lists both navigate it to the same Hosts handler.
+            Host(
+                id: offlineHostID,
+                name: "Offline Server",
+                address: "offline.demo.invalid",
+                username: "developer",
+                sessionName: "main"),
         ]
+
+        static let offlineHostID = UUID(
+            uuid: (
+                0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x43, 0x33,
+                0x83, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33
+            ))
 
         static let profiles: [Host.ID: DemoHostProfile] = [
             studioHostID: DemoHostProfile(
@@ -524,7 +541,18 @@
                 layouts: [],
                 panes: [],
                 protocolVersion: 17,
-                tabs: [],
+                tabs: workspaces.map { workspace in
+                    // A manually named tab per workspace, so the redesigned
+                    // row's fourth location value renders in proofs.
+                    TabInfo(
+                        agentStatus: .unknown,
+                        focused: false,
+                        label: "work",
+                        number: 1,
+                        paneCount: 1,
+                        tabID: "\(workspace.workspaceID):t1",
+                        workspaceID: workspace.workspaceID)
+                },
                 version: "0.7.5-demo",
                 workspaces: workspaces)
         }
