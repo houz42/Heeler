@@ -2,13 +2,13 @@ import SwiftUI
 
 // SPDX-License-Identifier: Apache-2.0
 //
-// The broker chat backend's honest state surfaces: a banner for
+// The agent-chat backend's honest state surfaces: a banner for
 // connecting/error/disconnected/ambiguous states, and the unsupported
 // ask card (native ask answering has NO verified public API in v1 — the
 // card says so instead of faking a delivery path).
 
 /// One compact state card pinned above the chat content.
-struct BrokerChatStateBanner: View {
+struct AgentChatStateBanner: View {
     let icon: String
     let title: String
     let detail: String?
@@ -35,7 +35,7 @@ struct BrokerChatStateBanner: View {
 /// answer affordance is an honest unsupported state — no buttons that
 /// pretend to deliver, no keystroke fallback. The user answers in the
 /// agent's own terminal surface, which the banner says plainly.
-struct BrokerUnsupportedAskRow: View {
+struct AgentUnsupportedAskRow: View {
     let interaction: PendingInteraction
 
     var body: some View {

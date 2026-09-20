@@ -294,7 +294,7 @@ struct ChatScreen: View {
                 onLongPress: { enterBubbleFocus(bubble) })
         case .row(let row):
             if pendingUnsupported, case .pending(let interaction) = row {
-                BrokerUnsupportedAskRow(interaction: interaction)
+                AgentUnsupportedAskRow(interaction: interaction)
             } else {
                 LinkifiedChatRow(row: row, router: openRouter)
             }
