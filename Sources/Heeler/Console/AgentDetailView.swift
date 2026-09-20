@@ -297,6 +297,15 @@ struct AgentDetailView: View {
             let agentChatStore = AgentChatStore(
                 pipeFactory: .console(console, hostID: agent.hostID),
                 paneIdentity: { [agent] in
+                    // Simulator-proof pin: when the proof environment
+                    // names a sessionFile, it wins — explicit selection
+                    // over the pane's own agent_session. Dead without
+                    // the env var; never affects production matching.
+                    if let pinned = ProcessInfo.processInfo.environment[
+                        "HEELER_AGENT_CHAT_PROOF_SESSION_FILE"]
+                    {
+                        return HerdrPaneSessionIdentity(sessionFilePath: pinned)
+                    }
                     guard let path = agent.agent.agentSession?.value else {
                         return nil
                     }
