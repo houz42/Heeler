@@ -76,6 +76,11 @@ struct AgentSearchBarView: View {
             }
         }
         .background(Color(.systemBackground))
+        // The preview's onblur rule: losing focus dismisses suggestions
+        // without touching the query — the phone's Esc-parity affordance.
+        .onChange(of: isFocused) { _, focused in
+            if !focused { store.dismissSuggestions() }
+        }
     }
 
     private var field: some View {
