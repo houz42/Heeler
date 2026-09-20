@@ -644,7 +644,7 @@ struct BrokerProvisioningTests {
         let text = String(
             decoding: try #require(Data(base64Encoded: String(payload))),
             as: UTF8.self)
-        #expect(text.contains("process.env.HELER_CHAT_ASK_WRAPPER = \"1\""))
+        #expect(text.contains("process.env.HEELER_CHAT_ASK_WRAPPER = \"1\""))
     }
 
     // MARK: - Development-vs-production layout safety
