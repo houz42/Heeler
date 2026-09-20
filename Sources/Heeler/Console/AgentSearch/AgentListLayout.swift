@@ -74,17 +74,14 @@ enum AgentListGrouping: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// One rendered group with the values the header shows. `id` is the full
-/// parent identity path, so collapse state and identity survive renames of
-/// sibling groups.
+/// One rendered group with the values the header shows. The key carries the
+/// FULL parent identity path, so same-name workspace/session/tab values on
+/// different parents are different groups, and collapse state survives
+/// renames of sibling groups.
 struct AgentListSection: Equatable, Identifiable, Sendable {
     struct Key: Hashable, Sendable {
         let grouping: AgentListGrouping
         let identity: [String]
-
-        func expanded(with value: String) -> Key {
-            Key(grouping: grouping, identity: identity + [value])
-        }
     }
 
     let key: Key
@@ -93,16 +90,18 @@ struct AgentListSection: Equatable, Identifiable, Sendable {
     /// Full location path for the header's quiet line + VoiceOver.
     let path: [String]
     /// Matching agents in this group, already ordered.
-    let agents: [ConsoleAgent]
+    var agents: [ConsoleAgent]
 
     var id: String {
-        key.identity.map { $0.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "∅" }
+        (["g:\(key.grouping.rawValue)"] + key.identity)
+            .map { $0.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "-" }
             .joined(separator: "/")
     }
 
+    /// Matching members only — group counts reflect filtered matches.
     var count: Int { agents.count }
 
-    /// `host · session · workspace · tab` for the group header's quiet line.
+    /// `host · session · workspace` for the group header's quiet line.
     var parentLine: String {
         path.dropLast().joined(separator: " · ")
     }
@@ -122,95 +121,121 @@ enum AgentListLayout {
         }
     }
 
-    /// The recency key: the last status-change time the Console observed for
-    /// the pane (status deltas are exactly what herdr reports as activity);
-    /// nil agents sort by pane order. Descending, recent first.
-    private static func recency(
-        _ agent: ConsoleAgent, times: [String: Date]
-    ) -> (hasTime: Bool, time: Date, snapshotOrder: Int) {
-        let id = agent.agent.paneID
-        if let time = times[id] {
-            return (true, time, agent.snapshotOrder ?? Int.max)
-        }
-        return (false, .distantPast, agent.snapshotOrder ?? Int.max)
+    /// Recency and attention orders key off herdr's own `state_change_seq`
+    /// (per-status-change, on the wire) — real activity recency, no
+    /// invented clocks. The sequence is comparable only within its Host, so
+    /// cross-Host lists keep stable Host blocks and order by sequence
+    /// inside them.
+    private static func hostBlock(_ agent: ConsoleAgent) -> String {
+        agent.hostName
     }
 
-    /// Orders `agents` by the chosen view. `nil` stays the caller's order
-    /// (search relevance) — search outranks the sort while querying.
-    static func ordered(
-        _ agents: [ConsoleAgent],
-        by order: AgentListOrder,
-        recencyTimes: [String: Date] = [:]
-    ) -> [ConsoleAgent] {
+    private static func sequence(_ agent: ConsoleAgent) -> Int {
+        agent.agent.stateChangeSeq ?? 0
+    }
+
+    /// The row's title identity for A–Z ordering: the server-reported name
+    /// when the snapshot carried one, else the terminal titles (the same
+    /// identity search scores). The detected kind is not a title — a
+    /// nameless agent sorts by what its row shows, not by its program.
+    private static func rowTitle(_ agent: ConsoleAgent) -> String {
+        if let name = agent.agent.name, !name.isEmpty { return name }
+        let stripped = agent.agent.terminalTitleStripped ?? ""
+        if !stripped.isEmpty { return stripped }
+        if !agent.agent.title.isEmpty { return agent.agent.title }
+        return agent.agent.paneTitle ?? agent.agent.displayName
+    }
+
+    private static func snapshotOrder(_ agent: ConsoleAgent) -> Int {
+        agent.snapshotOrder ?? Int.max
+    }
+
+    /// Orders `agents` by the chosen view. Stable on the input order for
+    /// every tie.
+    static func ordered(_ agents: [ConsoleAgent], by order: AgentListOrder) -> [ConsoleAgent] {
         agents.enumerated().sorted { lhs, rhs in
             switch order {
             case .title:
-                (lhs.element.agent.displayName.localizedCaseInsensitiveCompare(
-                    rhs.element.agent.displayName), lhs.offset)
-                    < (rhs.element.agent.displayName.localizedCaseInsensitiveCompare(
-                        lhs.element.agent.displayName), rhs.offset)
+                let compared = Self.rowTitle(lhs.element)
+                    .localizedCaseInsensitiveCompare(Self.rowTitle(rhs.element))
+                if compared != .orderedSame { return compared == .orderedAscending }
+                return lhs.offset < rhs.offset
             case .attention:
                 let lhsRank = stateRank(lhs.element.agent.status)
                 let rhsRank = stateRank(rhs.element.agent.status)
                 if lhsRank != rhsRank { return lhsRank < rhsRank }
-                let lhsRecent = recency(lhs.element, times: recencyTimes)
-                let rhsRecent = recency(rhs.element, times: recencyTimes)
-                if lhsRecent.time != rhsRecent.time { return lhsRecent.time > rhsRecent.time }
+                if hostBlock(lhs.element) != hostBlock(rhs.element) {
+                    return hostBlock(lhs.element) < hostBlock(rhs.element)
+                }
+                if sequence(lhs.element) != sequence(rhs.element) {
+                    return sequence(lhs.element) > sequence(rhs.element)
+                }
                 return lhs.offset < rhs.offset
             case .recent:
-                let lhsRecent = recency(lhs.element, times: recencyTimes)
-                let rhsRecent = recency(rhs.element, times: recencyTimes)
-                if lhsRecent.time != rhsRecent.time { return lhsRecent.time > rhsRecent.time }
-                if lhsRecent.snapshotOrder != rhsRecent.snapshotOrder {
-                    return lhsRecent.snapshotOrder < rhsRecent.snapshotOrder
+                if hostBlock(lhs.element) != hostBlock(rhs.element) {
+                    return hostBlock(lhs.element) < hostBlock(rhs.element)
+                }
+                if sequence(lhs.element) != sequence(rhs.element) {
+                    return sequence(lhs.element) > sequence(rhs.element)
+                }
+                if snapshotOrder(lhs.element) != snapshotOrder(rhs.element) {
+                    return snapshotOrder(lhs.element) < snapshotOrder(rhs.element)
                 }
                 return lhs.offset < rhs.offset
             case .pane:
-                let lhsOrder = lhs.element.snapshotOrder ?? Int.max
-                let rhsOrder = rhs.element.snapshotOrder ?? Int.max
-                if lhsOrder != rhsOrder { return lhsOrder < rhsOrder }
+                if snapshotOrder(lhs.element) != snapshotOrder(rhs.element) {
+                    return snapshotOrder(lhs.element) < snapshotOrder(rhs.element)
+                }
                 return lhs.offset < rhs.offset
             }
         }.map(\.element)
     }
 
-    /// Groups ordered agents into sections. Group order: state groups by
-    /// urgency; everything else by first-appearance in the ordered input
-    /// (real pane order for pane/recent orders, alphabetical within for
-    /// title order). Identical names never merge: the key is the full
-    /// parent identity path.
+    /// Groups ordered agents into sections. State groups follow the urgency
+    /// ladder; every other grouping keeps first-appearance order from the
+    /// ordered input (real pane order for pane/recent orders). Identical
+    /// names never merge: the key is the full parent identity path.
     static func grouped(
         _ agents: [ConsoleAgent],
         by grouping: AgentListGrouping
     ) -> [AgentListSection] {
-        switch grouping {
-        case .none:
-            return []
-        case .state:
-            return AgentStatus.searchOrder.compactMap { status in
-                let members = agents.filter { $0.agent.status.searchLabel == status.searchLabel }
-                    .sorted { $0.agent.paneID < $1.agent.paneID }
-                guard !members.isEmpty else { return nil }
-                return AgentListSection(
-                    key: .init(grouping: .state, identity: [status.searchLabel]),
-                    title: status.searchLabel,
-                    path: [status.searchLabel],
-                    agents: members)
+        if grouping == .none { return [] }
+        if grouping == .state {
+            return stateGroups(agents)
+        }
+        var sections: [AgentListSection] = []
+        var indexByKey: [AgentListSection.Key: Int] = [:]
+        for agent in agents {
+            let (key, title, path) = identity(of: agent, grouping: grouping)
+            if let index = indexByKey[key] {
+                sections[index].agents.append(agent)
+            } else {
+                indexByKey[key] = sections.count
+                sections.append(AgentListSection(
+                    key: key, title: title, path: path, agents: [agent]))
             }
-        default:
-            var sections: [AgentListSection] = []
-            var byKey: [AgentListSection.Key: Int] = [:]
-            for agent in agents {
-                let (key, title, path) = identity(of: agent, grouping: grouping)
-                if let index = byKey[key] {
-                    sections[index].agents.append(agent)
-                } else {
-                    byKey[key] = sections.count
-                    sections.append(AgentListSection(
-                        key: key, title: title, path: path, agents: [agent]))
-                }
-            }
-            return sections
+        }
+        return sections
+    }
+
+    private static func stateGroups(_ agents: [ConsoleAgent]) -> [AgentListSection] {
+        var byLabel: [String: [ConsoleAgent]] = [:]
+        var labelOrder: [String] = []
+        for agent in agents {
+            let label = agent.agent.status.searchLabel
+            if byLabel[label] == nil { labelOrder.append(label) }
+            byLabel[label, default: []].append(agent)
+        }
+        let ranked = labelOrder.sorted { lhs, rhs in
+            let lhsRank = byLabel[lhs]!.first.map { stateRank($0.agent.status) } ?? 4
+            let rhsRank = byLabel[rhs]!.first.map { stateRank($0.agent.status) } ?? 4
+            return lhsRank < rhsRank
+        }
+        return ranked.compactMap { label in
+            guard let members = byLabel[label], !members.isEmpty else { return nil }
+            return AgentListSection(
+                key: .init(grouping: .state, identity: [label]),
+                title: label, path: [label], agents: members)
         }
     }
 
@@ -230,17 +255,10 @@ enum AgentListLayout {
             .session: [host, session],
             .workspace: [host, session, workspace],
             .tab: [host, session, workspace, tab],
-            .state: [],
-            .none: [],
         ]
         let path = pathByGrouping[grouping] ?? []
         return (AgentListSection.Key(grouping: grouping, identity: path), path.last ?? "", path)
     }
-}
-
-extension AgentStatus {
-    /// The state-group presentation order.
-    static let searchOrder: [AgentStatus] = [.blocked, .working, .idle, .done, .unknown]
 }
 
 /// Persists the Agents view menu choices (ordering + grouping). These live

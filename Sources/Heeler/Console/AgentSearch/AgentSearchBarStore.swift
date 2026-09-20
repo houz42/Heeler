@@ -28,9 +28,7 @@ final class AgentSearchBarStore {
     /// Typing updates the query and reopens suggestions; the highlight
     /// resets so the top row is the first Enter.
     func updateQuery(_ raw: String) {
-        var next = engine
-        next.rawQuery = raw
-        engine = next
+        engine = engine.settingQuery(raw)
         highlightIndex = -1
         showsSuggestions = true
     }

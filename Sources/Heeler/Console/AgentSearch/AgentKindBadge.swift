@@ -49,21 +49,21 @@ struct AgentKindBadgeModel: Equatable, Sendable {
             return fallbackSystemImage
         }
         switch supported {
-        case .pi, .omp, .opencode: "infinity"
-        case .claude: "sun.max"
-        case .codex, .copilot: "chevron.left.forwardslash.chevron.right"
-        case .gemini, .qwen: "sparkles"
-        case .cursor: "plus.forwardslash.minus"
-        case .devin: "wand.and.stars"
-        case .antigravity: "globe"
-        case .cline, .kilo: "bolt"
-        case .mastracode: "shippingbox"
-        case .kimi: "moon"
-        case .kiro: "lightbulb"
-        case .droid, .amp: "cpu"
-        case .grok: "xmark.circle"
-        case .hermes: "paperplane"
-        case .qodercli, .maki, .muse: "square.stack.3d.up"
+        case .pi, .omp, .opencode: return "infinity"
+        case .claude: return "sun.max"
+        case .codex, .copilot: return "chevron.left.forwardslash.chevron.right"
+        case .gemini, .qwen: return "sparkles"
+        case .cursor: return "plus.forwardslash.minus"
+        case .devin: return "wand.and.stars"
+        case .antigravity: return "globe"
+        case .cline, .kilo: return "bolt"
+        case .mastracode: return "shippingbox"
+        case .kimi: return "moon"
+        case .kiro: return "lightbulb"
+        case .droid, .amp: return "cpu"
+        case .grok: return "xmark.circle"
+        case .hermes: return "paperplane"
+        case .qodercli, .maki, .muse: return "square.stack.3d.up"
         }
     }
 }
@@ -95,10 +95,7 @@ struct AgentKindBadgeIcon: View {
 }
 
 extension AgentKindBadgeModel {
-    /// A "kind: value" string with the fallback for missing values.
+    /// The Agent.kind fallback (herdr reports "unknown" when it cannot
+    /// detect the program): the neutral icon, never a guessed name.
     static let unknownKindLabel = "unknown"
-
-    init(kind: String?) {
-        self.init(kind: kind ?? Self.unknownKindLabel)
-    }
 }

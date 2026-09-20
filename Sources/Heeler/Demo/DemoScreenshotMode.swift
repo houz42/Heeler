@@ -257,12 +257,14 @@
                 id: studioHostID,
                 name: "Studio Mac",
                 address: "studio.demo.invalid",
-                username: "developer"),
+                username: "developer",
+                sessionName: "main"),
             Host(
                 id: buildHostID,
                 name: "Build Server",
                 address: "build.demo.invalid",
-                username: "builder"),
+                username: "builder",
+                sessionName: "ci"),
         ]
 
         static let profiles: [Host.ID: DemoHostProfile] = [
@@ -445,7 +447,18 @@
                 layouts: [],
                 panes: [],
                 protocolVersion: 17,
-                tabs: [],
+                tabs: workspaces.map { workspace in
+                    // A manually named tab per workspace, so the redesigned
+                    // row's fourth location value renders in proofs.
+                    TabInfo(
+                        agentStatus: .unknown,
+                        focused: false,
+                        label: "work",
+                        number: 1,
+                        paneCount: 1,
+                        tabID: "\(workspace.workspaceID):t1",
+                        workspaceID: workspace.workspaceID)
+                },
                 version: "0.7.5-demo",
                 workspaces: workspaces)
         }

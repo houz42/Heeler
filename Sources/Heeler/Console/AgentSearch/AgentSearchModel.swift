@@ -71,7 +71,7 @@ struct AgentSearchFilter: Equatable, Identifiable, Hashable, Sendable {
 extension ConsoleAgent {
     func searchValue(for field: AgentSearchField) -> String? {
         switch field {
-        case .host: hostName
+        case .host: return hostName
         case .session:
             let trimmed = hostSessionName.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? AgentTree.defaultSessionLabel : trimmed
@@ -84,7 +84,7 @@ extension ConsoleAgent {
                 !label.isEmpty
             else { return nil }
             return label
-        case .state: agent.agent.status.searchLabel
+        case .state: return agent.status.searchLabel
         }
     }
 }
@@ -134,12 +134,23 @@ struct AgentSearchEngine: Equatable, Sendable {
     }
 
     /// ≥ 0 when the query matches, higher = better; 0 for an empty query.
-    /// A `field:` query scores against that field's value only.
+    /// A `field:` query scores against that field's value only. Free text
+    /// fuzzy-matches the row's title identity — the server-reported name
+    /// and the terminal titles all identify the row — taking the best
+    /// candidate score.
     func score(_ agent: ConsoleAgent) -> Int {
         let query = AgentSearchQuery(raw: rawQuery)
         guard !query.text.isEmpty else { return 0 }
         guard let field = query.field else {
-            return AgentFuzzyMatcher.score(query.text, against: agent.agent.displayName)
+            let candidates = [
+                agent.agent.displayName,
+                agent.agent.title,
+                agent.agent.terminalTitleStripped ?? "",
+                agent.agent.paneTitle ?? "",
+            ]
+            return candidates.compactMap {
+                $0.isEmpty ? nil : AgentFuzzyMatcher.score(query.text, against: $0)
+            }.max() ?? -1
         }
         guard let value = agent.searchValue(for: field) else { return -1 }
         return AgentFuzzyMatcher.score(query.text, against: value)
@@ -246,6 +257,12 @@ struct AgentSearchEngine: Equatable, Sendable {
     }
 
     // MARK: Mutations
+
+    func settingQuery(_ raw: String) -> AgentSearchEngine {
+        var next = self
+        next.rawQuery = raw
+        return next
+    }
 
     func removingFilter(_ filter: AgentSearchFilter) -> AgentSearchEngine {
         var next = self

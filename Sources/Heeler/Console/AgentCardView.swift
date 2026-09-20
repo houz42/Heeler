@@ -1,72 +1,111 @@
 import SwiftUI
 import UIKit
 
-/// The shared Agent Row Layout leads each card; status and Heeler Pin end
-/// Row 1, and the Host name ends the last additional row (or its own line
-/// when Row 1 is the only row). Fields retain their emphasis using accessible
-/// semantic colors; plugin colors and weights do not replace app typography.
+/// The approved two-line Agent row (redesign, handoff §B + the kind-icon
+/// addendum): kind icon at the leading edge (runtime metadata, neutral
+/// fallback for unknown kinds — never an avatar initial), then title +
+/// status badge on line 1, and host · session · workspace · tab as ONE
+/// quiet concatenated line — no field labels, no message brief. All four
+/// location values stay on the phone; the full identity remains accessible
+/// on truncation (VoiceOver reads it in full).
 struct AgentCardView: View {
     let agent: ConsoleAgent
     var layout: AgentRowLayout = .heelerDefault
     var isPinned: Bool = false
-    /// A leading secondary span ("Label — ") before Row 1, for contexts
+    /// A leading secondary span ("Label — ") before the title, for contexts
     /// where a group label was folded into the Agent's own row (tree
     /// mode's single-Agent tab). Empty by default.
     var headlinePrefix: String = ""
 
-    private var presentation: AgentCardPresentation {
-        AgentCardPresentation(agent: agent, layout: layout)
+    private var kindBadge: AgentKindBadgeModel {
+        AgentKindBadgeModel(agent: agent)
+    }
+
+    /// The title line: the presentation's headline (the configured layout
+    /// still owns which fields compose it), trimmed to one line.
+    private var titleText: String {
+        let headline = AgentCardPresentation(agent: agent, layout: layout).headline
+        let singleLine = headline.components(separatedBy: .newlines).joined(separator: " ")
+        return singleLine.isEmpty ? "Agent" : singleLine
+    }
+
+    /// The quiet location line: host · session · workspace · tab, dropping
+    /// values the snapshot did not carry. Field labels never render; the
+    /// separators are the only chrome.
+    private var locationLine: String {
+        AgentCardLocation.line(for: agent)
+    }
+
+    private var locationParts: [String] {
+        AgentCardLocation.parts(for: agent)
+    }
+
+    /// VoiceOver reads the full identity, not the truncated line: each
+    /// field named, so a truncated phone render never hides identity.
+    private var accessibilityIdentity: String {
+        var spoken: [String] = []
+        spoken.append("Host \(agent.hostName)")
+        if !agent.hostSessionName.isEmpty {
+            spoken.append("session \(agent.hostSessionName)")
+        }
+        if let workspace = agent.workspaceLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !workspace.isEmpty {
+            spoken.append("workspace \(workspace)")
+        }
+        if agent.showsTabLabel, let tab = agent.tabLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !tab.isEmpty {
+            spoken.append("tab \(tab)")
+        }
+        return spoken.joined(separator: ", ")
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // Centered, not baseline-aligned: the status dot is smaller
-            // than Row 1's type, so baseline alignment drops it below Row 1.
-            HStack(alignment: .center) {
-                if !headlinePrefix.isEmpty {
-                    Text(verbatim: headlinePrefix)
-                        .font(.headline)
-                        .foregroundStyle(.secondary)
+        HStack(alignment: .top, spacing: 10) {
+            AgentKindBadgeIcon(model: kindBadge)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .center, spacing: 6) {
+                    if !headlinePrefix.isEmpty {
+                        Text(verbatim: headlinePrefix)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Text(verbatim: titleText)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
+                    if isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .accessibilityLabel("Pinned")
+                    }
+                    Spacer(minLength: 8)
+                    AgentStatusBadge(status: agent.agent.status)
                 }
-                AgentRowText(tokens: presentation.rows.first ?? [])
-                    .font(.headline)
-                    .lineLimit(1)
-                if isPinned {
-                    Image(systemName: "pin.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .layoutPriority(1)
-                        .accessibilityLabel("Pinned")
-                }
-                Spacer(minLength: 8)
-                AgentStatusBadge(status: agent.agent.status)
-            }
-            let additionalRows = Array(presentation.rows.dropFirst())
-            ForEach(Array(additionalRows.enumerated()), id: \.offset) { index, row in
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    AgentRowText(tokens: row, isSecondary: true)
+                if !locationParts.isEmpty {
+                    Text(verbatim: locationLine)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                    // The Host shares the last row's line and keeps its width;
-                    // the row's fields truncate first.
-                    if index == additionalRows.count - 1 {
-                        Spacer(minLength: 8)
-                        hostText.layoutPriority(1)
-                    }
+                        // The quiet line truncates tail-first; the full
+                        // identity is only a long-press/AX read away.
+                        .truncationMode(.head)
+                        .help(locationLine)
+                        .contextMenu {
+                            Text(locationLine)
+                        }
                 }
             }
-            if additionalRows.isEmpty {
-                hostText.frame(maxWidth: .infinity, alignment: .trailing)
-            }
         }
-        .padding(.vertical, 4)
-        // Terminal blank rows become bounded extra card spacing on a phone.
-        .padding(.bottom, CGFloat(min(layout.rowGap, 3)) * 8)
+        .padding(.vertical, 6)
         // A live Agent tints the whole row's background at low opacity so
         // the state reads from scan distance; idle/done stay plain.
         .background(rowTint)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "\(titleText), \(kindBadge.accessibilityLabel), status \(agent.agent.status.searchLabel)")
+        .accessibilityValue(accessibilityIdentity)
     }
 
     @ViewBuilder
@@ -79,25 +118,35 @@ struct AgentCardView: View {
             EmptyView()
         }
     }
+}
 
-    private var hostText: some View {
-        Text(verbatim: hostChip)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
+/// The quiet location line's pure projection: host · session · workspace ·
+/// tab, one concatenated string, no field labels, values the snapshot did
+/// not carry dropped instead of rendering empty gaps. herdr's automatic
+/// positional tab label never renders (`showsTabLabel`).
+enum AgentCardLocation {
+    static func parts(for agent: ConsoleAgent) -> [String] {
+        var parts: [String] = []
+        func append(_ value: String?) {
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !trimmed.isEmpty { parts.append(trimmed) }
+        }
+        append(agent.hostName)
+        append(agent.hostSessionName.isEmpty ? nil : agent.hostSessionName)
+        append(agent.workspaceLabel)
+        if agent.showsTabLabel { append(agent.tabLabel) }
+        return parts
     }
 
-    /// The trailing Host chip: `host:session` when the Host points at a
-    /// named herdr session, else the Host name alone.
-    private var hostChip: String {
-        agent.hostSessionName.isEmpty
-            ? agent.hostName
-            : "\(agent.hostName):\(agent.hostSessionName)"
+    static func line(for agent: ConsoleAgent) -> String {
+        parts(for: agent).joined(separator: " · ")
     }
 }
 
 /// Keep per-field emphasis through the final Text instead of flattening the
 /// rendered tokens into a String. Separators retain the row's base emphasis.
+/// (Retained for the Settings Agent List Fields preview surfaces; the
+/// Console's own row no longer consumes it.)
 struct AgentRowText: View {
     let tokens: [RenderedToken]
     var isSecondary = false
@@ -191,18 +240,30 @@ struct AgentStatusBadge: View {
                     repoRoot: "/work/proj",
                     checkoutPath: "/work/proj-wt",
                     isLinkedWorktree: true),
-                lastOutputSnippet: "Allow Claude to run rm -rf? 1. Yes 2. No"))
-        // No workspace in the snapshot: the Agent's own name takes the lead.
+                hostSessionName: "main",
+                tabLabel: "tests",
+                tabPosition: 1,
+                workspaceTabCount: 2))
         AgentCardView(
             agent: ConsoleAgent(
                 hostID: UUID(),
                 hostName: "devbox",
                 agent: Agent(
-                    terminalID: "term_b", kind: "claude", title: "Draft the release notes",
+                    terminalID: "term_b", kind: "opencode", title: "Draft the release notes",
                     status: .working, workspaceID: "w2", tabID: "w2:t1", paneID: "w2:p1",
                     cwd: "/tmp", revision: 1),
                 workspaceLabel: nil,
+                repositoryCheckout: nil))
+        AgentCardView(
+            agent: ConsoleAgent(
+                hostID: UUID(),
+                hostName: "build",
+                agent: Agent(
+                    terminalID: "term_c", kind: "some-new-runtime", title: "Unknown kind row",
+                    status: .idle, workspaceID: "w3", tabID: "w3:t1", paneID: "w3:p1",
+                    cwd: "/srv", revision: 1),
+                workspaceLabel: "infra",
                 repositoryCheckout: nil,
-                lastOutputSnippet: nil))
+                hostSessionName: "ci"))
     }
 }
