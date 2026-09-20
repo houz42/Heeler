@@ -23,21 +23,26 @@ struct AppRootView: View {
     /// Wide layouts only: the destination sidebar's fold. Sticky per window
     /// session, matching the approved preview's collapsible behavior.
     @State private var isSidebarCollapsed = false
+    /// Which pages currently cover the window with their OWN navigation
+    /// (a pushed Agent detail, a pushed Host detail, a pushed Settings
+    /// page) — reported upward through `AppDestinationPageFocusKey`. Any
+    /// page being unfocused steps the destination chrome aside (#A: no
+    /// destination navigation competes inside chat/terminal/details).
+    @State private var unfocusedPages: Set<AppDestination> = []
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     let agents: AnyView
     let hosts: AnyView
     let settings: AnyView
-    /// False while a page's own navigation covers the window — an Agent
-    /// detail pushed in the Console — so destination chrome can step aside.
-    /// Defaults to "top-level always focused" for previews and simple hosts.
-    private let isPageContentFocused: () -> Bool
+    /// Legacy single-signal focus (the Console's pushed detail, provided
+    /// by the production/demo roots). Combined with the per-page focus
+    /// reports below — the Console could not report through the preference
+    /// without an extra wrapper, and this closure was already wired.
+    private let isAgentsPageFocused: () -> Bool
 
     /// The width at which the destination sidebar takes over from the
     /// compact menu — the preview's `@container (min-width:900px)` rule.
     private static let sidebarMinimumWidth: CGFloat = 900
-    private static let sidebarWidth: CGFloat = 184
-
     init(
         agents: some View,
         hosts: some View,
@@ -47,7 +52,7 @@ struct AppRootView: View {
         self.agents = AnyView(agents)
         self.hosts = AnyView(hosts)
         self.settings = AnyView(settings)
-        self.isPageContentFocused = isPageContentFocused ?? { true }
+        self.isAgentsPageFocused = isPageContentFocused ?? { true }
     }
 
     /// The page views, one per destination. Kept alive across switches by
@@ -63,7 +68,10 @@ struct AppRootView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let showsSidebar = sidebarWanted(width: geometry.size.width)
+            let isPageFocused =
+                isAgentsPageFocused() && unfocusedPages.isEmpty
+            let showsSidebar =
+                sidebarWanted(width: geometry.size.width, isPageFocused: isPageFocused)
             HStack(spacing: 0) {
                 if showsSidebar {
                     // A reserved column: page content reflows beside it.
@@ -76,7 +84,9 @@ struct AppRootView: View {
             // (the preview's ☰ at the top of the screen), never a mid-content
             // tab — and only while a top-level page owns the window.
             .overlay(alignment: .topTrailing) {
-                if sidebarCollapsedWanted(width: geometry.size.width) {
+                if sidebarCollapsedWanted(
+                    width: geometry.size.width, isPageFocused: isPageFocused)
+                {
                     AppDestinationSidebarHandle {
                         withAnimation(.snappy) { isSidebarCollapsed = false }
                     }
@@ -87,12 +97,19 @@ struct AppRootView: View {
             .environment(\.appDestination, $destination)
             // The in-page menus render inert ONLY while the reserved
             // sidebar column is in this frame's layout (the preview's
-            // pointer-events:none), or while a pushed detail owns the
-            // window. Computed from the same geometry that drew the
-            // sidebar, so a phone window never inerts its menu.
+            // pointer-events:none), or while ANY page's pushed detail owns
+            // the window (no destination chrome inside chat/terminal/
+            // details — the Console's path, a Host detail, a pushed
+            // Settings page alike). Computed from the same geometry that
+            // drew the sidebar, so a phone window never inerts its menu.
             .environment(
                 \.appDestinationMenuInert,
-                !isPageContentFocused() || showsSidebar)
+                !isPageFocused || showsSidebar)
+            // Pages report their own pushed-navigation state upward; the
+            // root aggregates it into the per-page focus used above.
+            .onPreferenceChange(AppDestinationPageFocusKey.self) { reports in
+                unfocusedPages = reports
+            }
         }
     }
 
@@ -112,19 +129,47 @@ struct AppRootView: View {
     /// Sidebar by AVAILABLE WIDTH (the preview's container query), not
     /// size class alone — a narrow split window on iPad keeps the compact
     /// menu — and only while a top-level page owns the window.
-    private func sidebarWanted(width: CGFloat) -> Bool {
+    private func sidebarWanted(width: CGFloat, isPageFocused: Bool) -> Bool {
         width >= Self.sidebarMinimumWidth && !isSidebarCollapsed
-            && isPageContentFocused()
+            && isPageFocused
     }
 
     /// The fold's expand handle: wide window, sidebar folded, top-level
     /// page on stage.
-    private func sidebarCollapsedWanted(width: CGFloat) -> Bool {
+    private func sidebarCollapsedWanted(width: CGFloat, isPageFocused: Bool) -> Bool {
         width >= Self.sidebarMinimumWidth && isSidebarCollapsed
-            && isPageContentFocused()
+            && isPageFocused
     }
-
 }
+
+
+/// Upward focus reports: a page whose own navigation is pushed (Host
+/// detail, Settings sub-page) reports its destination here, so the root
+/// can step the destination chrome aside for EVERY page, not just the
+/// Console. Values merge across pages; empty = every top-level page owns
+/// its window.
+private struct AppDestinationPageFocusKey: PreferenceKey {
+    static var defaultValue: Set<AppDestination> { [] }
+
+    static func reduce(value: inout Set<AppDestination>, nextValue: () -> Set<AppDestination>) {
+        value.formUnion(nextValue())
+    }
+}
+
+/// The modifier a page applies to report pushed-navigation state upward.
+/// Applied INSIDE the page (on the NavigationStack's content), so hidden
+/// pages report too — their detail is real state even while not visible.
+struct AppDestinationPageFocusModifier: ViewModifier {
+    let destination: AppDestination
+    let isContentPushed: Bool
+
+    func body(content: Content) -> some View {
+        content.preference(
+            key: AppDestinationPageFocusKey.self,
+            value: isContentPushed ? [destination] : [])
+    }
+}
+
 
 extension EnvironmentValues {
     /// The root destination switcher, so any page's toolbar can host the

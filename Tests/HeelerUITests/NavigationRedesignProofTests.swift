@@ -24,27 +24,11 @@ final class NavigationRedesignProofTests: XCTestCase {
         app.terminate()
     }
 
-    /// The compact selector opens a destination menu, current checked;
-    /// switching to Hosts and back preserves the Agents list.
-    func testDestinationMenuSwitchesPreservingAgentsListState() {
-        // The fixture's agent rows are mounted on the Console page.
-        let firstRow = app.staticTexts[UITestFixtures.agentRows[0]]
-        waitToExist(firstRow)
-        // A NONTRIVIAL state to preserve: scroll the list so the first
-        // row leaves the viewport, remember where it landed.
-        app.swipeUp()
-        let firstRowFrameBefore = firstRow.frame
-        captureScreenshot(app, "nav-phone-agents-scrolled", lifetime: .keepAlways)
-
-        // The sheet-era toolbar buttons are gone; the compact selector
-        // carries the destinations instead.
-        let menu = app.buttons[UITestFixtures.destinationSelector].firstMatch
-        waitToExist(menu)
-        captureScreenshot(app, "nav-phone-menu-closed", lifetime: .keepAlways)
-        // Open the menu. A SwiftUI toolbar Menu can eat a tap while the
-        // launch settles, but a re-tap AFTER the menu presented would
-        // collapse it again — so each attempt waits a full presentation
-        // budget before retrying, and only retries when nothing appeared.
+    /// Opens the destination menu from `menu`, retrying while the launch
+    /// settles. A SwiftUI toolbar Menu can eat a tap before it renders,
+    /// but a re-tap AFTER the menu presented would collapse it — so each
+    /// attempt waits a full presentation budget before re-tapping.
+    private func openDestinationMenu(_ menu: XCUIElement) {
         let settingsItem = app.buttons["Settings"].firstMatch
         var attempt = 0
         while !settingsItem.exists, attempt < 3 {
@@ -55,9 +39,42 @@ final class NavigationRedesignProofTests: XCTestCase {
         XCTAssertTrue(
             settingsItem.exists,
             "the destination menu must offer Settings")
+    }
+
+    /// The compact selector opens a destination menu, current checked;
+    /// switching to Settings and — through an actual Agents menu-item
+    /// selection — back again preserves the Agents list's scroll offset.
+    func testDestinationMenuSwitchesPreservingAgentsListState() {
+        // The fixture's agent rows are mounted on the Console page. The
+        // fixture overflows the phone viewport (11 agents + issues), so
+        // scroll displacement is real, not cosmetic.
+        let firstRow = app.staticTexts[UITestFixtures.agentRows[0]]
+        waitToExist(firstRow)
+        let topBeforeScroll = firstRow.frame.minY
+
+        // Scroll until the first row is DISPLACED — proven, not assumed:
+        // keep swiping until its offset actually changed.
+        let scrollDeadline = Date().addingTimeInterval(UITestTimeouts.standard)
+        while firstRow.frame.minY == topBeforeScroll, Date() < scrollDeadline {
+            app.swipeUp()
+        }
+        let firstRowFrameBefore = firstRow.frame
+        XCTAssertLessThan(
+            firstRowFrameBefore.minY, topBeforeScroll,
+            "the list must actually scroll — a non-overflowing fixture makes "
+                + "this proof a false positive")
+        captureScreenshot(app, "nav-phone-agents-scrolled", lifetime: .keepAlways)
+
+        // The sheet-era toolbar buttons are gone; the compact selector
+        // carries the destinations instead.
+        let menu = app.buttons[UITestFixtures.destinationSelector].firstMatch
+        waitToExist(menu)
+        captureScreenshot(app, "nav-phone-menu-closed", lifetime: .keepAlways)
+
+        openDestinationMenu(menu)
         captureScreenshot(app, "nav-phone-menu-open", lifetime: .keepAlways)
 
-        settingsItem.tap()
+        app.buttons["Settings"].firstMatch.tap()
         // The Settings page mounts with the SAME compact selector,
         // relabeled.
         let settingsMenu = app.buttons["Settings, switch destination"].firstMatch
@@ -70,20 +87,56 @@ final class NavigationRedesignProofTests: XCTestCase {
             "the Settings page must mount")
         captureScreenshot(app, "nav-phone-settings", lifetime: .keepAlways)
 
-        // Round trip: back to Agents, the list state is where it was.
-        settingsMenu.tap()
+        // Round trip — actually SELECT Agents from the menu: open the
+        // Settings page's own selector and pick the Agents item.
+        openDestinationMenu(settingsMenu)
+        let agentsItem = app.buttons["Agents"].firstMatch
         XCTAssertTrue(
-            app.staticTexts[UITestFixtures.agentRows[0]]
-                .waitForExistence(timeout: UITestTimeouts.standard),
+            agentsItem.waitForExistence(timeout: UITestTimeouts.standard),
+            "the destination menu must offer Agents")
+        XCTAssertTrue(agentsItem.isHittable, "the Agents item must be tappable")
+        captureScreenshot(app, "nav-phone-menu-open-on-settings", lifetime: .keepAlways)
+        agentsItem.tap()
+
+        // The Agents page returns; the scrolled offset survives the round
+        // trip: the first row lands at the same viewport offset it had
+        // before the switch (not snapped back to the top).
+        XCTAssertTrue(
+            firstRow.waitForExistence(timeout: UITestTimeouts.standard),
             "the Agents list must return with its state preserved")
-        // The scrolled position survived the round trip: the first row is
-        // at the same viewport offset it was before the switch (5 rows do
-        // not fill a 874 pt list, so a preserved offset keeps the row
-        // mid-list rather than snapping back to the top).
         XCTAssertEqual(
             firstRow.frame.minY, firstRowFrameBefore.minY, accuracy: 12,
             "scroll offset must survive the destination round trip")
         captureScreenshot(app, "nav-phone-agents-back", lifetime: .keepAlways)
+    }
+
+    /// The Hosts page carries the same compact selector at top level (#A):
+    /// switching from Agents lands on Hosts with the selector relabeled
+    /// and the page's own toolbar actions intact.
+    func testHostsPageCarriesTheDestinationSelector() {
+        let firstRow = app.staticTexts[UITestFixtures.agentRows[0]]
+        waitToExist(firstRow)
+        let menu = app.buttons[UITestFixtures.destinationSelector].firstMatch
+        waitToExist(menu)
+
+        openDestinationMenu(menu)
+        let hostsItem = app.buttons["Hosts"].firstMatch
+        XCTAssertTrue(
+            hostsItem.waitForExistence(timeout: UITestTimeouts.standard),
+            "the destination menu must offer Hosts")
+        hostsItem.tap()
+
+        // The Hosts page mounts with the SAME compact selector, relabeled
+        // to Hosts, and its own toolbar (Scan to Pair / Add Host) intact.
+        let hostsMenu = app.buttons["Hosts, switch destination"].firstMatch
+        XCTAssertTrue(
+            hostsMenu.waitForExistence(timeout: UITestTimeouts.standard),
+            "the Hosts page must carry the same compact selector")
+        XCTAssertTrue(
+            app.buttons["Scan to Pair"].firstMatch
+                .waitForExistence(timeout: UITestTimeouts.standard),
+            "the Hosts page's own toolbar must stay reachable")
+        captureScreenshot(app, "nav-phone-hosts-selector", lifetime: .keepAlways)
     }
 
     /// The agent detail's top-right icon-only toggle flips surfaces

@@ -174,6 +174,10 @@ struct HostListView: View {
             // hunk is the navigation slice's env-contract seam, flagged
             // for merge arbitration.
             .navigationTitle(destinationMenuTitleFallback)
+            // Report pushed-navigation state upward (#A): a pushed Host
+            // detail makes the root's destination chrome step aside.
+            .modifier(AppDestinationPageFocusModifier(
+                destination: .hosts, isContentPushed: !path.isEmpty))
             .toolbar {
                 if let destinationMenu {
                     ToolbarItem(placement: .topBarLeading) {
