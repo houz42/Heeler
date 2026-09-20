@@ -29,7 +29,7 @@ final class CaptureUITests: XCTestCase {
             inputButton.waitForExistence(timeout: 10),
             "input affordance missing after hold; buttons: \(allButtons.joined(separator: " | "))")
         inputButton.tap()
-        let field = app.textFields.firstMatch
+        let field = app.textViews.firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 8), "input field did not open")
         field.typeText("Reply exactly: post-hold request proof e39754b.")
         let send = app.buttons["Send"].firstMatch
@@ -228,11 +228,7 @@ extension CaptureUITests {
             row.tap()
         }
         Thread.sleep(forTimeInterval: 8)
-        // DIAGNOSTIC: the tapped agent's chat state.
         screenshot("int-agent-detail-state")
-        try? app.debugDescription.write(
-            to: URL(fileURLWithPath: "/tmp/heeler-proof-signals/int-tree-dump.txt"),
-            atomically: true, encoding: .utf8)
         let messageButton = app.buttons["Message the agent"]
         XCTAssertTrue(
             messageButton.waitForExistence(timeout: 25),

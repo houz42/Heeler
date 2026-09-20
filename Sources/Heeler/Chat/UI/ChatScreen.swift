@@ -85,8 +85,7 @@ struct ChatScreen: View {
         onAskAnswer: ((PendingInteraction, [PendingAskAnswerPayload]) async throws -> Void)? = nil,
         onAskCancel: ((PendingInteraction) async throws -> Void)? = nil,
         imageFetcher: ((String) async throws -> Data)? = nil,
-        fetch: RemoteFileFetcher? = nil,
-        diagRouterProbe: String? = nil
+        fetch: RemoteFileFetcher? = nil
     ) {
         self.paneID = paneID
         self.agentName = agentName
@@ -97,6 +96,7 @@ struct ChatScreen: View {
         self.isLoadingOlder = isLoadingOlder
         self.loadOlder = loadOlder
         self.stripAccessory = stripAccessory
+        self.router = router
         self.deliver = deliver
         self.pendingUnsupported = pendingUnsupported
         self.authorLabel = authorLabel
@@ -105,7 +105,6 @@ struct ChatScreen: View {
         self.onAskCancel = onAskCancel
         self.imageFetcher = imageFetcher
         self.fetch = fetch
-        self.diagRouterProbe = diagRouterProbe
         self._level = State(initialValue: initialLevel)
     }
 
@@ -245,15 +244,6 @@ struct ChatScreen: View {
         .sheet(item: $inspectedWork) { detail in
             ChatWorkInspectorSheet(detail: detail)
                 .presentationDetents([.medium, .large])
-        }
-        .overlay(alignment: .top) {
-            if let diagRouterProbe {
-                Text(diagRouterProbe)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.red)
-                    .padding(.top, 120)
-                    .accessibilityLabel("diag-probe")
-            }
         }
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
@@ -786,10 +776,6 @@ struct ChatScreen: View {
     /// Resolves a wire image ref to bytes (broker blob.read). Nil =
     /// images render as honest unavailable tiles.
     var imageFetcher: ((String) async throws -> Data)? = nil
-    /// TEMP diagnostic (revert with the capture harness): the surface
-    /// owner's wiring state, rendered for interactive-proof debugging.
-    /// Nil (all release paths) = never rendered.
-    var diagRouterProbe: String? = nil
     /// The transcript image being read full-size.
     @State private var viewingImage: ChatImageRef?
     /// The L1 work inspector's call detail (tapped summary row).
