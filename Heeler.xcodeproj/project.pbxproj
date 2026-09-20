@@ -174,6 +174,7 @@
 		5789049E3BA965EB057C4577 /* FilePreparerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C833B5BA50276247A54258B /* FilePreparerTests.swift */; };
 		57C3F1ADAA69142649C24356 /* TerminalFullKeyboardLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C07BE449E30F431C247AF01 /* TerminalFullKeyboardLayoutTests.swift */; };
 		581CB87C7122F80410C6723D /* TerminalSurfaceOrphanLayerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80C3966A26050D88C26229E9 /* TerminalSurfaceOrphanLayerTests.swift */; };
+		58534FCD615E76C396C36F64 /* HostsCardProofTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59E672BC6EA3373F0E2BBDFE /* HostsCardProofTests.swift */; };
 		58826FB63EE828F3E91C9432 /* omp-large-session.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = 9F64BC9EDCEE15DB90F1EA9F /* omp-large-session.jsonl */; };
 		58D1F69AF9167C13A9E0EAB9 /* NotificationEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = F61A04DBA56C56925B594FF1 /* NotificationEnvelope.swift */; };
 		58EE685D5F9C4B21D4B4DC0E /* FakeLiveActivityController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 856A8398D8F0FB87F252D193 /* FakeLiveActivityController.swift */; };
@@ -700,6 +701,7 @@
 		5870640477FDEB252DEE80B7 /* AttachLinkIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachLinkIndex.swift; sourceTree = "<group>"; };
 		58E018A4C6816BAEEACB96FA /* AgentListFieldsPreviewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentListFieldsPreviewTests.swift; sourceTree = "<group>"; };
 		59A749D2AF2390BCACBADED3 /* HeelerNotificationService.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = HeelerNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		59E672BC6EA3373F0E2BBDFE /* HostsCardProofTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostsCardProofTests.swift; sourceTree = "<group>"; };
 		5A001C1028C859D6281E1642 /* InputShortcutStripPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputShortcutStripPresentation.swift; sourceTree = "<group>"; };
 		5A3319D35C3BBCD2CB151843 /* TerminalSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalSettings.swift; sourceTree = "<group>"; };
 		5AE41F1D9C07070BCD014E04 /* SessionDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDiscovery.swift; sourceTree = "<group>"; };
@@ -1557,6 +1559,7 @@
 		840DABB66FB70FE5F5ABB557 /* HeelerUITests */ = {
 			isa = PBXGroup;
 			children = (
+				59E672BC6EA3373F0E2BBDFE /* HostsCardProofTests.swift */,
 				DC978DA94E5FE16ADF50AE74 /* USAGE.md */,
 				796A3CDAEF959EA0480143D0 /* Smoke */,
 				A6FECA09A3FA28A0D02967B7 /* Support */,
@@ -2331,6 +2334,7 @@
 				11E6DF65B714EC58E6E02C38 /* AgentsListSmokeTests.swift in Sources */,
 				E564F1F3D33D28FB5EFEE53E /* ChatSmokeTests.swift in Sources */,
 				BFE7607AF9AEBE749F6EF92C /* HostFormTypingSmokeTests.swift in Sources */,
+				58534FCD615E76C396C36F64 /* HostsCardProofTests.swift in Sources */,
 				552FED71FD5EF6AB627AE752 /* Screenshots.swift in Sources */,
 				DD43CBF62887E3EEB8612993 /* TrustAlert.swift in Sources */,
 				E821656C47626CE805B118EA /* Typing.swift in Sources */,

@@ -29,6 +29,9 @@
             case none
             /// The Add/Edit Host form with its additional-address rows.
             case hostForm
+            /// The Hosts list page: host cards with named routes (the
+            /// card-tap and route-inspector demo route).
+            case hostList
             /// The Host detail page with its candidate list mid-probe.
             case hostDetailProbing
             /// The Host detail page stopped on the pick between two
@@ -38,13 +41,14 @@
             static func fromArguments() -> Route {
                 let arguments = ProcessInfo.processInfo.arguments
                 if arguments.contains(hostDetailProbingLaunchArgument) { return .hostDetailProbing }
-                if arguments.contains(hostDetailPickLaunchArgument) { return .hostDetailPick }
+                if arguments.contains(hostListLaunchArgument) { return .hostList }
                 if arguments.contains(hostFormLaunchArgument) { return .hostForm }
                 return .none
             }
         }
 
         static let hostFormLaunchArgument = "--demo-host-form"
+        static let hostListLaunchArgument = "--demo-host-list"
         static let hostDetailProbingLaunchArgument = "--demo-host-detail-probing"
         static let hostDetailPickLaunchArgument = "--demo-host-detail-pick"
 
@@ -53,7 +57,12 @@
             name: "Studio Mac",
             address: "192.168.31.71",
             username: "developer",
-            additionalAddresses: ["CMF79KM7YF.local", "studio.vpn.example"])
+            additionalAddresses: ["CMF79KM7YF.local", "studio.vpn.example"],
+            routeLabels: [
+                "192.168.31.71": "Local network",
+                "CMF79KM7YF.local": "Bonjour",
+                "studio.vpn.example": "VPN",
+            ])
     }
 
     @MainActor
@@ -112,6 +121,19 @@
                     HostFormView(
                         store: hosts,
                         editing: DemoScreenshotMode.multipathHost)
+                }
+            case .hostList:
+                // The Hosts list as the card redesign renders it: the
+                // Studio Mac card is dialed through its primary route (in
+                // use), its Local-network route is an honest unknown
+                // alternate, and the Build Server card is not connected.
+                NavigationStack {
+                    HostListView(
+                        store: hosts,
+                        connectedAddresses: [
+                            DemoScreenshotFixture.studioHostID:
+                                "studio.demo.invalid",
+                        ])
                 }
             case .hostDetailProbing:
                 multipathDetail(midProbe: true)
@@ -257,7 +279,12 @@
                 id: studioHostID,
                 name: "Studio Mac",
                 address: "studio.demo.invalid",
-                username: "developer"),
+                username: "developer",
+                additionalAddresses: ["studio.lan.demo.invalid"],
+                routeLabels: [
+                    "studio.demo.invalid": "Primary",
+                    "studio.lan.demo.invalid": "Local network",
+                ]),
             Host(
                 id: buildHostID,
                 name: "Build Server",

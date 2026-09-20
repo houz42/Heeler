@@ -134,7 +134,7 @@ struct HostFormView: View {
     /// for THAT row — never a hardcoded host (handoff §E requirement 3).
     private var routeSection: some View {
         Section {
-            ForEach($draft.addresses) { $row in
+            ForEach(draft.addresses) { row in
                 Button {
                     editingRouteID = row.id
                 } label: {
@@ -153,13 +153,12 @@ struct HostFormView: View {
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                     }
+                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderless)
                 .accessibilityLabel(
                     "Route \(routeName(for: row)), \(routeSubtitle(for: row))")
-            }
-            .onMove { source, destination in
-                draft.moveAddresses(from: source, to: destination)
+                .accessibilityIdentifier("host-form-route-\(row.id.uuidString)")
             }
             Button {
                 let row = AdditionalAddressRow()
@@ -423,9 +422,12 @@ private struct LabeledTextField: View {
             Text(title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            // The field keeps its own accessibility identity (title),
+            // so UI tests and VoiceOver can focus and type into it
+            // directly; the caption above is a separate element.
             TextField(title, text: $text, prompt: prompt)
+                .accessibilityLabel(title)
         }
-        .accessibilityElement(children: .combine)
     }
 }
 
@@ -494,6 +496,7 @@ struct HostRouteEditView: View {
                                 id: routeID, address: address, label: label))
                         dismiss()
                     }
+                    .accessibilityIdentifier("route-editor-save")
                 }
             }
         }

@@ -493,7 +493,12 @@ private struct HostCardSection: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(route.accessibilityLabel)
+                .accessibilityLabel(
+                    "Route \(route.name), \(route.address):\(String(host.port)), "
+                        + (route.usage == .inUse
+                            ? "currently in use"
+                            : "alternate route, reachability unknown until checked"))
+                .accessibilityIdentifier("host-route-\(route.address)")
             }
         }
     }

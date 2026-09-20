@@ -174,15 +174,20 @@ struct HostRouteInspectorView: View {
                 Section {
                     LabeledContent("SSH connection") {
                         connectionStateText
+                            .accessibilityIdentifier("route-ssh-connection")
                     }
                     LabeledContent("Host key") {
                         trustText
+                            .accessibilityIdentifier("route-host-key")
                     }
                     LabeledContent("Route selection") {
-                        switch route.usage {
-                        case .inUse: Text("Currently in use")
-                        case .alternate: Text("Available alternative")
+                        Group {
+                            switch route.usage {
+                            case .inUse: Text("Currently in use")
+                            case .alternate: Text("Available alternative")
+                            }
                         }
+                        .accessibilityIdentifier("route-selection")
                     }
                 } header: {
                     Text("Status")
