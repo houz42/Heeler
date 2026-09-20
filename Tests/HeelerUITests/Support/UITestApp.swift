@@ -30,6 +30,10 @@ enum UITestApp {
         case console
         /// The Add/Edit Host form against the multipath demo Host.
         case hostForm
+        /// The Hosts list page: host cards with named routes (Studio Mac
+        /// card dialed through its primary address, Build Server's card
+        /// honestly not-connected).
+        case hostList
         /// The Host detail page mid address-probe.
         case hostDetailProbing
         /// The Host detail page stopped on the pick between two addresses.
@@ -40,6 +44,7 @@ enum UITestApp {
         var launchArguments: [String] {
             switch self {
             case .console: return ["--demo-screenshots"]
+            case .hostList: return ["--demo-screenshots", "--demo-host-list"]
             case .hostForm: return ["--demo-screenshots", "--demo-host-form"]
             case .hostDetailProbing:
                 return ["--demo-screenshots", "--demo-host-detail-probing"]
@@ -78,6 +83,20 @@ enum UITestFixtures {
     /// The compact top-left destination selector on the Console (#A): the
     /// sheet-era Hosts/Settings toolbar buttons it replaced are gone.
     static let destinationSelector = "Agents, switch destination"
+    /// The redesigned Host form's labelled fields (handoff §E): the
+    /// display-name field's label, and the SSH username field's.
+    static let hostFormNameField = "Display name"
+    static let hostFormUserField = "SSH username"
+    /// Hosts-list cards (handoff §E): the Studio Mac card's route rows,
+    /// labelled by route name with exact address:port underneath.
+    static let studioMacCard = "Studio Mac"
+    static let studioMacPrimaryRoute = "Primary"
+    static let studioMacPrimaryAddress = "studio.demo.invalid:22"
+    static let studioMacLanRoute = "Local network"
+    static let studioMacLanAddress = "studio.lan.demo.invalid:22"
+    /// Toolbar buttons on the Console (labelled, not identified).
+    static let consoleToolbarHosts = "Hosts"
+    static let consoleToolbarSettings = "Settings"
 }
 
 /// Timeout budget: one shared set so tests stay snappy but not flaky.

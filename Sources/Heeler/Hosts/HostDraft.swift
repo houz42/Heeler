@@ -8,10 +8,14 @@ import Foundation
 struct AdditionalAddressRow: Equatable, Identifiable, Sendable {
     let id: UUID
     var address: String
+    /// The user-assignable route name shown on the Host card and the route
+    /// editor (handoff §E). Blank means the route presents its address.
+    var label: String
 
-    init(id: UUID = UUID(), address: String = "") {
+    init(id: UUID = UUID(), address: String = "", label: String = "") {
         self.id = id
         self.address = address
+        self.label = label
     }
 }
 
@@ -53,7 +57,9 @@ struct HostDraft: Equatable, Sendable {
     /// Prefill for editing an existing Host.
     init(host: Host) {
         name = host.name
-        addresses = host.candidateAddresses.map { AdditionalAddressRow(address: $0) }
+        addresses = host.candidateAddresses.map {
+            AdditionalAddressRow(address: $0, label: host.routeLabels[$0] ?? "")
+        }
         if addresses.isEmpty {
             addresses = [AdditionalAddressRow()]
         }
@@ -117,6 +123,7 @@ struct HostDraft: Equatable, Sendable {
             authMethod: authMethod,
             sessionName: sessionName.trimmingCharacters(in: .whitespaces),
             additionalAddresses: Array(trimmed.dropFirst()),
+            routeLabels: routeLabels,
             jumpAddress: jumpAddress.trimmingCharacters(in: .whitespaces),
             jumpPort: jumpPortNumber ?? 22,
             jumpUsername: jumpUsername.trimmingCharacters(in: .whitespaces),
@@ -132,10 +139,19 @@ struct HostDraft: Equatable, Sendable {
             .filter { !$0.isEmpty }
     }
 
-    /// Appends one address row. A blank row is a no-op — the row exists to
-    /// be typed into; saving drops it instead of rejecting.
-    mutating func addAddress(_ address: String = "") {
-        addresses.append(AdditionalAddressRow(address: address))
+    /// The route labels to persist, keyed by trimmed address: only rows
+    /// that still dial, labels trimmed, blanks dropped. The same list the
+    /// card and the route editor present, so save cannot drift from edit.
+    private var routeLabels: [String: String] {
+        var labels: [String: String] = [:]
+        for row in addresses {
+            let address = row.address.trimmingCharacters(in: .whitespaces)
+            let label = row.label.trimmingCharacters(in: .whitespaces)
+            if !address.isEmpty, !label.isEmpty {
+                labels[address] = label
+            }
+        }
+        return labels
     }
 
     /// Removes the row with `id` — ANY row, the primary included: removing
@@ -144,6 +160,12 @@ struct HostDraft: Equatable, Sendable {
     mutating func removeAddress(id: UUID) {
         guard addresses.count > 1 else { return }
         addresses.removeAll { $0.id == id }
+    }
+
+    /// Appends one address row. A blank row is a no-op — the row exists to
+    /// be typed into; saving drops it instead of rejecting.
+    mutating func addAddress(_ address: String = "") {
+        addresses.append(AdditionalAddressRow(address: address))
     }
 
     /// Reorders the rows after an EditMode/onDelete OnMove. Position 0 is
