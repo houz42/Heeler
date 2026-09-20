@@ -387,10 +387,7 @@ private struct HostRow: View {
                     if isRetryInFlight {
                         ProgressView()
                     } else {
-                        Label("Retry", systemImage: "arrow.clockwise")
-                            .labelStyle(.titleAndIcon)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
+                        Image(systemName: "arrow.clockwise")
                     }
                 }
                 .buttonStyle(.bordered)
