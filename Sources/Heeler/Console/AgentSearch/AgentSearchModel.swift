@@ -120,6 +120,12 @@ struct AgentSearchEngine: Equatable, Sendable {
         !AgentSearchQuery(raw: rawQuery).text.isEmpty || !filters.isEmpty
     }
 
+    /// Review finding #5: relevance ordering applies only to a nonempty
+    /// TEXT query — chips-only searches keep the view menu's chosen sort.
+    var isTextQuery: Bool {
+        !AgentSearchQuery(raw: rawQuery).text.isEmpty
+    }
+
     // MARK: Matching
 
     /// AND across fields, OR within a field.
@@ -156,20 +162,27 @@ struct AgentSearchEngine: Equatable, Sendable {
         return AgentFuzzyMatcher.score(query.text, against: value)
     }
 
-    /// Every agent passing filters and matching the query, relevance order
-    /// (score desc, stable by input index).
+    /// Every agent passing filters and matching the query. TEXT queries
+    /// order by relevance (score desc, stable by input index); chips-only
+    /// searches keep the caller's supplied order (the view menu's chosen
+    /// sort owns it — review finding #5).
     func matches(over agents: [ConsoleAgent]) -> [ConsoleAgent] {
         let query = AgentSearchQuery(raw: rawQuery)
-        let scored: [(agent: ConsoleAgent, score: Int, index: Int)] =
-            agents.enumerated().compactMap { index, agent in
-                guard passesFilters(agent) else { return nil }
-                let score = query.text.isEmpty ? 0 : self.score(agent)
-                guard score >= 0 else { return nil }
-                return (agent, score, index)
-            }
-        return scored.sorted { lhs, rhs in
-            (rhs.score, lhs.index) < (lhs.score, rhs.index)
-        }.map(\.agent)
+        guard query.text.isEmpty else {
+            let scored: [(agent: ConsoleAgent, score: Int, index: Int)] =
+                agents.enumerated().compactMap { index, agent in
+                    guard passesFilters(agent) else { return nil }
+                    let score = self.score(agent)
+                    guard score >= 0 else { return nil }
+                    return (agent, score, index)
+                }
+            return scored.sorted { lhs, rhs in
+                (rhs.score, lhs.index) < (lhs.score, rhs.index)
+            }.map(\.agent)
+        }
+        // Chips only (or nothing): pass the filters through in the order
+        // the caller supplies — the chosen sort stays authoritative.
+        return agents.filter { passesFilters($0) }
     }
 
     // MARK: Suggestions

@@ -196,10 +196,64 @@ struct AgentSearchTests {
         bar.acceptHighlighted(over: agents)
         #expect(bar.engine.filters == [.init(field: .workspace, value: "heeler")])
         #expect(bar.engine.rawQuery.isEmpty)
-        // Esc dismisses; a later Enter accepts the top row (highlight 0).
-        bar.updateQuery("d")
+    }
+
+    @Test func enterWithoutHighlightOrWithDismissedSuggestionsAcceptsNothing() {
+        // Review finding #6: no phantom accepts — Enter with suggestions
+        // dismissed (Esc), or with no highlight, changes NOTHING.
+        let agents = [makeAgent(workspace: "heeler", paneID: "a")]
+        let bar = AgentSearchBarStore()
+        bar.updateQuery("h")
         bar.dismissSuggestions()
-        #expect(!bar.showsSuggestions)
+        bar.acceptHighlighted(over: agents)
+        #expect(bar.engine.filters.isEmpty)
+        #expect(bar.engine.rawQuery == "h")
+        // Visible suggestions but nothing highlighted: Enter still does
+        // nothing (the user must see and choose).
+        bar.moveHighlight(1, over: agents)
+        bar.dismissSuggestions()
+        bar.acceptHighlighted(over: agents)
+        #expect(bar.engine.filters.isEmpty)
+    }
+
+    @Test func fieldRowAcceptanceOpensValueCompletions() {
+        // Review finding #6: accepting a `field:` prefix is a half-typed
+        // state — the suggestion list stays OPEN showing the field's
+        // values.
+        let agents = [makeAgent(host: "devbox", paneID: "a")]
+        let bar = AgentSearchBarStore()
+        bar.updateQuery("hos")
+        bar.moveHighlight(1, over: agents)
+        let fieldRow = bar.engine.suggestions(over: agents)
+            .first { $0.kind == .field }!
+        bar.accept(fieldRow)
+        #expect(bar.engine.rawQuery == "host:")
+        #expect(bar.showsSuggestions, "value completions must open after the prefix")
+        #expect(!bar.engine.suggestions(over: agents).isEmpty)
+    }
+
+    @Test func chipsOnlyQueriesKeepTheSuppliedSortOrder() {
+        // Review finding #5: chips-only searches never apply relevance —
+        // the caller's (chosen-sort) order passes through untouched.
+        let agents = [
+            makeAgent(workspace: "heeler", title: "Zulu", paneID: "z"),
+            makeAgent(workspace: "heeler", title: "Alpha", paneID: "a"),
+            makeAgent(workspace: "docs", title: "Mike", paneID: "m"),
+        ]
+        let engine = AgentSearchEngine(filters: [.init(field: .workspace, value: "heeler")])
+        let matched = engine.matches(over: agents)
+        #expect(matched.map { (row: ConsoleAgent) in row.agent.paneID } == ["z", "a"], "supplied order preserved")
+        #expect(engine.isConstrained && !engine.isTextQuery)
+    }
+
+    @Test func textQueriesStillRankByRelevance() {
+        let agents = [
+            makeAgent(title: "About heeler work", paneID: "substring"),
+            makeAgent(name: "heeler", title: "Unrelated", paneID: "exact"),
+        ]
+        let engine = AgentSearchEngine(rawQuery: "heeler")
+        #expect(engine.isTextQuery)
+        #expect(engine.matches(over: agents).first?.agent.paneID == "exact")
     }
 
     @Test func queryAndFiltersSurviveStoreRoundTrips() {

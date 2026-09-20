@@ -1,13 +1,14 @@
 import SwiftUI
 import UIKit
 
-/// The approved two-line Agent row (redesign, handoff §B + the kind-icon
-/// addendum): kind icon at the leading edge (runtime metadata, neutral
-/// fallback for unknown kinds — never an avatar initial), then title +
-/// status badge on line 1, and host · session · workspace · tab as ONE
-/// quiet concatenated line — no field labels, no message brief. All four
-/// location values stay on the phone; the full identity remains accessible
-/// on truncation (VoiceOver reads it in full).
+/// The approved two-line Agent row (redesign §B + review findings): kind
+/// glyph at the leading edge (runtime metadata, neutral fallback — never an
+/// avatar initial), then the agent's actual TITLE + a small colored state
+/// badge on line 1 (compact neutral row: no full-row fills, no time — the
+/// wire carries no timestamps, and none are invented), and host · session ·
+/// workspace · tab as ONE quiet concatenated line. No field labels, no
+/// message brief. All four location values stay on the phone; the full
+/// identity remains accessible on truncation.
 struct AgentCardView: View {
     let agent: ConsoleAgent
     var layout: AgentRowLayout = .heelerDefault
@@ -21,17 +22,16 @@ struct AgentCardView: View {
         AgentKindBadgeModel(agent: agent)
     }
 
-    /// The title line: the presentation's headline (the configured layout
-    /// still owns which fields compose it), trimmed to one line.
+    /// The title line: the agent/conversation TITLE — the server-reported
+    /// name first, then the terminal title. Never the layout-composed
+    /// workspace·agent·tab context (the quiet line below carries all of
+    /// that; repeating it here was review finding #2).
     private var titleText: String {
-        let headline = AgentCardPresentation(agent: agent, layout: layout).headline
-        let singleLine = headline.components(separatedBy: .newlines).joined(separator: " ")
-        return singleLine.isEmpty ? "Agent" : singleLine
+        AgentCardRowTitle.title(for: agent)
     }
 
     /// The quiet location line: host · session · workspace · tab, dropping
-    /// values the snapshot did not carry. Field labels never render; the
-    /// separators are the only chrome.
+    /// only values the snapshot did not carry. Field labels never render.
     private var locationLine: String {
         AgentCardLocation.line(for: agent)
     }
@@ -43,26 +43,25 @@ struct AgentCardView: View {
     /// VoiceOver reads the full identity, not the truncated line: each
     /// field named, so a truncated phone render never hides identity.
     private var accessibilityIdentity: String {
-        var spoken: [String] = []
-        spoken.append("Host \(agent.hostName)")
-        if !agent.hostSessionName.isEmpty {
-            spoken.append("session \(agent.hostSessionName)")
-        }
+        var spoken: [String] = ["Host \(agent.hostName)"]
+        spoken.append("session \(AgentCardLocation.sessionLabel(for: agent))")
         if let workspace = agent.workspaceLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
             !workspace.isEmpty {
             spoken.append("workspace \(workspace)")
         }
-        if agent.showsTabLabel, let tab = agent.tabLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
-            !tab.isEmpty {
+        if let tab = AgentCardLocation.tabLabel(for: agent) {
             spoken.append("tab \(tab)")
         }
-        return spoken.joined(separator: ", ")
+        return spoken.joinedForAccessibility()
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
             AgentKindBadgeIcon(model: kindBadge)
-            VStack(alignment: .leading, spacing: 3) {
+                .alignmentGuide(.firstTextBaseline) { dimension in
+                    dimension.height * 0.62
+                }
+            VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .center, spacing: 6) {
                     if !headlinePrefix.isEmpty {
                         Text(verbatim: headlinePrefix)
@@ -81,7 +80,7 @@ struct AgentCardView: View {
                             .accessibilityLabel("Pinned")
                     }
                     Spacer(minLength: 8)
-                    AgentStatusBadge(status: agent.agent.status)
+                    AgentStateBadge(status: agent.agent.status)
                 }
                 if !locationParts.isEmpty {
                     Text(verbatim: locationLine)
@@ -98,33 +97,61 @@ struct AgentCardView: View {
                 }
             }
         }
-        .padding(.vertical, 6)
-        // A live Agent tints the whole row's background at low opacity so
-        // the state reads from scan distance; idle/done stay plain.
-        .background(rowTint)
+        .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
             "\(titleText), \(kindBadge.accessibilityLabel), status \(agent.agent.status.searchLabel)")
         .accessibilityValue(accessibilityIdentity)
     }
+}
 
-    @ViewBuilder
-    private var rowTint: some View {
-        switch agent.agent.status {
-        case .working, .blocked:
-            Color(agent.agent.status.tintUIColor)
-                .opacity(0.10)
-        default:
-            EmptyView()
+/// The row's TITLE identity (review finding #2): the actual agent/
+/// conversation title — server-reported name, then the stripped terminal
+/// title, then the pane title. The configured row layout is NOT composed
+/// into the title; the quiet location line carries the context.
+enum AgentCardRowTitle {
+    static func title(for agent: ConsoleAgent) -> String {
+        // The conversation TITLE the TUI shows: `Agent.title` is the
+        // terminal title with status glyphs stripped — the task title. The
+        // server-reported agent NAME follows; the detected kind is the last
+        // resort, never an invented label.
+        let title = agent.agent.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !title.isEmpty { return title }
+        if let name = agent.agent.name?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !name.isEmpty {
+            return name
         }
+        let pane = agent.agent.paneTitle?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !pane.isEmpty { return pane }
+        return agent.agent.displayName
     }
 }
 
-/// The quiet location line's pure projection: host · session · workspace ·
-/// tab, one concatenated string, no field labels, values the snapshot did
-/// not carry dropped instead of rendering empty gaps. herdr's automatic
-/// positional tab label never renders (`showsTabLabel`).
+/// The quiet location line's pure projection (review finding #3): host ·
+/// session · workspace · tab, one concatenated string, no field labels.
+/// The DEFAULT session renders by its honest name ("default") rather than
+/// dropping; the tab renders the snapshot's actual tab identity (a missing
+/// explicit label renders the automatic positional name — real identity
+/// from the window layout, not an invented one).
 enum AgentCardLocation {
+    /// The session label: the named herdr session, or "default" — the
+    /// default session is real identity, not noise.
+    static func sessionLabel(for agent: ConsoleAgent) -> String {
+        let trimmed = agent.hostSessionName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "default" : trimmed
+    }
+
+    /// The tab's actual identity: the explicit label when the user named
+    /// the tab, else herdr's automatic positional name (real layout
+    /// identity), else nil only when the snapshot carried nothing.
+    static func tabLabel(for agent: ConsoleAgent) -> String? {
+        guard let label = agent.tabLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !label.isEmpty
+        else { return nil }
+        return label
+    }
+
     static func parts(for agent: ConsoleAgent) -> [String] {
         var parts: [String] = []
         func append(_ value: String?) {
@@ -132,14 +159,45 @@ enum AgentCardLocation {
             if !trimmed.isEmpty { parts.append(trimmed) }
         }
         append(agent.hostName)
-        append(agent.hostSessionName.isEmpty ? nil : agent.hostSessionName)
+        append(sessionLabel(for: agent))
         append(agent.workspaceLabel)
-        if agent.showsTabLabel { append(agent.tabLabel) }
+        append(tabLabel(for: agent))
         return parts
     }
 
     static func line(for agent: ConsoleAgent) -> String {
         parts(for: agent).joined(separator: " · ")
+    }
+}
+
+extension Array where Element == String {
+    /// Small join helper for the spoken identity.
+    func joinedForAccessibility() -> String {
+        joined(separator: ", ")
+    }
+}
+
+/// The SMALL colored state badge (review finding #1): the approved design's
+/// compact "Needs you" / "Working" capsule — palette ink on a palette wash,
+/// one size under the title, no full-row fills. Idle/done render a quiet
+/// gray badge so the state reads as text, not just a dot.
+struct AgentStateBadge: View {
+    let status: AgentStatus
+
+    private var label: String {
+        status.searchLabel
+    }
+
+    var body: some View {
+        Text(label)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(Color(status.inkUIColor))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color(status.tintUIColor).opacity(0.18), in: Capsule())
+            .fixedSize()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Status \(label)")
     }
 }
 
@@ -266,4 +324,5 @@ struct AgentStatusBadge: View {
                 repositoryCheckout: nil,
                 hostSessionName: "ci"))
     }
+    .listStyle(.plain)
 }

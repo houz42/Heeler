@@ -85,10 +85,30 @@ struct AgentSearchBarView: View {
 
     private var field: some View {
         HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
+            // The magnifier is a labeled control, not decoration: it
+            // raises the keyboard when unfocused and — the phone's
+            // Esc-parity affordance — dismisses the suggestions when they
+            // are visible (hardware Esc is handled by the key-press chain).
+            Button {
+                if isFocused, store.showsSuggestions {
+                    store.dismissSuggestions()
+                } else {
+                    isFocused = true
+                    if !store.engine.rawQuery.isEmpty { store.reopenSuggestions() }
+                }
+            } label: {
+                Image(systemName: "magnifyingglass")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    // A real hit target, not a 20pt glyph: the row's
+                    // height, so the toggle is tappable at thumb scale.
+                    .frame(minWidth: 32, minHeight: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(
+                isFocused && store.showsSuggestions
+                    ? "Hide suggestions" : "Search agent titles or filter by context")
             TextField(
                 "Title, host:, workspace:…",
                 text: Binding(
@@ -155,28 +175,34 @@ struct AgentSearchBarView: View {
         }
     }
 
+    /// The suggestion list (review finding #6): bounded and scrollable —
+    /// at most ~5 rows visible, so a raised keyboard can never wall the
+    /// results off.
     @ViewBuilder
     private var suggestionsList: some View {
         let suggestions = store.engine.suggestions(over: agents)
         if !suggestions.isEmpty {
-            VStack(spacing: 0) {
-                Text(store.suggestionsHelp)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
-                ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, suggestion in
-                    AgentSearchSuggestionRow(
-                        suggestion: suggestion,
-                        isHighlighted: index == store.highlightIndex,
-                        isSelected: suggestion.kind == .value
-                            && store.engine.filters.contains {
-                                $0.field == suggestion.field && $0.value == suggestion.value
-                            })
-                        .onTapGesture { store.accept(suggestion) }
+            ScrollView {
+                VStack(spacing: 0) {
+                    Text(store.suggestionsHelp)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                    ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, suggestion in
+                        AgentSearchSuggestionRow(
+                            suggestion: suggestion,
+                            isHighlighted: index == store.highlightIndex,
+                            isSelected: suggestion.kind == .value
+                                && store.engine.filters.contains {
+                                    $0.field == suggestion.field && $0.value == suggestion.value
+                                })
+                            .onTapGesture { store.accept(suggestion) }
+                    }
                 }
             }
+            .frame(maxHeight: 5 * 44)
             .background(Color(.secondarySystemBackground))
         }
     }

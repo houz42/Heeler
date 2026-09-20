@@ -493,7 +493,12 @@ struct ConsoleView: View {
                     } else {
                         ForEach(agentGroupSections) { section in
                             Section {
-                                if !agentListLayout.isCollapsed(section.id) {
+                                // Review finding #4: an active search or
+                                // filter forces matching groups OPEN — the
+                                // stored collapse state applies only when
+                                // the list is unconstrained, and survives
+                                // the search for when it clears.
+                                if !isEffectivelyCollapsed(section.id) {
                                     ForEach(section.agents) { agent in
                                         agentRow(agent)
                                     }
@@ -501,7 +506,7 @@ struct ConsoleView: View {
                             } header: {
                                 AgentListGroupHeaderView(
                                     section: section,
-                                    isCollapsed: agentListLayout.isCollapsed(section.id)
+                                    isCollapsed: isEffectivelyCollapsed(section.id)
                                 ) {
                                     toggleAgentListGroup(section.id)
                                 }
@@ -558,11 +563,12 @@ struct ConsoleView: View {
         return console.agents.filter { $0.hostID == hostFilter }
     }
 
-    /// The engine's result: relevance outranks the view-menu sort while
-    /// querying (§B); otherwise the chosen order applies.
+    /// The engine's result (review finding #5): a nonempty TEXT query
+    /// outranks the view-menu sort with relevance; chips-only searches
+    /// keep the chosen sort; unconstrained lists use the chosen sort.
     private var searchedAgents: [ConsoleAgent] {
         let matched = agentSearch.engine.matches(over: searchUniverse)
-        guard !agentSearch.isConstrained else { return matched }
+        guard !agentSearch.engine.isTextQuery else { return matched }
         return AgentListLayout.ordered(matched, by: agentListLayout.order)
     }
 
@@ -572,9 +578,16 @@ struct ConsoleView: View {
         AgentListLayout.grouped(searchedAgents, by: agentListLayout.grouping)
     }
 
+    /// Review finding #4: while a search or filter is active, matching
+    /// groups render OPEN regardless of the stored collapse state.
+    private func isEffectivelyCollapsed(_ groupID: String) -> Bool {
+        if agentSearch.isConstrained { return false }
+        return agentListLayout.isCollapsed(groupID)
+    }
+
     private func toggleAgentListGroup(_ groupID: String) {
-        // Active search keeps matching groups open (§B); the toggle is a
-        // no-op then, exactly like the approved preview's toast rule.
+        // The approved preview's rule: collapse is a no-op while search or
+        // filters are active — matching groups stay open.
         guard !agentSearch.isConstrained else { return }
         if reduceMotion {
             agentListLayout.toggleCollapsed(groupID)

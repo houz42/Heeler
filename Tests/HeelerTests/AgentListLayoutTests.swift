@@ -7,6 +7,17 @@ import Testing
 @MainActor
 @Suite("Agents list layout views")
 struct AgentListLayoutTests {
+    /// Deterministic UUID per host name (uuid5-style: fixed name UUIDs
+    /// are not in Foundation; a memoized dict works for the test).
+    private static var hostIDs: [String: UUID] = [:]
+    @MainActor
+    private static func hostID(named name: String) -> UUID {
+        if let existing = hostIDs[name] { return existing }
+        let id = UUID()
+        hostIDs[name] = id
+        return id
+    }
+
     private func makeAgent(
         host: String = "devbox",
         session: String = "",
@@ -21,10 +32,13 @@ struct AgentListLayoutTests {
         stateChangeSeq: Int? = 1
     ) -> ConsoleAgent {
         ConsoleAgent(
-            hostID: UUID(), hostName: host,
+            // One stable Host identity per host NAME: agents on the same
+            // machine share the hostID, exactly as the wire reports.
+            hostID: Self.hostID(named: host), hostName: host,
             agent: Agent(
                 terminalID: "term_\(paneID)", kind: kind, title: title, status: status,
-                workspaceID: "w_\(paneID)", tabID: "w_\(paneID):t1", paneID: paneID,
+                workspaceID: "w-\(host)-\(workspace ?? "x")",
+                tabID: "w-\(host)-\(workspace ?? "x"):t1", paneID: paneID,
                 cwd: "/work/\(paneID)", revision: 1, name: name,
                 stateChangeSeq: stateChangeSeq),
             workspaceLabel: workspace, repositoryCheckout: nil,
@@ -77,6 +91,29 @@ struct AgentListLayoutTests {
     }
 
     // MARK: Grouping
+
+    @Test func sameNameDifferentIDWorkspacesNeverMerge() {
+        // Review finding #8: group identity is the stable IDs (hostID,
+        // session, workspaceID), not display names — two same-LABEL
+        // workspaces with different workspaceIDs are two groups even on
+        // the same host.
+        let host = Host.fixture(name: "alpha")
+        let a = ConsoleAgent(
+            hostID: host.id, hostName: "alpha",
+            agent: Agent(terminalID: "t1", kind: "omp", title: "A", status: .idle,
+                workspaceID: "w-1", tabID: "w-1:t", paneID: "p1", cwd: "/", revision: 1),
+            workspaceLabel: "proj", repositoryCheckout: nil,
+            snapshotOrder: 0)
+        let b = ConsoleAgent(
+            hostID: host.id, hostName: "alpha",
+            agent: Agent(terminalID: "t2", kind: "omp", title: "B", status: .idle,
+                workspaceID: "w-2", tabID: "w-2:t", paneID: "p2", cwd: "/", revision: 1),
+            workspaceLabel: "proj", repositoryCheckout: nil,
+            snapshotOrder: 1)
+        let sections = AgentListLayout.grouped([a, b], by: .workspace)
+        #expect(sections.count == 2)
+        #expect(sections.map(\.agents.count) == [1, 1])
+    }
 
     @Test func sameNameWorkspacesOnDifferentHostsNeverMerge() {
         let agents = [
@@ -185,10 +222,14 @@ struct AgentKindBadgeTests {
         // codex → angle brackets, claude → sunburst.
         #expect(AgentKindBadgeModel(kind: "omp").glyph == .pi)
         #expect(AgentKindBadgeModel(kind: "pi").glyph == .pi)
-        #expect(AgentKindBadgeModel(kind: "opencode").glyph == .pi)
         #expect(AgentKindBadgeModel(kind: "codex").glyph == .brackets)
-        #expect(AgentKindBadgeModel(kind: "copilot").glyph == .brackets)
         #expect(AgentKindBadgeModel(kind: "claude").glyph == .sunburst)
+        // Review finding #7: the approved marks scope to the runtimes the
+        // design drew them for — opencode/copilot get distinct neutral
+        // symbols, not the core glyphs.
+        #expect(AgentKindBadgeModel(kind: "opencode").glyph == nil)
+        #expect(AgentKindBadgeModel(kind: "copilot").glyph == nil)
+        #expect(AgentKindBadgeModel(kind: "opencode").systemImage != AgentKindBadgeModel(kind: "omp").systemImage)
         // Long-tail kinds keep the symbol set, no glyph.
         #expect(AgentKindBadgeModel(kind: "gemini").glyph == nil)
         #expect(AgentKindBadgeModel(kind: "gemini").systemImage == "sparkles")

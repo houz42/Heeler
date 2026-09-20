@@ -45,12 +45,15 @@ struct AgentKindBadgeModel: Equatable, Sendable {
         self.init(kind: agent.agent.kind)
     }
 
-    /// The user-approved prototype marks for the core runtimes; ported
-    /// 1:1 from the design's SVG geometry (see AgentKindGlyphs).
+    /// The user-approved prototype marks, scoped to the runtimes the
+    /// design drew them for (review finding #7): omp/pi get the π,
+    /// codex the brackets, claude the sunburst. Every OTHER kind —
+    /// including the pi-family's opencode and the codex-adjacent
+    /// copilot — renders its distinct neutral symbol.
     private static func glyph(for kind: String) -> AgentKindGlyph? {
         switch SupportedAgentKind(rawValue: kind.lowercased()) {
-        case .pi, .omp, .opencode: .pi
-        case .codex, .copilot: .brackets
+        case .pi, .omp: .pi
+        case .codex: .brackets
         case .claude: .sunburst
         default: nil
         }
@@ -64,9 +67,11 @@ struct AgentKindBadgeModel: Equatable, Sendable {
             return fallbackSystemImage
         }
         switch supported {
-        case .pi, .omp, .opencode: return "infinity"
+        case .pi, .omp: return "infinity"
+        case .opencode: return "curlybraces"
         case .claude: return "sun.max"
-        case .codex, .copilot: return "chevron.left.forwardslash.chevron.right"
+        case .codex: return "chevron.left.forwardslash.chevron.right"
+        case .copilot: return "airplane"
         case .gemini, .qwen: return "sparkles"
         case .cursor: return "plus.forwardslash.minus"
         case .devin: return "wand.and.stars"

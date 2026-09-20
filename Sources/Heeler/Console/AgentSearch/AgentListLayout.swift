@@ -31,7 +31,11 @@ enum AgentListOrder: String, CaseIterable, Identifiable, Sendable {
 
     var description: String {
         switch self {
-        case .recent: "Most recent activity first."
+        // Review finding #5: the wire carries no cross-host timestamps —
+        // herdr's state_change_seq is comparable only within a Host. The
+        // order says so: newest activity first within each machine, hosts
+        // in stable blocks. No invented wall-clock ranking.
+        case .recent: "Newest activity first within each Host; Hosts in stable blocks."
         case .title: "Alphabetical agent titles."
         case .attention: "Needs you, working, idle, done, then unknown."
         case .pane: "The real snapshot order of panes in the herdr window."
@@ -240,24 +244,38 @@ enum AgentListLayout {
     }
 
     /// The full-identity key, title, and location path for one agent under
-    /// a grouping. Same-name workspace/session/tab values on different
-    /// parents produce different keys.
+    /// a grouping (review finding #8). The KEY is stable IDs — hostID,
+    /// session name, workspaceID, tabID — so same-name resources on
+    /// different parents can never merge; the PATH carries display labels
+    /// for the header.
     private static func identity(
         of agent: ConsoleAgent,
         grouping: AgentListGrouping
     ) -> (key: AgentListSection.Key, title: String, path: [String]) {
-        let host = agent.hostName
-        let session = agent.searchValue(for: .session) ?? AgentTree.defaultSessionLabel
-        let workspace = agent.searchValue(for: .workspace) ?? AgentTree.otherLabel
-        let tab = agent.searchValue(for: .tab) ?? AgentTree.otherLabel
-        let pathByGrouping: [AgentListGrouping: [String]] = [
-            .host: [host],
-            .session: [host, session],
-            .workspace: [host, session, workspace],
-            .tab: [host, session, workspace, tab],
+        let hostID = agent.hostID.uuidString
+        let sessionID = agent.searchValue(for: .session) ?? AgentTree.defaultSessionLabel
+        let workspaceID = agent.agent.workspaceID
+        let tabID = agent.agent.tabID
+        let keyByGrouping: [AgentListGrouping: [String]] = [
+            .host: [hostID],
+            .session: [hostID, sessionID],
+            .workspace: [hostID, sessionID, workspaceID],
+            .tab: [hostID, sessionID, workspaceID, tabID],
         ]
+        let hostLabel = agent.hostName
+        let sessionLabel = sessionID
+        let workspaceLabel = agent.searchValue(for: .workspace) ?? AgentTree.otherLabel
+        let tabLabel = agent.searchValue(for: .tab) ?? AgentTree.otherLabel
+        let pathByGrouping: [AgentListGrouping: [String]] = [
+            .host: [hostLabel],
+            .session: [hostLabel, sessionLabel],
+            .workspace: [hostLabel, sessionLabel, workspaceLabel],
+            .tab: [hostLabel, sessionLabel, workspaceLabel, tabLabel],
+        ]
+        let key = AgentListSection.Key(
+            grouping: grouping, identity: keyByGrouping[grouping] ?? [])
         let path = pathByGrouping[grouping] ?? []
-        return (AgentListSection.Key(grouping: grouping, identity: path), path.last ?? "", path)
+        return (key, path.last ?? "", path)
     }
 }
 

@@ -37,18 +37,34 @@ struct AgentCardRedesignTests {
         #expect(AgentCardLocation.line(for: agent) == "devbox · main · heeler · tests")
     }
 
-    @Test func missingValuesDropOutInsteadOfRenderingEmptyGaps() {
-        let agent = makeAgent(host: "devbox", session: "", workspace: "heeler", tab: nil)
-        #expect(AgentCardLocation.line(for: agent) == "devbox · heeler")
+    @Test func defaultSessionRendersByItsHonestName() {
+        // Review finding #3: the default session is real identity.
+        let agent = makeAgent(host: "devbox", session: "", workspace: "heeler", tab: "tests")
+        #expect(AgentCardLocation.line(for: agent) == "devbox · default · heeler · tests")
+        #expect(AgentCardLocation.sessionLabel(for: agent) == "default")
     }
 
-    @Test func automaticTabPositionNeverRendersOnPhone() {
-        // One tab, herdr's label is the position: plumbing, not identity.
+    @Test func tabIdentityRendersEvenWhenTheNameIsAutomatic() {
+        // Review finding #3: the snapshot's actual tab identity (herdr's
+        // automatic positional name) is real layout identity.
         let agent = makeAgent(tab: "1", tabCount: 1, tabPosition: 1)
-        #expect(!AgentCardLocation.line(for: agent).contains(" · 1"))
+        #expect(AgentCardLocation.tabLabel(for: agent) == "1")
+        #expect(AgentCardLocation.line(for: agent).hasSuffix("· 1"))
         // A manual label on a multi-tab workspace stays.
         let manual = makeAgent(tab: "refactor", tabCount: 2, tabPosition: 1)
         #expect(AgentCardLocation.line(for: manual).hasSuffix("refactor"))
+    }
+
+    @Test func titleLineIsTheConversationTitleNotComposedContext() {
+        // Review finding #2: the title is the agent's actual title, never
+        // the layout-composed workspace·agent·tab context.
+        // The task title wins over the server-reported agent name: the
+        // row's first line is the conversation title the TUI shows.
+        let agent = makeAgent(name: "reviewer", title: "Checkout review")
+        #expect(AgentCardRowTitle.title(for: agent) == "Checkout review")
+        let unnamed = makeAgent(name: nil, title: "Fix the flaky test")
+        #expect(AgentCardRowTitle.title(for: unnamed) == "Fix the flaky test")
+        #expect(!AgentCardRowTitle.title(for: unnamed).contains("heeler"))
     }
 
     @Test func kindBadgeRidesEveryRowFromRuntimeMetadata() {

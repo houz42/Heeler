@@ -70,22 +70,40 @@ final class AgentSearchBarStore {
         highlightIndex = -1
     }
 
-    /// Enter/Tab: accepts the highlighted suggestion (top row when none).
-    /// Accepting a value row adds the filter chip and clears the query;
-    /// a field row rewrites the query to the `field:` prefix.
-    func acceptHighlighted(over agents: [ConsoleAgent]) {
-        let suggestions = engine.suggestions(over: agents)
-        guard !suggestions.isEmpty else { return }
-        let index = highlightIndex >= 0 && highlightIndex < suggestions.count
-            ? highlightIndex : 0
-        accept(suggestions[index])
+    /// Reopens the suggestion list (the magnifier's other half).
+    func reopenSuggestions() {
+        showsSuggestions = true
+        highlightIndex = -1
     }
 
-    /// Tap or keyboard accept.
+    /// Enter/Tab: accepts the VISIBLE HIGHLIGHTED suggestion only (review
+    /// finding #6). With suggestions dismissed (Esc) or nothing
+    /// highlighted, Enter does NOTHING — no phantom first-row accept.
+    /// Accepting a value row adds the filter chip and clears the query;
+    /// a field row rewrites the query to the `field:` prefix AND OPENS
+    /// the field's value completions (the prefix is a half-typed state,
+    /// not a finished one).
+    func acceptHighlighted(over agents: [ConsoleAgent]) {
+        guard showsSuggestions else { return }
+        let suggestions = engine.suggestions(over: agents)
+        guard highlightIndex >= 0, highlightIndex < suggestions.count else {
+            return
+        }
+        accept(suggestions[highlightIndex])
+    }
+
+    /// Tap or keyboard accept. Field rows keep the suggestion list OPEN
+    /// (value completions follow the prefix); value rows close it.
     func accept(_ suggestion: AgentSearchEngine.Suggestion) {
+        let wasField = suggestion.kind == .field
         engine = suggestion.accepted(in: engine)
-        highlightIndex = -1
-        showsSuggestions = false
+        if wasField {
+            highlightIndex = -1
+            showsSuggestions = true
+        } else {
+            highlightIndex = -1
+            showsSuggestions = false
+        }
     }
 
     // MARK: Filters
