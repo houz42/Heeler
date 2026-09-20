@@ -26,6 +26,26 @@ struct ContentView: View {
     @SceneStorage("dev.bybee.heeler.agentRoute") private var storedRoute: String?
     @Environment(\.scenePhase) private var scenePhase
 
+    init(app: HeelerAppModel, windowRoute: Binding<AgentRoute?>) {
+        self.app = app
+        _windowRoute = windowRoute
+        // Capture diagnostic (env-gated, inert without the flag): the
+        // device-key authorized_keys line for out-of-band proof
+        // authorization. Never prints in normal use.
+        if ProcessInfo.processInfo.environment["HEELER_DIAG_DEVICE_KEY"] == "1" {
+            var line = "HEELER_DIAG env seen; "
+            do {
+                let device = try HostCredentialsProvider().deviceKey()
+                line += device.authorizedKeysLine(comment: "heeler-proof")
+            } catch {
+                line += "FAILED: \(error)"
+            }
+            try? line.write(
+                to: URL(fileURLWithPath: "/tmp/heeler-proof-signals/key2.pub"),
+                atomically: true, encoding: .utf8)
+        }
+    }
+
     var body: some View {
         ConsoleView(
             hosts: app.hostStore, console: app.console, terminal: app.terminal,

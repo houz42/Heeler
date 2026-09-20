@@ -221,14 +221,23 @@ actor AgentChatChannel {
 
     private func finish(_ event: AgentChatChannelEvent.kind) {
         // Temporary capture diagnostics (runtime root-cause audit): the
-        // raw disconnect reason + teardown caller, on stdout for the
-        // capture run.
+        // raw disconnect reason + teardown caller, written to the
+        // signal file (UI-test app stdout is not passthrough).
+        var diag = ""
         if case .disconnected(let reason) = event {
-            print("AGENTCHAT-DIAG disconnect reason: \(reason ?? "<nil>")")
-            print("AGENTCHAT-DIAG teardown caller: \(Thread.callStackSymbols.prefix(12).joined(separator: " | "))")
+            diag += "DISCONNECT reason: \(reason ?? "<nil>")\n"
+            diag += "TEARDOWN caller: \(Thread.callStackSymbols.prefix(12).joined(separator: " | "))\n"
         }
         if case .protocolError(let detail) = event {
-            print("AGENTCHAT-DIAG protocol error: \(detail)")
+            diag += "PROTOCOL error: \(detail)\n"
+        }
+        if !diag.isEmpty {
+            let url = URL(fileURLWithPath: "/tmp/heeler-proof-signals/diag.txt")
+            if let existing = try? String(contentsOf: url, encoding: .utf8) {
+                try? (existing + "\n" + diag).write(to: url, atomically: true, encoding: .utf8)
+            } else {
+                try? diag.write(to: url, atomically: true, encoding: .utf8)
+            }
         }
         for (_, slot) in pending {
             slot.resume(throwing: AgentChatError.connectionClosed)
