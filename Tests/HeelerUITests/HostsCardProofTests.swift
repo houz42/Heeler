@@ -435,4 +435,60 @@ final class HostsCardProofTests: XCTestCase {
             "list row did not show the saved friendly name: \(namedRow.label)")
         captureScreenshot(app, "route-named-in-context", lifetime: .keepAlways)
     }
+
+    // MARK: Check verdict sticks (device bug #5)
+
+    /// The check verdict must STICK: parent status ticks rebuild the
+    /// sheet's content while it is open, and a store owned by the content
+    /// was reset mid-probe — the verdict intermittently reverted to
+    /// 'Not checked this session'. One presentation owns one store, so
+    /// re-rendering (here: opening and dismissing the nested edit sheet,
+    /// which forces full content re-evaluation) must not lose the
+    /// verdict.
+    func testCheckVerdictSticksAcrossRerenders() {
+        app = UITestApp.launchDemo(.hostList)
+
+        // The Build Server's route: a real dial to a demo-unreachable
+        // address — the check must produce a verdict, and the verdict
+        // must survive re-renders of the open inspector.
+        let row = app.buttons["host-route-build.demo.invalid"]
+        waitToExist(row)
+        row.tap()
+        let inspector = app.navigationBars["Build Server · build.demo.invalid"]
+        XCTAssertTrue(inspector.waitForExistence(timeout: UITestTimeouts.standard))
+
+        // Check: the row goes 'Checking…' then a verdict lands.
+        let check = app.buttons["Check this route"]
+        waitToExist(check)
+        check.tap()
+        let sshRow = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == 'route-ssh-connection'")).firstMatch
+        waitToExist(sshRow)
+        let verdictLanded = NSPredicate(format: "label CONTAINS 'Reachable' OR label CONTAINS 'Unreachable'")
+        expectation(for: verdictLanded, evaluatedWith: sshRow)
+        waitForExpectations(timeout: UITestTimeouts.launch)
+        let verdictLabel = sshRow.label
+
+        // Force content re-evaluation while the sheet stays open: the
+        // nested route-editor sheet opens and cancels (a full presentation
+        // pass over the inspector's own identity).
+        let edit = app.buttons["route-inspector-edit"]
+        waitToExist(edit)
+        edit.tap()
+        let editor = app.navigationBars["Edit route on Build Server"]
+        XCTAssertTrue(editor.waitForExistence(timeout: UITestTimeouts.standard))
+        app.buttons["Cancel"].firstMatch.tap()
+        XCTAssertTrue(
+            inspector.waitForExistence(timeout: UITestTimeouts.standard),
+            "inspector closed after the nested editor cancelled")
+
+        // THE assertion: the verdict is still the verdict — not reset to
+        // 'Not checked this session'. (Case-sensitive: 'Unreachable' does
+        // not contain capital-'Reachable', so assert the actual stuck
+        // verdict text.)
+        XCTAssertEqual(
+            sshRow.label, verdictLabel,
+            "check verdict lost across re-renders")
+        captureScreenshot(app, "route-check-verdict-stuck", lifetime: .keepAlways)
+    }
 }

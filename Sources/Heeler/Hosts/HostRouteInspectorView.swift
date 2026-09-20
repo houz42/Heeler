@@ -163,7 +163,14 @@ struct HostRouteInspectorView: View {
     /// Whether the tapped route carries a user label yet — the Edit
     /// affordance's hint that a friendly name is available to add.
     let routeHasLabel: Bool
-    @State private var store: HostRouteInspectorStore
+    /// The probe/trust state, owned by the PRESENTING view for the
+    /// lifetime of one sheet presentation (device bug #5): this view is
+    /// rebuilt inside the sheet's content closure on every parent
+    /// status tick, and a store held as @State here was re-created
+    /// mid-probe — silently discarding the user's check verdict. The
+    /// owner creates it when the inspector opens and releases it on
+    /// dismissal.
+    let ownedStore: HostRouteInspectorStore
     @State private var isEditingRoute = false
     /// The edited route's new label: the inspector and the caller's list
     /// refresh reactively when the catalog updates, so this only needs
@@ -174,12 +181,12 @@ struct HostRouteInspectorView: View {
     /// store the host form saves through).
     var onEditRoute: ((AdditionalAddressRow) -> Void)?
 
+    /// A presentation-local store for previews and direct embedding.
     init(
         host: Host,
         address: String,
         connectedAddress: String?,
         routeHasLabel: Bool? = nil,
-        store: HostRouteInspectorStore = HostRouteInspectorStore(),
         onEditRoute: ((AdditionalAddressRow) -> Void)? = nil
     ) {
         self.host = host
@@ -187,7 +194,24 @@ struct HostRouteInspectorView: View {
             host: host, address: address, connectedAddress: connectedAddress)
         self.routeHasLabel =
             routeHasLabel ?? !(host.routeLabels[address]?.isEmpty ?? true)
-        _store = State(initialValue: store)
+        self.ownedStore = HostRouteInspectorStore()
+        self.onEditRoute = onEditRoute
+    }
+
+    /// The production path: the presenting view owns the store, so one
+    /// presentation owns one store for its lifetime.
+    init(
+        host: Host,
+        address: String,
+        connectedAddress: String?,
+        ownedStore: HostRouteInspectorStore,
+        onEditRoute: ((AdditionalAddressRow) -> Void)? = nil
+    ) {
+        self.host = host
+        self.route = HostRoutePresentation(
+            host: host, address: address, connectedAddress: connectedAddress)
+        self.routeHasLabel = !(host.routeLabels[address]?.isEmpty ?? true)
+        self.ownedStore = ownedStore
         self.onEditRoute = onEditRoute
     }
 
@@ -244,8 +268,8 @@ struct HostRouteInspectorView: View {
                     } label: {
                         Label("Check this route", systemImage: "antenna.radiowaves.left.and.right")
                     }
-                    .disabled(store.checkState == .checking)
-                    if let failure = store.checkFailureExplanation {
+                    .disabled(ownedStore.checkState == .checking)
+                    if let failure = ownedStore.checkFailureExplanation {
                         // The check could not run: the actionable why,
                         // never a silent no-op (§E).
                         Label(failure, systemImage: "exclamationmark.triangle")
@@ -288,7 +312,7 @@ struct HostRouteInspectorView: View {
                     onRemove: nil)
             }
             .onAppear {
-                Task { await store.loadTrust(host: route.address, port: host.port) }
+                Task { await ownedStore.loadTrust(host: route.address, port: host.port) }
             }
         }
     }
@@ -306,7 +330,7 @@ struct HostRouteInspectorView: View {
         case .inUse:
             return Text("Connected").foregroundStyle(.green)
         case .alternate:
-            switch store.checkState {
+            switch ownedStore.checkState {
             case .unchecked:
                 return Text("Not checked this session").foregroundStyle(.secondary)
             case .checking:
@@ -320,7 +344,7 @@ struct HostRouteInspectorView: View {
     }
 
     @ViewBuilder private var trustText: some View {
-        if let fingerprint = store.trustedFingerprint {
+        if let fingerprint = ownedStore.trustedFingerprint {
             Text("Trusted · \(fingerprint.displayString)")
                 .font(.footnote.monospaced())
                 .lineLimit(1)
@@ -341,6 +365,6 @@ struct HostRouteInspectorView: View {
     }
 
     private func checkRoute() {
-        Task { await store.check(host: host, address: route.address) }
+        Task { await ownedStore.check(host: host, address: route.address) }
     }
 }
