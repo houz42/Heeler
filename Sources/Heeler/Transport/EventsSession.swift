@@ -168,6 +168,11 @@ actor EventsSession {
     /// reconnects reuse the same Transport and therefore do not advance it.
     private(set) var transportGeneration: UInt64 = 0
     private var hasEstablishedTransport = false
+    /// Whether any activation of this session ever reached Connected. Before
+    /// the first connect, a retryable failure is terminal (.failed) rather
+    /// than a backoff loop: a Host that fails to connect stops, and the user
+    /// retries manually. After a connect, a drop keeps the backoff loop.
+    private var hasEverConnected = false
     /// Set when the connection can no longer be trusted even though it may
     /// still look alive (a timed-out request or keepalive ping): the next
     /// reconnect replaces the transport instead of reusing it.
@@ -480,7 +485,7 @@ actor EventsSession {
                 if Self.namesAMissingPane(failure), dropSnapshotSubscriptions() {
                     continue
                 }
-                guard failure.isRetryable else {
+                guard failure.isRetryable, hasEverConnected else {
                     recordTerminalTransportFailure(failure)
                     failTerminalTransportWaiters(failure, for: generation)
                     yieldUpdate(.status(.failed(failure)))
@@ -498,6 +503,7 @@ actor EventsSession {
             }
             liveStream = stream
             attempt = 0
+            hasEverConnected = true
             pendingKeepaliveFailure = nil
             yieldUpdate(.status(.connected))
             startKeepalive(stream: stream)

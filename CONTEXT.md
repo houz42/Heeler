@@ -234,13 +234,15 @@ automatic retry loop. Every activation announces it, synchronously, before its
 run begins: a first dial, a return from Suspended, and a Reconnect Request from
 Connected, Reconnecting or Failed alike. Automatic iterations inside one
 activation stay Reconnecting.
-Reconnecting is automatic recovery after a retryable failure, and covers its
-announced backoff as well as the dial that follows. It is observable only while
-that cycle is still the current one. Failed means automatic recovery stopped
-because retrying without user intervention cannot repair the failure. It is
-observable only while no connection work is running; an explicit retry or
-foreground re-proof starts a new Connecting activation and carries the prior
-explanation as Standing Failure.
+Reconnecting is automatic recovery after a retryable failure on a Host that
+has connected before, and covers its announced backoff as well as the dial
+that follows. It is observable only while that cycle is still the current
+one. Failed means automatic recovery stopped — either because retrying
+without user intervention cannot repair the failure, or because the Host
+failed to connect in the first place and never entered a backoff loop at all.
+It is observable only while no connection work is running; an explicit retry
+or foreground re-proof starts a new Connecting activation and carries the
+prior explanation as Standing Failure.
 Connected means the session established a usable events path and is maintaining
 it on a trusted Transport; a deliberate same-Transport subscription reinstall
 stays Connected through its brief stream gap. Suspended means lifecycle
