@@ -105,6 +105,10 @@ struct AppRootView: View {
             .environment(
                 \.appDestinationMenuInert,
                 !isPageFocused || showsSidebar)
+            // A pushed detail (any page) suppresses the in-page
+            // destination menus entirely: plain title, no Menu semantics.
+            .environment(
+                \.appDestinationMenuSuppressed, !isPageFocused)
             // Pages report their own pushed-navigation state upward; the
             // root aggregates it into the per-page focus used above.
             .onPreferenceChange(AppDestinationPageFocusKey.self) { reports in
@@ -180,8 +184,13 @@ extension EnvironmentValues {
     /// True while the in-page destination menus must render inert (the
     /// sidebar carries the destinations, or a pushed detail owns the
     /// window) — `AppRootView` sets it; pages render their menu
-    /// non-hit-testable and accessibility-hidden when set.
+    /// non-hit-testable when set.
     @Entry var appDestinationMenuInert: Bool = false
+    /// True while a page's pushed detail owns the window — the in-page
+    /// destination menus then render as PLAIN titles: no chevron, no
+    /// capsule, no Menu semantics (#A: no destination chrome at all
+    /// inside chat/terminal/details).
+    @Entry var appDestinationMenuSuppressed: Bool = false
 }
 
 #Preview {
