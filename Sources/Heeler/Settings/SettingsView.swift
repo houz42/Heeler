@@ -62,6 +62,12 @@ struct SettingsView: View {
     let liveActivities: HostLiveActivityCoordinator
     let console: ConsoleStore
     let hosts: [Host]
+    /// The approved compact top-left destination selector (#A). Present
+    /// when Settings is a top-level page; nil inside sheets keeps Done.
+    @Environment(\.appDestination) private var appDestination
+    private var destinationMenu: AppDestinationMenu? {
+        appDestination.map { AppDestinationMenu(selection: $0) }
+    }
 
     static let agentListDestination = SettingsAgentListDestination.fields
     static let headerLayoutDestination = SettingsHeaderLayoutDestination.header
@@ -162,11 +168,21 @@ struct SettingsView: View {
                     Text("About")
                 }
             }
+            // As a top-level destination page the compact destination
+            // selector sits here, replacing the sheet-era Done button;
+            // embedded in a sheet (previews, Demo captures, in-Console
+            // presentation) Done keeps the sheet dismissable.
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                if let destinationMenu {
+                    ToolbarItem(placement: .topBarLeading) {
+                        destinationMenu
+                    }
+                } else {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                    }
                 }
             }
         }

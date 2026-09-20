@@ -69,6 +69,15 @@ struct ConsoleView: View {
     /// The window-aware entry into navigation; nil outside a scene root.
     @Environment(\.agentSceneRouting) private var sceneRouting
 
+    /// The approved compact top-left destination selector (#A). Provided by
+    /// `AppRootView`'s environment when the Console is a top-level page;
+    /// nil keeps the sheet-era toolbar behavior for previews, Demo runs,
+    /// and tests that construct `ConsoleView` directly.
+    @Environment(\.appDestination) private var appDestination
+    private var destinationMenu: AppDestinationMenu? {
+        appDestination.map { AppDestinationMenu(selection: $0) }
+    }
+
     var body: some View {
         // A split view instead of a plain stack for the iPad's sake: regular
         // width shows the Agent list beside the Attach terminal; compact
@@ -85,15 +94,19 @@ struct ConsoleView: View {
                 set: { splitVisibility.systemDidChangeVisibility($0, presentation: presentation) })
             ) {
                 content
-                    .navigationTitle("Agents")
-                    .searchable(
-                        text: $searchText, isPresented: $isSearchPresented, prompt: "Search Agents")
-                    .searchFocused($isSearchFocused)
                     .navigationSplitViewColumnWidth(
                         min: presentation.sidebarWidth.minimum,
                         ideal: presentation.sidebarWidth.ideal,
                         max: presentation.sidebarWidth.maximum)
                     .toolbar {
+                        // The approved compact destination selector, top
+                        // left on every page; the sheet-based Hosts/Settings
+                        // toolbar buttons it replaces are gone.
+                        if let destinationMenu {
+                            ToolbarItem(placement: .topBarLeading) {
+                                destinationMenu
+                            }
+                        }
                         // A filter is meaningless with a single Host.
                         if hosts.hosts.count > 1 {
                             ToolbarItem(placement: .primaryAction) {
@@ -134,26 +147,6 @@ struct ConsoleView: View {
                                 .hoverEffect(.highlight)
                                 .accessibilityLabel("Agent list presentation")
                                 .accessibilityValue(listPresentation.mode.title)
-                            }
-                        }
-                        ToolbarItem(placement: .primaryAction) {
-                            Button("Hosts", systemImage: "server.rack") {
-                                presentHosts()
-                            }
-                            .hoverEffect(.highlight)
-                        }
-                        ToolbarItem(placement: .primaryAction) {
-                            Button("Settings", systemImage: "gearshape") {
-                                isShowingSettings = true
-                            }
-                            .hoverEffect(.highlight)
-                        }
-                        if !hosts.hosts.isEmpty {
-                            ToolbarItem(placement: .primaryAction) {
-                                Button("New Agent", systemImage: "plus") {
-                                    isStartingAgent = true
-                                }
-                                .hoverEffect(.highlight)
                             }
                         }
                     }

@@ -27,17 +27,43 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        ConsoleView(
-            hosts: app.hostStore, console: app.console, terminal: app.terminal,
-            inputMode: app.inputMode,
-            appearance: app.appearance,
-            pushRegistration: app.pushRegistration,
-            notificationPreferences: app.notificationPreferences,
-            relaySettings: app.relaySettings,
-            notificationRouter: notificationRouter,
-            bannerStore: app.bannerStore,
-            liveActivities: app.liveActivities,
-            activity: app.activity
+        // The adaptive top-level container (#A): Agents/Hosts/Settings as
+        // peer pages — compact menu on phone, collapsible destination
+        // sidebar on iPad/split widths. Every window keeps its own
+        // destination state; the scene plumbing below still belongs to
+        // this window's Console.
+        AppRootView(
+            agents: ConsoleView(
+                hosts: app.hostStore, console: app.console, terminal: app.terminal,
+                inputMode: app.inputMode,
+                appearance: app.appearance,
+                pushRegistration: app.pushRegistration,
+                notificationPreferences: app.notificationPreferences,
+                relaySettings: app.relaySettings,
+                notificationRouter: notificationRouter,
+                bannerStore: app.bannerStore,
+                liveActivities: app.liveActivities,
+                activity: app.activity
+            ),
+            hosts: HostListView(
+                store: app.hostStore,
+                connectionStatuses: app.console.hostStatuses,
+                standingFailures: app.console.hostStandingFailures,
+                latencies: app.console.hostLatencies,
+                connectedAddresses: app.console.hostConnectedAddresses,
+                discovery: SessionDiscoveryStore(
+                    listSessions: { hostID in
+                        try await app.console.listSessions(on: hostID)
+                    })),
+            settings: SettingsView(
+                terminal: app.terminal,
+                appearance: app.appearance,
+                pushRegistration: app.pushRegistration,
+                notificationPreferences: app.notificationPreferences,
+                relaySettings: app.relaySettings,
+                liveActivities: app.liveActivities,
+                console: app.console,
+                hosts: app.hostStore.hosts)
         )
         .environment(\.sceneWindow, window)
         .environment(
