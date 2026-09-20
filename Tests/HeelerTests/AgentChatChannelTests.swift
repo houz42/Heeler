@@ -1,4 +1,5 @@
 import Foundation
+import HeelerSSH
 import Testing
 
 @testable import Heeler
@@ -149,5 +150,178 @@ struct AgentChatChannelTests {
                 "expected session.unavailable, got \(String(describing: second))")
             return
         }
+    }
+}
+
+/// An SSH-faithful pipe: idle reads THROW SSHError.timedOut (exactly
+/// what the production SSHStreamLocalChannel → SessionDriver
+/// readStreamLocal path does on deadline expiry — the fake the earlier
+/// suites used ignored the timeout, hiding the idle-read defect).
+actor ThrowingIdlePipe: AgentChatBytePipe {
+    enum Mode {
+        case idleThenEOF
+        case idleThenError
+        case sustainedIdle
+    }
+    private var incoming: [Data] = []
+    private var waiting: [CheckedContinuation<Data?, any Error>] = []
+    private var written: [Data] = []
+    private var closed = false
+    private let mode: Mode
+    private var idleReads = 0
+
+    init(mode: Mode) {
+        self.mode = mode
+    }
+
+    var receivedFrames: [String] {
+        written.map { String(decoding: $0, as: UTF8.self) }
+    }
+    var observedIdleReads: Int {
+        idleReads
+    }
+
+    func brokerSend(_ text: String) {
+        incoming.append(Data((text + "\n").utf8))
+        pump()
+    }
+
+    private func pump() {
+        while !incoming.isEmpty && !waiting.isEmpty {
+            let chunk = incoming.removeFirst()
+            let continuation = waiting.removeFirst()
+            continuation.resume(returning: chunk)
+        }
+    }
+
+    func write(_ data: Data, timeout: Duration) async throws {
+        guard !closed else { throw AgentChatError.connectionClosed }
+        written.append(data)
+    }
+
+    func read(maximumBytes: Int, timeout: Duration) async throws -> Data? {
+        idleReads &+= 1
+        if !incoming.isEmpty {
+            return incoming.removeFirst()
+        }
+        if closed {
+            return nil
+        }
+        switch mode {
+        case .sustainedIdle:
+            // Never yields data; never ends: only timeouts.
+            throw SSHError.timedOut
+        case .idleThenEOF:
+            // One timeout tick, then orderly EOF.
+            if idleReads > 6 {
+                return nil
+            }
+            throw SSHError.timedOut
+        case .idleThenError:
+            if idleReads > 6 {
+                throw SSHError.channelFailed
+            }
+            throw SSHError.timedOut
+        }
+    }
+
+    func close(timeout: Duration) async throws {
+        closed = true
+        for continuation in waiting {
+            continuation.resume(returning: nil)
+        }
+        waiting.removeAll()
+    }
+}
+
+@Suite("Agent chat channel idle-read semantics")
+struct AgentChatIdleReadTests {
+    @Test("sustained idle timeouts keep the channel connected")
+    func sustainedIdleStaysConnected() async throws {
+        // The production streamlocal path throws SSHError.timedOut on
+        // every idle read deadline. A quiet wire must NOT disconnect.
+        let pipe = ThrowingIdlePipe(mode: .sustainedIdle)
+        let collected = EventCollector()
+        let channel = AgentChatChannel(pipe: pipe) { event in
+            collected.append(event)
+        }
+        await pipe.brokerSend(#"{"type":"welcome","protocol":1}"#)
+        try await channel.connect()
+        try await Task.sleep(for: .seconds(12))
+        let events = collected.drain()
+        let ticks = await pipe.observedIdleReads
+        #expect(ticks >= 2, "expected multiple idle timeout ticks, saw \(ticks)")
+        let disconnects = events.filter {
+            if case .disconnected = $0.kind { return true }
+            return false
+        }
+        #expect(disconnects.isEmpty, "idle timeouts must not disconnect")
+        await channel.close()
+    }
+
+    @Test("orderly EOF after idle still disconnects")
+    func idleThenEOFDisconnects() async throws {
+        let pipe = ThrowingIdlePipe(mode: .idleThenEOF)
+        let expectation = AsyncStream<AgentChatChannelEvent> { continuation in
+            let channel = AgentChatChannel(pipe: pipe) { event in
+                continuation.yield(event)
+            }
+            Task {
+                await pipe.brokerSend(#"{"type":"welcome","protocol":1}"#)
+                try await channel.connect()
+            }
+        }
+        var iterator = expectation.makeAsyncIterator()
+        var sawDisconnected = false
+        let deadline = Date().addingTimeInterval(20)
+        while Date() < deadline {
+            if let event = await iterator.next() {
+                if case .disconnected(let reason) = event.kind {
+                    sawDisconnected = true
+                    #expect(reason == "broker closed the connection")
+                    return
+                }
+            }
+        }
+        if !sawDisconnected {
+            Issue.record("EOF after idle must disconnect")
+        }
+    }
+
+    @Test("a hard transport error after idle still disconnects")
+    func idleThenErrorDisconnects() async throws {
+        let pipe = ThrowingIdlePipe(mode: .idleThenError)
+        let expectation = AsyncStream<AgentChatChannelEvent> { continuation in
+            let channel = AgentChatChannel(pipe: pipe) { event in
+                continuation.yield(event)
+            }
+            Task {
+                await pipe.brokerSend(#"{"type":"welcome","protocol":1}"#)
+                try await channel.connect()
+            }
+        }
+        var iterator = expectation.makeAsyncIterator()
+        let deadline = Date().addingTimeInterval(20)
+        while Date() < deadline {
+            if let event = await iterator.next() {
+                if case .disconnected = event.kind {
+                    // The hard error surfaced as a disconnect — correct.
+                    return
+                }
+            }
+        }
+        Issue.record("hard transport error after idle must disconnect")
+    }
+}
+
+/// Thread-safe event capture for the idle tests.
+private final class EventCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [AgentChatChannelEvent] = []
+    func append(_ event: AgentChatChannelEvent) {
+        lock.withLock { events.append(event) }
+    }
+    func drain() -> [AgentChatChannelEvent] {
+        lock.withLock { let out = events; events = []; return out }
     }
 }

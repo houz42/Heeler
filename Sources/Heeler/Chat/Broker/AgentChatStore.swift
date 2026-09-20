@@ -149,7 +149,9 @@ final class AgentChatStore {
                     }
                 })
             self.channel = channel
+            print("AGENTCHAT-DIAG channel opening to broker socket: \(socketPath)")
             try await channel.connect()  // welcome or fail closed
+            print("AGENTCHAT-DIAG channel negotiated v1")
             guard generation == storeGeneration else { return }
 
             phase = .loading

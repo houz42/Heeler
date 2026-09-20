@@ -138,13 +138,24 @@ actor AgentChatChannel {
             while !Task.isCancelled {
                 let chunk: Data?
                 do {
+                    // 5s poll: idle reads throw SSHError.timedOut on
+                    // the production streamlocal path; that is a
+                    // heartbeat tick, NOT a disconnect — a quiet wire
+                    // must never tear the channel down.
                     chunk = try await pipe.read(
-                        maximumBytes: 16 * 1024, timeout: .seconds(1))
+                        maximumBytes: 16 * 1024, timeout: .seconds(5))
+                } catch SSHError.timedOut {
+                    continue
+                } catch is CancellationError {
+                    finish(.disconnected(reason: "reader cancelled"))
+                    return
                 } catch {
+                    // Non-timeout transport errors are real failures.
                     finish(.disconnected(reason: String(describing: error)))
                     return
                 }
                 guard let chunk else {
+                    // Orderly remote EOF.
                     finish(.disconnected(reason: "broker closed the connection"))
                     return
                 }
@@ -209,6 +220,16 @@ actor AgentChatChannel {
     }
 
     private func finish(_ event: AgentChatChannelEvent.kind) {
+        // Temporary capture diagnostics (runtime root-cause audit): the
+        // raw disconnect reason + teardown caller, on stdout for the
+        // capture run.
+        if case .disconnected(let reason) = event {
+            print("AGENTCHAT-DIAG disconnect reason: \(reason ?? "<nil>")")
+            print("AGENTCHAT-DIAG teardown caller: \(Thread.callStackSymbols.prefix(12).joined(separator: " | "))")
+        }
+        if case .protocolError(let detail) = event {
+            print("AGENTCHAT-DIAG protocol error: \(detail)")
+        }
         for (_, slot) in pending {
             slot.resume(throwing: AgentChatError.connectionClosed)
         }
