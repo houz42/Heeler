@@ -75,17 +75,23 @@ struct AgentKindGlyphShape: Shape {
     }
 }
 
-/// The glyph as rendered: 1.6 stroke at the prototype's weight, round caps,
-/// the row's secondary tint — monochrome like the prototype's currentColor.
+/// The glyph as rendered: the approved TILE — soft accent wash background,
+/// accent glyph, rounded-rect container (prototype: wash #eaf2ed, glyph
+/// #22644d; dark pair in AgentStatusPalette). 1.6 stroke at the
+/// prototype's weight, round caps. Dynamic Type scales the slot.
 struct AgentKindGlyphView: View {
     let glyph: AgentKindGlyph
 
     var body: some View {
         AgentKindGlyphShape(glyph: glyph)
             .stroke(
-                Color.secondary,
+                Color(AgentStatusPalette.kindTileAccent),
                 style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
-            .frame(width: 21, height: 21)
+            .padding(4)
+            .frame(width: 30, height: 30)
+            .background(
+                Color(AgentStatusPalette.kindTileWash),
+                in: RoundedRectangle(cornerRadius: 8))
             .accessibilityHidden(true)
     }
 }

@@ -150,6 +150,22 @@ struct AgentSearchBarView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Clear search text")
             }
+            // The explicit get-me-out affordance (user directive): Cancel
+            // visible whenever the search state is engaged — focused, typed
+            // text, or active chips. A tap is the FULL reset: query AND
+            // chips cleared, focus resigned, keyboard dismissed. Distinct
+            // from Esc (dismiss suggestions, query intact).
+            if isFocused || !store.engine.rawQuery.isEmpty || !store.engine.filters.isEmpty {
+                Button {
+                    store.cancelSearch()
+                    isFocused = false
+                } label: {
+                    Text("Cancel")
+                        .font(.subheadline)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Cancel search")
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

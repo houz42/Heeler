@@ -283,6 +283,19 @@ struct AgentSearchEngine: Equatable, Sendable {
         return next
     }
 
+    /// The quick-state chip semantics (user device finding): set the state
+    /// filter to EXACTLY this value, replacing any other state value —
+    /// a single-state quick filter riding the same model as typed state:
+    /// chips, so both surfaces agree.
+    @MainActor func settingQuickState(_ value: String) -> AgentSearchEngine {
+        var next = self
+        next.filters.removeAll { $0.field == .state }
+        let filter = AgentSearchFilter(field: .state, value: value)
+        next.filters.removeAll { $0.id == filter.id }
+        next.filters.append(filter)
+        return next
+    }
+
     func cleared() -> AgentSearchEngine {
         AgentSearchEngine()
     }

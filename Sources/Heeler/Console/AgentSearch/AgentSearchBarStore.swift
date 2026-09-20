@@ -42,6 +42,15 @@ final class AgentSearchBarStore {
         highlightIndex = -1
     }
 
+    /// The Cancel control's full reset (user directive): query AND chips
+    /// cleared, suggestions dismissed — the caller resigns focus so the
+    /// keyboard follows.
+    func cancelSearch() {
+        engine = engine.cleared()
+        highlightIndex = -1
+        showsSuggestions = false
+    }
+
     // MARK: Suggestions
 
     var suggestionsHelp: String {
@@ -110,5 +119,18 @@ final class AgentSearchBarStore {
 
     func removeFilter(_ filter: AgentSearchFilter) {
         engine = engine.removingFilter(filter)
+    }
+
+    /// The quick-state chips (user device finding): single-state quick
+    /// filter, replacing any other state value; the "All" chip clears
+    /// every state filter. Rides the same filter model as typed chips.
+    func setQuickStateFilter(_ value: String) {
+        engine = engine.settingQuickState(value)
+    }
+
+    func removeAllStateFilters() {
+        for filter in engine.filters where filter.field == .state {
+            engine = engine.removingFilter(filter)
+        }
     }
 }

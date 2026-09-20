@@ -54,6 +54,12 @@ enum AgentStatusPalette {
     static let redInk = flavoured(mocha: 0xF38BA8, latte: 0xC70030)
     static let mutedInk = flavoured(mocha: 0xA6ADC8, latte: 0x5C5F77)
 
+    /// The kind-icon tile's approved pair (prototype: wash #eaf2ed, glyph
+    /// #22644d). Dark mode flips to the same hue family's darker wash and
+    /// lighter accent so the glyph clears the wash in both appearances.
+    static let kindTileWash = flavoured(mocha: 0x1E2A26, latte: 0xEAF2ED)
+    static let kindTileAccent = flavoured(mocha: 0x7FBFA4, latte: 0x22644D)
+
     private static func flavoured(mocha: UInt32, latte: UInt32) -> UIColor {
         UIColor { traits in
             UIColor(rgb: traits.userInterfaceStyle == .dark ? mocha : latte)
