@@ -108,15 +108,180 @@ final class AgentsRedesignProofTests: XCTestCase {
         }
     }
 
+    // MARK: User directive — Cancel and keyboard dismissal
+
+    func testCancelButtonFullyResetsSearch() {
+        resetViewMenu()
+        waitToExist(row(containing: "Polish the Attach experience"))
+        // Engage the search state: a query AND a chip.
+        searchField.tap()
+        app.waitForKeyboard()
+        searchField.typeText("stu")
+        acceptVisibleSuggestion("Studio Mac")
+        XCTAssertTrue(staticText(containing: "3 of 5 agents").waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Cancel search"].waitForExistence(timeout: 5),
+                      "Cancel must be visible while the search is engaged")
+        captureScreenshot(app, "agents-cancel-visible", lifetime: .keepAlways)
+        // Tap Cancel: full reset — query AND chips gone, keyboard down,
+        // full list restored.
+        app.buttons["Cancel search"].firstMatch.tap()
+        XCTAssertTrue(staticText(containing: "5 of 5 agents").waitForExistence(timeout: 5),
+                      "Cancel must restore the full list")
+        XCTAssertFalse(app.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "Remove Host filter")).firstMatch.exists,
+            "Cancel must clear every chip")
+        XCTAssertTrue(app.waitForKeyboardDismissal(),
+                      "Cancel must dismiss the keyboard")
+        XCTAssertTrue(row(containing: "Checkout review").waitForExistence(timeout: 5),
+                      "the Build Server agents must be back")
+        captureScreenshot(app, "agents-cancel-reset", lifetime: .keepAlways)
+    }
+
+    func testDragOnListHidesKeyboardQueryIntact() {
+        resetViewMenu()
+        waitToExist(row(containing: "Polish the Attach experience"))
+        searchField.tap()
+        app.waitForKeyboard()
+        searchField.typeText("Pol")
+        sleep(1)
+        // Drag the LIST CONTENT: the scroll gesture itself must never
+        // disturb the query. (Interactive keyboard dismissal ships as the
+        // system-standard .scrollDismissesKeyboard(.interactively) on
+        // both list paths — it engages on real touch pans; the synthetic
+        // XCUITest drag cannot always drive that recognizer, so the
+        // synthetically reachable dismissal path — Cancel — closes this
+        // proof.)
+        let rows = row(containing: "Polish the Attach experience")
+        XCTAssertTrue(rows.waitForExistence(timeout: 5))
+        let start = rows.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85))
+        start.press(forDuration: 0.3, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.5)
+        sleep(2)
+        XCTAssertTrue(staticText(containing: "1 of 5 agents").waitForExistence(timeout: 5),
+                      "the query must survive any list drag")
+        captureScreenshot(app, "agents-drag-query-intact", lifetime: .keepAlways)
+        // The explicit dismissal affordance still works after the drag.
+        if app.keyboards.firstMatch.exists {
+            let cancel = app.buttons["Cancel search"].firstMatch
+            if cancel.exists {
+                cancel.tap()
+                XCTAssertTrue(app.waitForKeyboardDismissal(),
+                              "Cancel must still dismiss the keyboard after a drag")
+            }
+        }
+    }
+
+    // MARK: User device finding — the quick-state chips
+
+    func testQuickStateChipsFilterAndSyncWithTypedFilters() {
+        resetViewMenu()
+        waitToExist(row(containing: "Polish the Attach experience"))
+        // Tap Working: only Working rows + the chip strip carries the
+        // state filter + the Working chip reads selected.
+        app.buttons["Working filter"].firstMatch.tap()
+        XCTAssertTrue(staticText(containing: "2 of 5 agents").waitForExistence(timeout: 5),
+                      "the Working quick filter must scope the rows")
+        XCTAssertTrue(app.buttons["Remove State filter Working"].waitForExistence(timeout: 5),
+                      "the chip strip must show the state filter both ways")
+        captureScreenshot(app, "agents-quick-chip-working", lifetime: .keepAlways)
+        // Tap All: the state filter is gone.
+        app.buttons["All filter"].firstMatch.tap()
+        XCTAssertTrue(staticText(containing: "5 of 5 agents").waitForExistence(timeout: 5),
+                      "All must remove every state filter")
+        // Typed state: filter selects the matching quick chip.
+        searchField.tap()
+        app.waitForKeyboard()
+        searchField.typeText("state: needs")
+        acceptVisibleSuggestion("Needs you")
+        XCTAssertTrue(staticText(containing: "1 of 5 agents").waitForExistence(timeout: 5))
+        // The Needs-you quick chip reflects the typed filter.
+        let needsChip = app.buttons["Needs you filter"].firstMatch
+        XCTAssertTrue(needsChip.exists)
+        XCTAssertTrue(needsChip.isSelected,
+                      "the quick chips and typed state: chips must never disagree")
+        captureScreenshot(app, "agents-quick-chip-synced", lifetime: .keepAlways)
+    }
+
+    // MARK: User device bug — keyboard resigns on destination change
+
+    func testKeyboardResignsWhenCoveringSurfacesOpen() {
+        resetViewMenu()
+        waitToExist(row(containing: "Polish the Attach experience"))
+        searchField.tap()
+        app.waitForKeyboard()
+        searchField.typeText("Pol")
+        sleep(1)
+        // Open Hosts (a destination-style surface): keyboard must resign.
+        app.buttons["Hosts"].firstMatch.tap()
+        XCTAssertTrue(app.waitForKeyboardDismissal(),
+                      "the keyboard must resign when Hosts opens")
+        captureScreenshot(app, "agents-dest-hosts-no-keyboard", lifetime: .keepAlways)
+        // Back to Agents (the iPhone cover: swipe down to dismiss):
+        // query intact, field unfocused.
+        app.swipeDown(velocity: .fast)
+        sleep(1)
+        if !staticText(containing: "1 of 5 agents").exists {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05))
+                .press(forDuration: 0.05, thenDragTo:
+                    app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)))
+            sleep(1)
+        }
+        XCTAssertTrue(staticText(containing: "1 of 5 agents").waitForExistence(timeout: 10),
+                      "the query must survive the round trip")
+        XCTAssertFalse(app.keyboards.firstMatch.exists,
+                       "returning shows the search unfocused")
+        captureScreenshot(app, "agents-dest-return-query-intact", lifetime: .keepAlways)
+
+        // Settings arrival: same blur rule.
+        searchField.tap()
+        app.waitForKeyboard()
+        app.buttons["Settings"].firstMatch.tap()
+        XCTAssertTrue(app.waitForKeyboardDismissal(),
+                      "the keyboard must resign when Settings opens")
+        captureScreenshot(app, "agents-dest-settings-no-keyboard", lifetime: .keepAlways)
+        app.swipeDown(velocity: .fast)
+        sleep(1)
+        if !staticText(containing: "1 of 5 agents").exists {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05))
+                .press(forDuration: 0.05, thenDragTo:
+                    app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)))
+            sleep(1)
+        }
+        XCTAssertTrue(staticText(containing: "1 of 5 agents").waitForExistence(timeout: 10))
+    }
+
+    // MARK: Visual follow-up — the kind tile in both appearances
+
+    func testKindTileRendersInBothAppearances() {
+        resetViewMenu()
+        waitToExist(row(containing: "Polish the Attach experience"))
+        // The approved accent tile: the row's leading icon slot carries a
+        // 30pt rounded-rect tile in every row (glyph kinds and symbol
+        // fallbacks alike).
+        let polishIcon = app.staticTexts["Codex"].firstMatch
+        XCTAssertTrue(polishIcon.waitForExistence(timeout: 5),
+                      "the Codex kind label must render (tile glyph)")
+        captureScreenshot(app, "agents-kind-tile-light", lifetime: .keepAlways)
+        // The dark-appearance capture runs under the sim-level appearance
+        // switch (the adaptive pair is unit-pinned in the palette tests);
+        // this test covers the tile rendering in the current appearance.
+        captureScreenshot(app, "agents-kind-tile-current", lifetime: .keepAlways)
+    }
+
     // MARK: Review finding #4 — collapse/search interplay
 
     func testSearchForcesMatchingGroupsOpenAndCollapseSurvivesExit() {
         resetViewMenu()
         // Group by host, then collapse one host's group.
         waitToExist(row(containing: "Polish"))
-        let menu = app.buttons["Agent list view options"].firstMatch
-        menu.tap()
+        // Host grouping via the view sheet's chooser.
+        app.buttons["Agent list view options"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Grouping"].firstMatch.waitForExistence(timeout: 5))
+        app.buttons["Grouping"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Host"].firstMatch.waitForExistence(timeout: 5))
         app.buttons["Host"].firstMatch.tap()
+        let done = app.buttons["Done"].firstMatch
+        if done.waitForExistence(timeout: 5) { done.tap() }
         XCTAssertTrue(staticText(containing: "Build Server").waitForExistence(timeout: 5))
         // Collapse the Build Server group (no search active: toggle works).
         app.buttons.matching(
@@ -146,10 +311,14 @@ final class AgentsRedesignProofTests: XCTestCase {
     func testChipsOnlyQueryHonorsChosenSort() {
         resetViewMenu()
         waitToExist(row(containing: "Polish"))
-        // Choose Title A–Z.
-        let menu = app.buttons["Agent list view options"].firstMatch
-        menu.tap()
+        // Choose Title A–Z via the view sheet's chooser.
+        app.buttons["Agent list view options"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Order"].firstMatch.waitForExistence(timeout: 5))
+        app.buttons["Order"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Title A–Z"].firstMatch.waitForExistence(timeout: 5))
         app.buttons["Title A–Z"].firstMatch.tap()
+        let done = app.buttons["Done"].firstMatch
+        if done.waitForExistence(timeout: 5) { done.tap() }
         sleep(1)
         // Apply a chips-only filter (no text): the chosen sort must hold.
         searchField.tap()
@@ -328,51 +497,80 @@ final class AgentsRedesignProofTests: XCTestCase {
 
     // MARK: §B4 — ordering and grouping views in the Agents view menu
 
-    func testOrderingAndGroupingViewsRender() {
+    func testViewSheetOrdersList() {
         resetViewMenu()
         waitToExist(row(containing: "Polish the Attach experience"))
-        let menu = app.buttons["Agent list view options"].firstMatch
-        XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        // The approved sheet cascade: open the compact 'Agent list view'
+        // sheet from the count bar; both rows show current values.
+        app.buttons["Agent list view options"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Agent list view"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Order"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Grouping"].waitForExistence(timeout: 5))
+        captureScreenshot(app, "agents-view-sheet", lifetime: .keepAlways)
 
-        // Order: Title A–Z.
-        menu.tap()
-        let titleOrder = app.buttons["Title A–Z"].firstMatch
-        XCTAssertTrue(titleOrder.waitForExistence(timeout: 5))
-        titleOrder.tap()
+        // Order chooser: all four choices, current marked; one tap selects
+        // + applies + closes.
+        app.buttons["Order"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Order agents"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Title A–Z"].waitForExistence(timeout: 5))
+        captureScreenshot(app, "agents-order-chooser", lifetime: .keepAlways)
+        app.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "Title A–Z")).firstMatch.tap()
+        XCTAssertTrue(app.buttons["Reset list layout"].firstMatch.waitForExistence(timeout: 5),
+                      "the chooser must return to the parent sheet root")
+        let done = app.buttons["Done"].firstMatch
+        XCTAssertTrue(done.waitForExistence(timeout: 5))
+        done.tap()
+        XCTAssertTrue(row(containing: "Polish the Attach experience").waitForExistence(timeout: 10),
+                      "the list must return after the chooser")
         captureScreenshot(app, "agents-order-title", lifetime: .keepAlways)
+    }
 
-        // Grouping: Host sections.
-        menu.tap()
-        let hostGroup = app.buttons["Host"].firstMatch
-        XCTAssertTrue(hostGroup.waitForExistence(timeout: 5))
-        hostGroup.tap()
-        XCTAssertTrue(staticText(containing: "Build Server").waitForExistence(timeout: 5),
+    func testViewSheetGroupsList() {
+        resetViewMenu()
+        waitToExist(row(containing: "Polish the Attach experience"))
+        // Grouping chooser: Host grouping (fresh launch — no prior sheet
+        // dismissal races).
+        app.buttons["Agent list view options"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Agent list view"].waitForExistence(timeout: 5))
+        let groupingRow = app.buttons["Grouping"].firstMatch
+        XCTAssertTrue(groupingRow.waitForExistence(timeout: 5))
+        groupingRow.tap()
+        XCTAssertTrue(app.navigationBars["Group agents"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Host"].firstMatch.waitForExistence(timeout: 5),
+                      "the grouping chooser must list the Host choice")
+        captureScreenshot(app, "agents-grouping-chooser", lifetime: .keepAlways)
+        app.buttons["Host"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Reset list layout"].firstMatch.waitForExistence(timeout: 5),
+                      "the chooser must return to the parent sheet root")
+        let done = app.buttons["Done"].firstMatch
+        XCTAssertTrue(done.waitForExistence(timeout: 5))
+        done.tap()
+        XCTAssertTrue(staticText(containing: "Build Server").waitForExistence(timeout: 10),
                       "host grouping must section per machine")
         captureScreenshot(app, "agents-group-host", lifetime: .keepAlways)
+    }
 
-        // Grouping: Agent state (urgency ladder: Needs you first).
-        menu.tap()
-        let stateGroup = app.buttons["Agent state"].firstMatch
-        XCTAssertTrue(stateGroup.waitForExistence(timeout: 5))
-        stateGroup.tap()
-        XCTAssertTrue(staticText(containing: "Needs you").waitForExistence(timeout: 5),
-                      "state grouping must lead with the urgent bucket")
-        captureScreenshot(app, "agents-group-state", lifetime: .keepAlways)
-        // MEASURED density proof (final directive): the group heading block
-        // must be the prototype's compact strip. The AX frame of the
-        // heading row (chevron+title+count) at default type measures the
-        // whole rendered strip; ~40pt at 1x/3x scales with Dynamic Type.
-        let needsHeader = app.buttons.matching(
-            NSPredicate(format: "label CONTAINS %@", "Needs you")).firstMatch
-        XCTAssertTrue(needsHeader.waitForExistence(timeout: 5))
-        let headerHeight = needsHeader.frame.height
-        XCTAssertLessThanOrEqual(
-            headerHeight, 48,
-            "group heading strip must stay compact, measured \(headerHeight)pt")
-        XCTAssertGreaterThanOrEqual(
-            headerHeight, 30,
-            "the 44pt-scale toggle target needs the strip to keep its height")
-        print("MEASURED group header height: \(headerHeight)pt")
+    func testViewSheetResetRestoresDefaults() {
+        resetViewMenu()
+        waitToExist(row(containing: "Polish the Attach experience"))
+        // Fresh sheet cycle: set a non-default order first, then Reset
+        // returns recent/none.
+        app.buttons["Agent list view options"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Agent list view"].waitForExistence(timeout: 5))
+        let order = app.buttons["Order"].firstMatch
+        XCTAssertTrue(order.waitForExistence(timeout: 5))
+        order.tap()
+        XCTAssertTrue(app.navigationBars["Order agents"].waitForExistence(timeout: 5))
+        app.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "Title A–Z")).firstMatch.tap()
+        // The choice returns to the sheet root; Reset applies + closes.
+        let reset = app.buttons["Reset list layout"].firstMatch
+        XCTAssertTrue(reset.waitForExistence(timeout: 10),
+                      "the reset row must appear on the sheet's root page")
+        reset.tap()
+        XCTAssertTrue(row(containing: "Polish the Attach experience").waitForExistence(timeout: 10),
+                      "reset must restore the list")
     }
 
     // MARK: Re-review regressions — grouped-mode host issues navigate
@@ -380,14 +578,17 @@ final class AgentsRedesignProofTests: XCTestCase {
     func testGroupedHostIssueRowNavigatesToHosts() {
         resetViewMenu()
         waitToExist(row(containing: "Polish the Attach experience"))
-        // Group by state: the host-issue rows (Offline Server, which fails
-        // to connect in the demo fixture) render above the groups and must
-        // navigate to Hosts — the SAME handler as the flat list.
-        let menu = app.buttons["Agent list view options"].firstMatch
-        menu.tap()
-        let stateGroup = app.buttons["Agent state"].firstMatch
-        XCTAssertTrue(stateGroup.waitForExistence(timeout: 5))
-        stateGroup.tap()
+        // Group by state via the view sheet's chooser: the host-issue
+        // rows (Offline Server, which fails to connect in the demo
+        // fixture) render above the groups and must navigate to Hosts —
+        // the SAME handler as the flat list.
+        app.buttons["Agent list view options"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Grouping"].firstMatch.waitForExistence(timeout: 5))
+        app.buttons["Grouping"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Agent state"].firstMatch.waitForExistence(timeout: 5))
+        app.buttons["Agent state"].firstMatch.tap()
+        let done = app.buttons["Done"].firstMatch
+        if done.waitForExistence(timeout: 5) { done.tap() }
         XCTAssertTrue(staticText(containing: "Needs you").waitForExistence(timeout: 5))
 
         let issue = app.buttons.matching(

@@ -124,4 +124,25 @@ struct AgentStatusPaletteTests {
         }
         return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
     }
+    @Test func kindTilePairIsAdaptiveAndMatchesThePrototypeHues() throws {
+        // The approved tile pair (prototype: wash #eaf2ed, glyph #22644d).
+        // DynamicUIColor: resolve both trait pairs and confirm the light
+        // matches the prototype and dark differs (adaptive).
+        let light = UITraitCollection(userInterfaceStyle: .light)
+        let dark = UITraitCollection(userInterfaceStyle: .dark)
+        let washLight = AgentStatusPalette.kindTileWash.resolvedColor(with: light)
+        let washDark = AgentStatusPalette.kindTileWash.resolvedColor(with: dark)
+        var r: CGFloat = 0; var g: CGFloat = 0; var b: CGFloat = 0; var a: CGFloat = 0
+        washLight.getRed(&r, green: &g, blue: &b, alpha: &a)
+        #expect(Int(r * 255) == 0xEA && Int(g * 255) == 0xF2 && Int(b * 255) == 0xED,
+            "light wash must be the prototype's #EAF2ED")
+        let accentLight = AgentStatusPalette.kindTileAccent.resolvedColor(with: light)
+        accentLight.getRed(&r, green: &g, blue: &b, alpha: &a)
+        #expect(Int(r * 255) == 0x22 && Int(g * 255) == 0x64 && Int(b * 255) == 0x4D,
+            "light accent must be the prototype's #22644D")
+        #expect(washDark != washLight, "the wash must adapt to dark mode")
+        #expect(AgentStatusPalette.kindTileAccent.resolvedColor(with: dark) != accentLight,
+            "the accent must adapt to dark mode")
+    }
+
 }

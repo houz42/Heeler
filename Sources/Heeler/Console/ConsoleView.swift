@@ -39,8 +39,7 @@ struct ConsoleView: View {
     @State private var manualReconnectInFlightHostIDs: Set<Host.ID> = []
     /// Narrows the Agent list to one Host; nil shows every Host. This is a
     /// filter in both presentations, not a second grouping mechanism.
-    @State private var hostFilter: Host.ID?
-    /// Client-side Agents search text (#292). Applied after `hostFilter` in
+    /// Client-side Agents search text (#292).
     /// both presentations; the Host filter is untouched.
     @State private var searchText = ""
     @State private var isSearchPresented = false
@@ -98,50 +97,7 @@ struct ConsoleView: View {
                         min: presentation.sidebarWidth.minimum,
                         ideal: presentation.sidebarWidth.ideal,
                         max: presentation.sidebarWidth.maximum)
-                    .toolbar {
-                        // A filter is meaningless with a single Host.
-                        if hosts.hosts.count > 1 {
-                            ToolbarItem(placement: .primaryAction) {
-                                Menu(
-                                    "Filter by Host",
-                                    systemImage: hostFilter == nil
-                                        ? "line.3.horizontal.decrease.circle"
-                                        : "line.3.horizontal.decrease.circle.fill"
-                                ) {
-                                    Picker("Host", selection: $hostFilter) {
-                                        Text("All Hosts").tag(Host.ID?.none)
-                                        ForEach(hosts.hosts) { host in
-                                            Text(host.displayName).tag(Host.ID?.some(host.id))
-                                        }
-                                    }
-                                }
-                                .hoverEffect(.highlight)
-                            }
-                        }
-                        // (The old flat/grouped/tree presentation picker
-                        // moved into the list region's view menu; the NAV
-                        // arbitration owns this toolbar block.)
-                        ToolbarItem(placement: .primaryAction) {
-                            Button("Hosts", systemImage: "server.rack") {
-                                presentHosts()
-                            }
-                            .hoverEffect(.highlight)
-                        }
-                        ToolbarItem(placement: .primaryAction) {
-                            Button("Settings", systemImage: "gearshape") {
-                                isShowingSettings = true
-                            }
-                            .hoverEffect(.highlight)
-                        }
-                        if !hosts.hosts.isEmpty {
-                            ToolbarItem(placement: .primaryAction) {
-                                Button("New Agent", systemImage: "plus") {
-                                    isStartingAgent = true
-                                }
-                                .hoverEffect(.highlight)
-                            }
-                        }
-                    }
+                    .toolbar { toolbarContent }
             } detail: {
                 detail
             }
@@ -238,15 +194,51 @@ struct ConsoleView: View {
             isStartingAgent = false
             isShowingSettings = false
         }
-        // A filter pointing at a removed Host would silently hide every
-        // Agent; fall back to All Hosts instead.
-        .onChange(of: hosts.hosts) { _, hosts in
-            if let hostFilter, !hosts.contains(where: { $0.id == hostFilter }) {
-                self.hostFilter = nil
-            }
-        }
+        .onChange(of: hosts.hosts) { _, _ in }
         .environment(\.consoleCommandRegistry, commandRegistry)
         .focusedSceneValue(\.consoleCommandTarget, commandTarget)
+        // Destination-change blur (user device bug): whenever a surface
+        // covers the Agents list (Hosts, Settings, or the New Agent sheet —
+        // and, at integration, any destination switch the nav seam drives),
+        // the search field must resign first responder so the keyboard
+        // never bleeds onto a page with no input. BLUR ONLY: query, chips,
+        // and scroll state are preserved — returning shows the search
+        // exactly as left, unfocused.
+        .onChange(of: hostSheet) { _, _ in isSearchFocused = false }
+        .onChange(of: isShowingSettings) { _, shown in
+            if shown { isSearchFocused = false }
+        }
+        .onChange(of: isStartingAgent) { _, starting in
+            if starting { isSearchFocused = false }
+        }
+    }
+
+    // The toolbar extracted from the body: keeps the body's expression
+    // graph small enough for the type-checker.
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        // (User directive: the host-filter menu is gone — search's
+        // host: chip subsumed it. The NAV arbitration owns this block.)
+        ToolbarItem(placement: .primaryAction) {
+            Button("Hosts", systemImage: "server.rack") {
+                presentHosts()
+            }
+            .hoverEffect(.highlight)
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button("Settings", systemImage: "gearshape") {
+                isShowingSettings = true
+            }
+            .hoverEffect(.highlight)
+        }
+        if !hosts.hosts.isEmpty {
+            ToolbarItem(placement: .primaryAction) {
+                Button("New Agent", systemImage: "plus") {
+                    isStartingAgent = true
+                }
+                .hoverEffect(.highlight)
+            }
+        }
     }
 
     private var commandTarget: ConsoleCommandTarget {
@@ -444,14 +436,14 @@ struct ConsoleView: View {
             } description: {
                 Text("Agents detected on your Hosts appear here.")
             }
-        case .noAgentsOnHost(let hostName):
+        case .noAgentsOnHost:
+            // Unreachable since the host-filter menu's removal (user
+            // directive: search's host: chip subsumed it) — the enum case
+            // stays so Nav's switch shape is untouched.
             ContentUnavailableView {
-                Label(
-                    "No Agents on \(hostName)",
-                    systemImage: "line.3.horizontal.decrease.circle")
-            } actions: {
-                Button("Show All Hosts") { hostFilter = nil }
-                    .hoverEffect(.highlight)
+                Label("No Agents", systemImage: "rectangle.on.rectangle.slash")
+            } description: {
+                Text("Agents detected on your Hosts appear here.")
             }
         case .noSearchResults:
             // The redesigned surface owns the copy and the clear action.
@@ -476,6 +468,10 @@ struct ConsoleView: View {
                 store: agentSearch,
                 agents: searchUniverse,
                 isFocused: $isSearchFocused)
+            // The approved quick-state chips (user device finding):
+            // All / Needs you / Working, trailing of the count row —
+            // riding the same filter model as typed state: chips.
+            AgentQuickStateChips(searchStore: agentSearch)
             AgentListCountBarView(
                 matchCount: searchedAgents.count,
                 totalCount: searchUniverse.count,
@@ -491,6 +487,9 @@ struct ConsoleView: View {
                     }
                 }
                 .listStyle(.plain)
+                // Drag-to-hide the keyboard without touching the query
+                // (user directive): interactive scroll dismissal.
+                .scrollDismissesKeyboard(.interactively)
             } else {
                 // Density re-review (final directive): native List/Section
                 // chrome cannot reach the prototype's ~40px heading strip,
@@ -523,6 +522,8 @@ struct ConsoleView: View {
                         }
                     }
                 }
+                // Drag-to-hide the keyboard, query intact (both surfaces).
+                .scrollDismissesKeyboard(.interactively)
             }
         }
     }
@@ -588,10 +589,10 @@ struct ConsoleView: View {
         }
     }
 
-    /// Search + filters apply over the Host-filtered universe.
+    /// The search engine's universe (user directive): every agent —
+    /// host scoping composes through the engine's host: field chips.
     private var searchUniverse: [ConsoleAgent] {
-        guard let hostFilter else { return console.agents }
-        return console.agents.filter { $0.hostID == hostFilter }
+        console.agents
     }
 
     /// The engine's result (review finding #5): a nonempty TEXT query
@@ -705,7 +706,7 @@ struct ConsoleView: View {
     private var agentsSurface: ConsoleAgentsSurface {
         ConsoleAgentsSurface(
             hostCount: hosts.hosts.count,
-            filteredHostName: hostFilter == nil ? nil : filteredHostName,
+            filteredHostName: nil,
             filteredAgentCount: searchedAgents.count,
             visibleIssueCount: visibleHostIssues.count,
             projectedSectionCount: agentGroupSections.count,
@@ -715,18 +716,15 @@ struct ConsoleView: View {
     // (Legacy flat/grouped/tree presentation — retained unused until the
     // NAV arbitration prunes it; the redesigned list renders from
     // `agentListSurface`.)
-    /// Host issues shown in the list: all of them, or the filtered Host's
-    /// only — a filtered Console should not nag about other machines.
+    /// Host issues shown in the list: all of them (the host: search chip
+    /// scopes rows; issue rows report every machine's connection state).
     private var visibleHostIssues: [ConsoleHostStatusPresentation] {
-        guard let hostFilter else { return hostIssues }
-        return hostIssues.filter { $0.hostID == hostFilter }
+        hostIssues
     }
 
-    private var filteredHostName: String {
-        hosts.hosts.first(where: { $0.id == hostFilter })?.displayName ?? "this Host"
-    }
 
-    private struct HostSheet: Identifiable {
+
+    private struct HostSheet: Identifiable, Equatable {
         let id = UUID()
         let hostID: Host.ID?
     }

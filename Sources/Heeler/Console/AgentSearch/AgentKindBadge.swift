@@ -88,9 +88,10 @@ struct AgentKindBadgeModel: Equatable, Sendable {
     }
 }
 
-/// The leading kind icon. Fixed square footprint (28 pt) so rows align; the
-/// runtime name rides the accessibility label and the tooltip. Core
-/// runtimes draw their approved prototype glyph; the rest their symbol.
+/// The leading kind icon: the approved accent TILE (soft wash, rounded
+    /// rect, 30pt) with the kind's glyph — the prototype marks for the core
+    /// runtimes, neutral symbols for the long tail. The runtime name rides
+    /// the accessibility label and the tooltip.
 struct AgentKindBadgeIcon: View {
     let model: AgentKindBadgeModel
     /// Set on tree rows: the row's depth padding already separates the icon
@@ -99,13 +100,20 @@ struct AgentKindBadgeIcon: View {
 
     @ViewBuilder
     private var icon: some View {
+        // The tile IS the design; the glyph is the kind (visual follow-up):
+        // ALL kinds render inside the approved accent tile — the three
+        // prototype marks and the neutral symbol fallbacks alike.
         if let glyph = model.glyph {
             AgentKindGlyphView(glyph: glyph)
         } else {
             Image(systemName: model.systemImage)
                 .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(Color.secondary)
-                .frame(width: 21, height: 21)
+                .foregroundStyle(Color(AgentStatusPalette.kindTileAccent))
+                .padding(4)
+                .frame(width: 30, height: 30)
+                .background(
+                    Color(AgentStatusPalette.kindTileWash),
+                    in: RoundedRectangle(cornerRadius: 8))
                 .accessibilityHidden(true)
         }
     }
