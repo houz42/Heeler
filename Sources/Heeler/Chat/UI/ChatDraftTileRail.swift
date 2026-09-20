@@ -135,7 +135,8 @@ struct ChatDraftTileRail: View {
                 // genuinely exceed the fitting tiles, and then occupies
                 // one slot itself.
                 let hasOverflow = items.count > fits
-                let visibleCount = hasOverflow ? fits - 1 : items.count
+                // fits can be 0 at constrained widths; never negative.
+                let visibleCount = hasOverflow ? max(fits - 1, 0) : items.count
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(items.prefix(visibleCount)) { item in

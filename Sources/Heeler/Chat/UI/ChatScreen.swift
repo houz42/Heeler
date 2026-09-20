@@ -238,7 +238,10 @@ struct ChatScreen: View {
         // The L1 Work inspector's call details.
         .sheet(item: $inspectedWork) { detail in
             ChatWorkInspectorSheet(detail: detail)
-                .presentationDetents([.medium, .large])
+                // A content-fit collapsed detent (a compact 1-call
+                // list), plus the taller scrollable forms for
+                // expanded results.
+                .presentationDetents([.height(220), .medium, .large])
         }
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)

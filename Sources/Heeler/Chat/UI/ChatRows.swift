@@ -1013,7 +1013,8 @@ struct ChatWorkInspectorSheet: View {
             List(detail.entries) { entry in
                 WorkInspectorRow(entry: entry)
             }
-            .navigationTitle("Work · \(detail.entries.count) calls")
+            .navigationTitle(
+                "Work · \(detail.entries.count) call\(detail.entries.count == 1 ? "" : "s")")
             .navigationBarTitleDisplayMode(.inline)
         }
     }
@@ -1185,7 +1186,8 @@ struct ChatTranscriptImageGallery: View {
         GeometryReader { geo in
             let fits = Self.fits(width: geo.size.width - 24)
             let hasOverflow = images.count > fits
-            let visible = hasOverflow ? fits - 1 : images.count
+            // fits can be 0 at constrained widths; never negative.
+            let visible = hasOverflow ? max(fits - 1, 0) : images.count
             HStack(spacing: Self.gap) {
                 ForEach(images.prefix(visible)) { image in
                     ChatTranscriptImageTile(
@@ -1196,7 +1198,7 @@ struct ChatTranscriptImageGallery: View {
                     Button {
                         showsCollection = true
                     } label: {
-                        Text("+\\(images.count - visible)")
+                        Text("+\(images.count - visible)")
                             .font(.footnote.weight(.medium))
                             .frame(width: Self.tile, height: Self.tile)
                             .background(
@@ -1205,7 +1207,7 @@ struct ChatTranscriptImageGallery: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(
-                        "\\(images.count - visible) more images, opens all")
+                        "\(images.count - visible) more images, opens all")
                 }
             }
         }
@@ -1218,7 +1220,7 @@ struct ChatTranscriptImageGallery: View {
                         ChatTranscriptImageTile(
                             image: image, fetch: fetch, side: 44)
                         { openReader(image) }
-                        Text("Image \\(image.ref)")
+                        Text("Image \(image.ref)")
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
                         Spacer()

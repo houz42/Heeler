@@ -376,6 +376,19 @@ extension CaptureUITests {
             if done.exists { done.tap() }
             Thread.sleep(forTimeInterval: 2)
             screenshot("d3-image-gallery")
+            // The +N tile opens the collection sheet (every image).
+            let overflow = app.buttons.matching(
+                NSPredicate(format: "label CONTAINS 'more images, opens all'")).firstMatch
+            if overflow.exists {
+                overflow.tap()
+                Thread.sleep(forTimeInterval: 2)
+                screenshot("d3-image-collection-sheet")
+                // Dismiss the collection sheet (drag the handle).
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.18))
+                    .press(forDuration: 0.05, thenDragTo: app.coordinate(
+                        withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98)))
+                Thread.sleep(forTimeInterval: 1)
+            }
         }
     }
 
