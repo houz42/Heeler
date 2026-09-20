@@ -73,6 +73,15 @@ struct ConsoleView: View {
     /// The window-aware entry into navigation; nil outside a scene root.
     @Environment(\.agentSceneRouting) private var sceneRouting
 
+    /// The approved compact top-left destination selector (#A). Provided by
+    /// `AppRootView`'s environment when the Console is a top-level page;
+    /// nil keeps the sheet-era toolbar behavior for previews, Demo runs,
+    /// and tests that construct `ConsoleView` directly.
+    @Environment(\.appDestination) private var appDestination
+    private var destinationMenu: AppDestinationMenu? {
+        appDestination.map { AppDestinationMenu(selection: $0) }
+    }
+
     var body: some View {
         // A split view instead of a plain stack for the iPad's sake: regular
         // width shows the Agent list beside the Attach terminal; compact
