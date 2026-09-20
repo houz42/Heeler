@@ -60,6 +60,23 @@ extension CaptureUITests {
         for _ in 0..<6 { app.swipeDown() }
         Thread.sleep(forTimeInterval: 2)
         screenshot("redesign-conversation-article-and-bubble")
+        // Message-actions rail (final spec): a short tap on a message
+        // toggles the inline Copy/(Quote)/Helpful rail under it. Tap a
+        // plain text region (mid width avoids right-aligned link spans).
+        // Screen-coordinate tap (element-agnostic): center screen is
+        // inside the article body.
+        // Right-center: the user bubble (compact, right-aligned, no links).
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.45)).tap()
+        Thread.sleep(forTimeInterval: 2)
+        screenshot("redesign-message-actions-rail")
+        // Same-message tap toggles the rail off (the dismissal path).
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.45)).tap()
+        Thread.sleep(forTimeInterval: 1)
+        screenshot("redesign-message-actions-dismissed")
+        // Composer collapse/grow needs an interactive chat; the demo
+        // transcript is read-only (no composer), so the collapse/grow
+        // contract is proven by ChatPrefixKeysTests' sizing tests
+        // (one-line floor, 3-line cap, scroll past cap, draft intact).
         app.terminate()
         Thread.sleep(forTimeInterval: 2)
         let app2 = XCUIApplication()

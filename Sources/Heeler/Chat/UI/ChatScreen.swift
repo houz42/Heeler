@@ -153,6 +153,10 @@ struct ChatScreen: View {
                     ChatOpenersSurface(
                         router: openRouter,
                         fetch: fetch ?? { _ in throw CocoaError(.fileNoSuchFile) }))
+                // Outside-tap dismisses the open message-actions rail
+                // (taps on a message row win the gesture over this —
+                // they toggle the rail instead).
+                .onTapGesture { dismissActions() }
                 // The terminal Attach surface's jump chrome, adapted: one
                 // floating pill on the trailing edge, up = oldest loaded,
                 // down = latest. Each appears only when its end is offscreen.
@@ -335,6 +339,7 @@ struct ChatScreen: View {
                 if selectedActionsBubble == bubble {
                     ChatMessageActionsRail(
                         isAssistant: bubble.role == .assistant,
+                        supportsQuote: router != nil,
                         copy: { copyAffordance(bubble.text); dismissActions() },
                         quote: { quoteAffordance(bubble.text); dismissActions() },
                         helpful: { markHelpfulStub(); dismissActions() })
@@ -360,7 +365,6 @@ struct ChatScreen: View {
     @State private var selectedActionsBubble: ChatBubble?
 
     private func toggleActionsBubble(_ bubble: ChatBubble) {
-        guard router != nil else { return }
         withAnimation(.snappy) {
             selectedActionsBubble = selectedActionsBubble == bubble ? nil : bubble
         }
@@ -375,21 +379,6 @@ struct ChatScreen: View {
     @State private var helpfulToast: String?
     private func markHelpfulStub() {
         helpfulToast = "Marked helpful — feedback is preview-only for now"
-    }
-
-    /// Sends one quick reaction's composed message (emoji + block-quoted
-    /// target) as a plain user message through the composer's passthrough
-    /// path (it never starts with / # @ !). The in-flight gate keeps a
-    /// double-tap from duplicating the send.
-    private func reactAffordance(_ text: String) {
-        guard !isSending, let router else { return }
-        isSending = true
-        Task {
-            defer { isSending = false }
-            if case .passthrough = await router.submit(text) {
-                try? await deliver?(text)
-            }
-        }
     }
 
     /// Prefills the composer with the quoted draft and opens the input,

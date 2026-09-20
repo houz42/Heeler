@@ -532,148 +532,6 @@ struct ChatBubbleView: View {
     }
 }
 
-/// The iMessage long-press focus state: the transcript blurs and dims
-/// behind a light veil, the selected bubble lifts above it with the
-/// Tapback pill near-kissing above (reactions only) and the action menu
-/// card below (Quote / Copy / Select rows). Tapping the veil dismisses.
-/// Reactions deliver as the emoji plus a block-quoted reference to this
-/// message; Quote prefills the composer with the quoted draft (caret
-/// after the quote); Copy puts the plain text on the pasteboard; Select
-/// swaps the lifted bubble to selectable plain text.
-struct ChatBubbleFocusLayer: View {
-    let bubble: ChatBubble
-    let router: OpenRouterCore
-    /// Sends one quick reaction's composed message. Nil hides the pill.
-    var react: ((String) -> Void)? = nil
-    /// Prefills the composer with the quoted text. Nil hides Quote.
-    var quote: ((String) -> Void)? = nil
-    /// Puts the text on the pasteboard. Nil hides Copy.
-    var copy: ((String) -> Void)? = nil
-    let dismiss: () -> Void
-
-    @State private var selectsText = false
-    @Environment(\.colorScheme) private var colorScheme
-    private var isDark: Bool { colorScheme == .dark }
-    private var isUser: Bool { bubble.role == .user }
-
-    var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                // The veil covers edge to edge (its own ignore of the
-                // safe areas); the content column respects them, so the
-                // pill and menu sit inside the reachable screen.
-                veil
-                VStack(alignment: isUser ? .trailing : .leading, spacing: 8) {
-                    reactionPill
-                    // The lifted bubble clamps to the space the pill and
-                    // menu leave, and scrolls when it is taller than
-                    // that — so the pill stays pinned under the top
-                    // inset and the menu above the bottom, reachable
-                    // regardless of message height (iMessage behavior).
-                    ScrollView {
-                        ChatBubbleBody(
-                            bubble: bubble, router: router,
-                            selectable: selectsText)
-                            .frame(
-                                maxWidth: geo.size.width * 0.78,
-                                alignment: .leading)
-                            .scaleEffect(1.03)
-                            .shadow(color: .black.opacity(0.25), radius: 18, y: 8)
-                    }
-                    .scrollBounceBehavior(.basedOnSize)
-                    .frame(maxHeight: .infinity)
-                    actionMenu
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-    }
-
-    private var veil: some View {
-        Rectangle()
-            .fill(.ultraThinMaterial)
-            .overlay(
-                Rectangle().fill(
-                    Color(white: isDark ? 0 : 1)
-                        .opacity(isDark ? 0.55 : 0.35)))
-            .ignoresSafeArea()
-            .onTapGesture(perform: dismiss)
-    }
-
-    /// iMessage's Tapback pill: only the reactions, generous glyph
-    /// circles on a fully-rounded capsule, near-kissing above the bubble.
-    private var reactionPill: some View {
-        HStack(spacing: 10) {
-            ForEach(ChatReaction.allCases, id: \.rawValue) { reaction in
-                Button {
-                    react?(reaction.message(for: bubble.text))
-                    dismiss()
-                } label: {
-                    Text(reaction.rawValue)
-                        .font(.system(.title3))
-                        .frame(width: 34, height: 34)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .disabled(react == nil)
-                .accessibilityLabel(reaction.accessibilityLabel)
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .background(.regularMaterial, in: Capsule())
-        .shadow(color: .black.opacity(0.2), radius: 10, y: 4)
-    }
-
-    /// iMessage's text-action menu: Quote / Copy / Select as context-menu
-    /// rows (SF-symbol icon left, label right) in a compact card sized to
-    /// its rows — never the full transcript width — below the bubble,
-    /// its edge flush with the bubble's (leading under agent bubbles,
-    /// trailing under user bubbles, via the VStack's alignment).
-    private var actionMenu: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            menuRow("text.quote", label: "Quote") {
-                quote?(bubble.text)
-                dismiss()
-            }
-            .disabled(quote == nil)
-            menuRow("doc.on.doc", label: "Copy") {
-                copy?(bubble.text)
-                dismiss()
-            }
-            .disabled(copy == nil)
-            menuRow("textformat", label: "Select") {
-                selectsText = true
-            }
-        }
-        .frame(width: 220)
-        .padding(6)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-        .shadow(color: .black.opacity(0.2), radius: 10, y: 4)
-    }
-
-    private func menuRow(
-        _ systemImage: String, label: String, action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 15, weight: .medium))
-                    .frame(width: 24)
-                Text(label)
-                    .font(.system(.body))
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 11)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
-    }
-}
-
 /// The pane-level modifier that binds an `OpenRouterCore` and presents
 /// whatever it holds. One modifier so the ChatScreen wrap stays one call.
 struct ChatOpenersSurface: ViewModifier {
@@ -832,6 +690,9 @@ struct ChatAssistantArticleView: View {
 /// so it confirms locally and sends nothing.
 struct ChatMessageActionsRail: View {
     var isAssistant: Bool
+    /// Quote needs the composer (a place for the quoted draft to
+    /// land); read-only transcripts keep Copy only.
+    var supportsQuote: Bool
     var copy: () -> Void
     var quote: () -> Void
     var helpful: () -> Void
@@ -839,7 +700,9 @@ struct ChatMessageActionsRail: View {
     var body: some View {
         HStack(spacing: 4) {
             railButton("Copy", icon: "doc.on.doc", action: copy)
-            railButton("Quote", icon: "text.quote", action: quote)
+            if supportsQuote {
+                railButton("Quote", icon: "text.quote", action: quote)
+            }
             if isAssistant {
                 railButton("Helpful", icon: "hand.thumbsup", action: helpful)
             }
