@@ -41,7 +41,7 @@ enum AgentChatEventEffect: Sendable, Equatable {
 /// in-flight message and is NOT a durable item id.
 enum StreamSignal: Sendable, Equatable {
     case started(streamId: String, authorRole: String?)
-    case delta(streamId: String, blockIndex: Int, text: String)
+    case delta(streamId: String, blockIndex: Int, blockType: String?, text: String)
     case finished(streamId: String)
 }
 
@@ -80,6 +80,7 @@ enum AgentChatEventReconcile: Sendable {
                 .delta(
                     streamId: frame["streamId"]?.stringValue ?? "",
                     blockIndex: frame["blockIndex"]?.intValue ?? 0,
+                    blockType: frame["blockType"]?.stringValue,
                     text: frame["text"]?.stringValue ?? ""))
         case "message.finished":
             return .stream(.finished(streamId: frame["streamId"]?.stringValue ?? ""))

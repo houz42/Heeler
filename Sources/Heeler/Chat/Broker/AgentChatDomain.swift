@@ -19,10 +19,13 @@ struct AgentChatCapabilities: Decodable, Sendable, Equatable {
     var interrupt: Bool
     var interactions: Bool
     var commands: Bool
+    var attachments: Bool
+    var branches: Bool
 
     init(
         history: Bool = false, streaming: Bool = false, prompt: Bool = false,
-        interrupt: Bool = false, interactions: Bool = false, commands: Bool = false
+        interrupt: Bool = false, interactions: Bool = false, commands: Bool = false,
+        attachments: Bool = false, branches: Bool = false
     ) {
         self.history = history
         self.streaming = streaming
@@ -30,6 +33,8 @@ struct AgentChatCapabilities: Decodable, Sendable, Equatable {
         self.interrupt = interrupt
         self.interactions = interactions
         self.commands = commands
+        self.attachments = attachments
+        self.branches = branches
     }
 
     init(from decoder: any Decoder) throws {
@@ -41,10 +46,13 @@ struct AgentChatCapabilities: Decodable, Sendable, Equatable {
         interrupt = try container.decodeIfPresent(Bool.self, forKey: .interrupt) ?? false
         interactions = try container.decodeIfPresent(Bool.self, forKey: .interactions) ?? false
         commands = try container.decodeIfPresent(Bool.self, forKey: .commands) ?? false
+        attachments = try container.decodeIfPresent(Bool.self, forKey: .attachments) ?? false
+        branches = try container.decodeIfPresent(Bool.self, forKey: .branches) ?? false
     }
 
     private enum CodingKeys: String, CodingKey {
         case history, streaming, prompt, interrupt, interactions, commands
+        case attachments, branches
     }
 }
 
@@ -55,6 +63,15 @@ struct AgentChatRegistration: Decodable, Sendable, Equatable {
     struct Locator: Decodable, Sendable, Equatable {
         var paneId: String?
         var sessionFile: String?
+        /// Discovery-only process id; never used for matching.
+        var pid: Int?
+    }
+
+    /// The adapter's declared agent identity; `version` may be
+    /// "unknown" (pi.VERSION absent) and displays as-is.
+    struct AgentIdentity: Decodable, Sendable, Equatable {
+        var kind: String
+        var version: String?
     }
 
     let instanceId: String
@@ -62,11 +79,13 @@ struct AgentChatRegistration: Decodable, Sendable, Equatable {
     let generation: Int
     var title: String?
     var locator: Locator?
+    var agent: AgentIdentity?
     var capabilities: AgentChatCapabilities
 
     init(
         instanceId: String, sessionId: String, generation: Int,
         title: String? = nil, locator: Locator? = nil,
+        agent: AgentIdentity? = nil,
         capabilities: AgentChatCapabilities = AgentChatCapabilities()
     ) {
         self.instanceId = instanceId
@@ -74,6 +93,7 @@ struct AgentChatRegistration: Decodable, Sendable, Equatable {
         self.generation = generation
         self.title = title
         self.locator = locator
+        self.agent = agent
         self.capabilities = capabilities
     }
 }

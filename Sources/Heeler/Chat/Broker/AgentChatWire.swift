@@ -85,14 +85,14 @@ struct AgentChatWelcome: Decodable, Sendable, Equatable {
 }
 
 /// The routing target every agent-scoped request carries.
-struct AgentChatTarget: Encodable, Equatable, Sendable {
+struct AgentChatTarget: Codable, Equatable, Sendable {
     let instanceId: String
     let generation: Int
 }
 
 /// One request envelope. `target` is omitted for host-scoped methods
 /// (sessions.list).
-struct AgentChatRequest: Encodable, Sendable {
+struct AgentChatRequest: Codable, Sendable {
     var type = "request"
     var id: String
     var method: String
@@ -104,6 +104,19 @@ struct AgentChatRequest: Encodable, Sendable {
         self.method = method
         self.target = target
         self.params = params
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case type, id, method, target, params
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        type = (try? container.decode(String.self, forKey: .type)) ?? "request"
+        id = try container.decode(String.self, forKey: .id)
+        method = try container.decode(String.self, forKey: .method)
+        target = try container.decodeIfPresent(AgentChatTarget.self, forKey: .target)
+        params = try container.decodeIfPresent(JSONValue.self, forKey: .params)
     }
 }
 

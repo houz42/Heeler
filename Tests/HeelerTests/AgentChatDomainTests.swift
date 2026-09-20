@@ -289,7 +289,7 @@ struct AgentChatReconcileTests {
                 "streamId": .string("s1"), "blockIndex": .number(0),
                 "text": .string("hi"),
             ]))
-        guard case .stream(.delta(let deltaStream, _, let text)) = delta else {
+        guard case .stream(.delta(let deltaStream, _, _, let text)) = delta else {
             Issue.record("expected delta, got \(delta)")
             return
         }
@@ -543,5 +543,141 @@ struct AgentChatInteractionModelTests {
             AgentChatInteractionsResult.self, from: JSONEncoder().encode(result))
         #expect(decoded.pending.count == 1)
         #expect(decoded.pending[0].questions[0].text == "Proceed?")
+    }
+}
+
+
+// MARK: - Live runtime vectors (sanitized)
+//
+// Derived from REAL production wire frames captured against the
+// integrated runtime (28 frames, live-frames.json; capture 2026-09-20).
+// REDACTION, applied recursively before these fixtures were written:
+// every private string value (block text/thinking, summaries, titles,
+// tool names/arguments, image data, instance/session/stream ids,
+// timestamps, revisions, requestKeys, cursors, paneId) was replaced
+// with an opaque placeholder; pid zeroed. STRUCTURE is untouched —
+// envelope types, discriminators, field names, block kinds, event
+// payloads, capability flags, and the reference/oversized item are
+// the real wire shapes. Raw frames are NOT committed.
+
+@Suite("Agent chat live runtime vectors (sanitized)")
+struct AgentChatLiveVectorTests {
+    private static let sessionsResponse =
+        #"{"type":"response","id":"<redacted>","result":{"sessions":[{"instanceId":"redacted-instanceId","sessionId":"redacted-sessionId","generation":1,"agent":{"kind":"omp","version":"unknown"},"title":"<redacted>","locator":{"pid":0,"paneId":"wX:pR","sessionFile":"/redacted/path/history.jsonl"},"capabilities":{"history":true,"streaming":true,"prompt":true,"interrupt":true,"interactions":false,"commands":true,"attachments":false,"branches":false}}]}}"#
+    private static let historyResponse =
+        #"{"type":"response","id":"<redacted>","result":{"sessionId":"redacted-sessionId","generation":1,"revision":"rev:redacted","throughSeq":17,"items":[{"id":"<redacted>","kind":"reference","itemKind":"message","byteLength":365},{"id":"<redacted>","kind":"message","author":{"role":"tool","name":"<redacted>"},"createdAt":"2026-09-20T00:00:00.000Z","blocks":[{"type":"tool_result","callId":"<redacted>","name":"<redacted>","isError":false,"content":[{"type":"text","text":"<redacted text>"}]}],"status":"committed"},{"id":"<redacted>","kind":"message","author":{"role":"assistant","name":"<redacted>"},"createdAt":"2026-09-20T00:00:00.000Z","blocks":[{"type":"thinking","text":"<redacted text>"},{"type":"text","text":"<redacted text>"},{"type":"tool_call","callId":"<redacted>","name":"<redacted>","arguments":{}}],"status":"committed"},{"id":"<redacted>","kind":"message","author":{"role":"tool","name":"<redacted>"},"createdAt":"2026-09-20T00:00:00.000Z","blocks":[{"type":"tool_result","callId":"<redacted>","name":"<redacted>","isError":false,"content":[{"type":"text","text":"<redacted text>"}]}],"status":"committed"},{"id":"<redacted>","kind":"message","author":{"role":"assistant","name":"<redacted>"},"createdAt":"2026-09-20T00:00:00.000Z","blocks":[{"type":"thinking","text":"<redacted text>"},{"type":"text","text":"<redacted text>"},{"type":"tool_call","callId":"<redacted>","name":"<redacted>","arguments":{}}],"status":"committed"},{"id":"<redacted>","kind":"message","author":{"role":"tool","name":"<redacted>"},"createdAt":"2026-09-20T00:00:00.000Z","blocks":[{"type":"tool_result","callId":"<redacted>","name":"<redacted>","isError":false,"content":[{"type":"text","text":"<redacted text>"}]}],"status":"committed"},{"id":"<redacted>","kind":"message","author":{"role":"assistant","name":"<redacted>"},"createdAt":"2026-09-20T00:00:00.000Z","blocks":[{"type":"thinking","text":"<redacted text>"},{"type":"text","text":"<redacted text>"},{"type":"tool_call","callId":"<redacted>","name":"<redacted>","arguments":{}}],"status":"committed"},{"id":"<redacted>","kind":"message","author":{"role":"tool","name":"<redacted>"},"createdAt":"2026-09-20T00:00:00.000Z","blocks":[{"type":"tool_result","callId":"<redacted>","name":"<redacted>","isError":false,"content":[{"type":"text","text":"<redacted text>"}]}],"status":"committed"},{"id":"<redacted>","kind":"message","author":{"role":"assistant","name":"<redacted>"},"createdAt":"2026-09-20T00:00:00.000Z","blocks":[{"type":"text","text":"<redacted text>"}],"status":"committed"},{"id":"<redacted>","kind":"message","author":{"role":"user"},"createdAt":"2026-09-20T00:00:00.000Z","blocks":[{"type":"text","text":"<redacted text>"}],"status":"committed"},{"id":"<redacted>","kind":"message","author":{"role":"assistant","name":"<redacted>"},"createdAt":"2026-09-20T00:00:00.000Z","blocks":[{"type":"thinking","text":"<redacted text>"},{"type":"text","text":"<redacted text>"}],"status":"committed"}],"olderCursor":"redacted-cursor"}}"#
+    private static let messageStarted =
+        #"{"type":"event","instanceId":"redacted-instanceId","generation":1,"seq":22,"event":{"type":"message.started","streamId":"redacted-streamId","author":{"role":"assistant"}}}"#
+    private static let messageDeltaText =
+        #"{"type":"event","instanceId":"redacted-instanceId","generation":1,"seq":28,"event":{"type":"message.delta","streamId":"redacted-streamId","blockIndex":1,"blockType":"text","text":"<redacted text>"}}"#
+    private static let messageFinished =
+        #"{"type":"event","instanceId":"redacted-instanceId","generation":1,"seq":31,"event":{"type":"message.finished","streamId":"redacted-streamId"}}"#
+    private static let historyChanged =
+        #"{"type":"event","instanceId":"redacted-instanceId","generation":1,"seq":21,"event":{"type":"history.changed","revision":"rev:redacted"}}"#
+    private static let promptRequest =
+        #"{"type":"request","id":"<redacted>","method":"prompt.send","target":{"instanceId":"redacted-instanceId","generation":1},"params":{"text":"<redacted text>","requestKey":"key-redacted"}}"#
+    private static let promptResult =
+        #"{"type":"response","id":"<redacted>","result":{"accepted":true,"requestKey":"key-redacted"}}"#
+    private static let itemNotFound =
+        #"{"type":"response","id":"<redacted>","error":{"code":"item_not_found","message":"<redacted>","retryable":false}}"#
+
+    @Test("live sessions.list: agent identity (unknown version), locator, capabilities")
+    func liveSessions() throws {
+        let envelope = try JSONDecoder().decode(
+            AgentChatResponseEnvelope.self,
+            from: Data(Self.sessionsResponse.utf8))
+        let result = try #require(envelope.result)
+        let sessions = try JSONDecoder().decode(
+            AgentChatSessionsResult.self, from: JSONEncoder().encode(result)).sessions
+        let registration = try #require(sessions.first)
+        // Agent identity displays honestly, including "unknown".
+        #expect(registration.agent?.kind == "omp")
+        #expect(registration.agent?.version == "unknown")
+        // Locator carries discovery-only pid + sessionFile.
+        #expect(
+            registration.locator?.sessionFile == "/redacted/path/history.jsonl")
+        #expect(registration.locator?.pid == 0)
+        // Granular capabilities from the live registration.
+        #expect(registration.capabilities.history)
+        #expect(registration.capabilities.streaming)
+        #expect(registration.capabilities.prompt)
+        #expect(registration.capabilities.interrupt)
+        #expect(registration.capabilities.commands)
+        // Interactions off — the honest unsupported card state.
+        #expect(!registration.capabilities.interactions)
+        #expect(!registration.capabilities.attachments)
+        #expect(!registration.capabilities.branches)
+    }
+
+    @Test("live history.open: 11 items incl. a reference, throughSeq 17, cursor")
+    func liveHistoryPage() throws {
+        let envelope = try JSONDecoder().decode(
+            AgentChatResponseEnvelope.self,
+            from: Data(Self.historyResponse.utf8))
+        let result = try #require(envelope.result)
+        let page = try JSONDecoder().decode(
+            AgentChatPage.self, from: JSONEncoder().encode(result))
+        #expect(page.items.count == 11)
+        #expect(page.throughSeq == 17)
+        #expect(page.olderCursor != nil)
+        var sawReference = false
+        for item in page.items {
+            if case .reference(_, let itemKind, let byteLength) = item {
+                sawReference = true
+                #expect(itemKind == "message")
+                #expect(byteLength == 365)
+            }
+        }
+        #expect(sawReference)
+    }
+
+    @Test("live stream events: typed envelopes, shared streamId, text blockType")
+    func liveStreamEvents() throws {
+        for (frame, expectedType) in [
+            (Self.messageStarted, "message.started"),
+            (Self.messageDeltaText, "message.delta"),
+            (Self.messageFinished, "message.finished"),
+            (Self.historyChanged, "history.changed"),
+        ] {
+            let value = try JSONDecoder().decode(
+                JSONValue.self, from: Data(frame.utf8))
+            let event = try #require(AgentChatEventFrame(json: value))
+            #expect(event.type == expectedType)
+            #expect(event.instanceId == "redacted-instanceId")
+        }
+        let deltaValue = try JSONDecoder().decode(
+            JSONValue.self, from: Data(Self.messageDeltaText.utf8))
+        let deltaFrame = try #require(AgentChatEventFrame(json: deltaValue))
+        #expect(deltaFrame["blockType"]?.stringValue == "text")
+        #expect(deltaFrame["streamId"]?.stringValue == "redacted-streamId")
+    }
+
+    @Test("live prompt.send: requestKey dedup + accepted result")
+    func livePrompt() throws {
+        let request = try JSONDecoder().decode(
+            AgentChatRequest.self, from: Data(Self.promptRequest.utf8))
+        #expect(request.method == "prompt.send")
+        #expect(request.params?["requestKey"]?.stringValue == "key-redacted")
+        #expect(request.target?.generation == 1)
+        let envelope = try JSONDecoder().decode(
+            AgentChatResponseEnvelope.self,
+            from: Data(Self.promptResult.utf8))
+        let result = try JSONDecoder().decode(
+            AgentChatPromptResult.self,
+            from: JSONEncoder().encode(try #require(envelope.result)))
+        #expect(result.accepted)
+        #expect(result.requestKey == "key-redacted")
+    }
+
+    @Test("live item_not_found typed error, non-retryable, ordinary failure")
+    func liveItemNotFound() throws {
+        let envelope = try JSONDecoder().decode(
+            AgentChatResponseEnvelope.self,
+            from: Data(Self.itemNotFound.utf8))
+        let error = try #require(envelope.error)
+        #expect(error.code == "item_not_found")
+        #expect(error.retryable == false)
+        let mapped = AgentChatError.from(error)
+        #expect(!mapped.requiresFullResync && !mapped.requiresFreshOpen)
     }
 }

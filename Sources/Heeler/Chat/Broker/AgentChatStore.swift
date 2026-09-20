@@ -474,7 +474,10 @@ final class AgentChatStore {
         case .stream(.started(let streamId, let role)):
             streamTails.append(
                 AgentChatStreamTail(streamId: streamId, authorRole: role, text: ""))
-        case .stream(.delta(let streamId, _, let text)):
+        case .stream(.delta(let streamId, _, let blockType, let text)):
+            // Only text deltas render in the provisional tail; thinking
+            // streams surface at L3 after the authoritative reconcile.
+            guard blockType == nil || blockType == "text" else { return }
             if let index = streamTails.firstIndex(where: { $0.streamId == streamId }) {
                 streamTails[index].text += text
             }
