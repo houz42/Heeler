@@ -34,13 +34,13 @@ final class NavigationRedesignProofTests: XCTestCase {
         // row leaves the viewport, remember where it landed.
         app.swipeUp()
         let firstRowFrameBefore = firstRow.frame
-        captureScreenshot(app, "nav-phone-agents-scrolled")
+        captureScreenshot(app, "nav-phone-agents-scrolled", lifetime: .keepAlways)
 
         // The sheet-era toolbar buttons are gone; the compact selector
         // carries the destinations instead.
         let menu = app.buttons[UITestFixtures.destinationSelector].firstMatch
         waitToExist(menu)
-        captureScreenshot(app, "nav-phone-menu-closed")
+        captureScreenshot(app, "nav-phone-menu-closed", lifetime: .keepAlways)
         // Open the menu. A SwiftUI toolbar Menu can eat a tap while the
         // launch settles, but a re-tap AFTER the menu presented would
         // collapse it again — so each attempt waits a full presentation
@@ -55,7 +55,7 @@ final class NavigationRedesignProofTests: XCTestCase {
         XCTAssertTrue(
             settingsItem.exists,
             "the destination menu must offer Settings")
-        captureScreenshot(app, "nav-phone-menu-open")
+        captureScreenshot(app, "nav-phone-menu-open", lifetime: .keepAlways)
 
         settingsItem.tap()
         // The Settings page mounts with the SAME compact selector,
@@ -68,7 +68,7 @@ final class NavigationRedesignProofTests: XCTestCase {
             app.staticTexts["Notifications"].firstMatch
                 .waitForExistence(timeout: UITestTimeouts.standard),
             "the Settings page must mount")
-        captureScreenshot(app, "nav-phone-settings")
+        captureScreenshot(app, "nav-phone-settings", lifetime: .keepAlways)
 
         // Round trip: back to Agents, the list state is where it was.
         settingsMenu.tap()
@@ -83,7 +83,7 @@ final class NavigationRedesignProofTests: XCTestCase {
         XCTAssertEqual(
             firstRow.frame.minY, firstRowFrameBefore.minY, accuracy: 12,
             "scroll offset must survive the destination round trip")
-        captureScreenshot(app, "nav-phone-agents-back")
+        captureScreenshot(app, "nav-phone-agents-back", lifetime: .keepAlways)
     }
 
     /// The agent detail's top-right icon-only toggle flips surfaces
@@ -100,7 +100,7 @@ final class NavigationRedesignProofTests: XCTestCase {
         let toggle = app.buttons["Show Terminal"].firstMatch
         XCTAssertTrue(toggle.waitForExistence(timeout: UITestTimeouts.standard))
         let frameInChat = toggle.frame
-        captureScreenshot(app, "nav-phone-chat")
+        captureScreenshot(app, "nav-phone-chat", lifetime: .keepAlways)
 
         toggle.tap()
         // The control now offers the way back, at the same place.
@@ -111,13 +111,13 @@ final class NavigationRedesignProofTests: XCTestCase {
         XCTAssertEqual(
             backToggle.frame.minY, frameInChat.minY, accuracy: 2,
             "the toggle must keep its vertical placement across surfaces")
-        captureScreenshot(app, "nav-phone-terminal")
+        captureScreenshot(app, "nav-phone-terminal", lifetime: .keepAlways)
 
         backToggle.tap()
         XCTAssertTrue(
             app.buttons["Show Terminal"].firstMatch
                 .waitForExistence(timeout: UITestTimeouts.standard),
             "the toggle must return to the chat surface")
-        captureScreenshot(app, "nav-phone-chat-back")
+        captureScreenshot(app, "nav-phone-chat-back", lifetime: .keepAlways)
     }
 }
