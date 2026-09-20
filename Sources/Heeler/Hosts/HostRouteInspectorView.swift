@@ -230,14 +230,15 @@ struct HostRouteInspectorView: View {
         }
     }
 
-    private var trustText: Text {
+    @ViewBuilder private var trustText: some View {
         if let fingerprint = store.trustedFingerprint {
-            return Text("Trusted · \(fingerprint.displayString)")
+            Text("Trusted · \(fingerprint.displayString)")
                 .font(.footnote.monospaced())
                 .lineLimit(1)
                 .truncationMode(.middle)
+        } else {
+            Text("Not checked this session").foregroundStyle(.secondary)
         }
-        return Text("Not checked this session").foregroundStyle(.secondary)
     }
 
     private var routeExplanation: String {

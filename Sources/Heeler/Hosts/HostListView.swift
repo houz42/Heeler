@@ -142,22 +142,7 @@ struct HostListView: View {
                 } else {
                     List {
                         ForEach(store.hosts) { host in
-                            HostCardSection(
-                                host: host,
-                                connectionStatus: connectionStatuses[host.id],
-                                standingFailure: standingFailures[host.id],
-                                latency: latencies[host.id],
-                                connectedAddress: connectedAddresses[host.id],
-                                isRetryInFlight: manualReconnectInFlightHostIDs
-                                    .contains(host.id),
-                                retryConnection: retryConnection.map { retry in
-                                    { await retry(host.id) }
-                                },
-                                openDetail: { path.append(host.id) },
-                                openRouteInspector: { address in
-                                    inspectedRoute = HostRouteInspection(
-                                        hostID: host.id, address: address)
-                                })
+                            hostCard(for: host)
                         }
                         .onDelete(perform: removeHosts)
                         quickAddSection
@@ -318,6 +303,25 @@ struct HostListView: View {
     /// a connected Host's machine, offered as one-tap Host entries. Adding
     /// keeps every connection coordinate and the auth method, changing only
     /// the session.
+
+    /// One Host card, split from `body` so the list stays type-checkable.
+    private func hostCard(for host: Host) -> some View {
+        HostCardSection(
+            host: host,
+            connectionStatus: connectionStatuses[host.id],
+            standingFailure: standingFailures[host.id],
+            latency: latencies[host.id],
+            connectedAddress: connectedAddresses[host.id],
+            isRetryInFlight: manualReconnectInFlightHostIDs.contains(host.id),
+            retryConnection: retryConnection.map { retry in
+                { await retry(host.id) }
+            },
+            openDetail: { path.append(host.id) },
+            openRouteInspector: { address in
+                inspectedRoute = HostRouteInspection(hostID: host.id, address: address)
+            })
+    }
+
     @ViewBuilder
     private var quickAddSection: some View {
         if let discovery {
@@ -383,7 +387,7 @@ struct HostRouteInspection: Identifiable, Equatable {
 /// honest in-use/alternate state — each tapping into the route
 /// inspector. Chat service state belongs to the Host, not a route, so
 /// its row targets the Host (provisioning integration point, below).
-private struct HostCardSection<Detail, RouteInspector>: View where Detail: View, RouteInspector: View {
+private struct HostCardSection: View {
     let host: Host
     let connectionStatus: EventsSessionStatus?
     let standingFailure: TransportError?
@@ -391,8 +395,8 @@ private struct HostCardSection<Detail, RouteInspector>: View where Detail: View,
     let connectedAddress: String?
     let isRetryInFlight: Bool
     let retryConnection: (@MainActor @Sendable () async -> Void)?
-    let openDetail: () -> Detail
-    let openRouteInspector: (String) -> RouteInspector
+    let openDetail: () -> Void
+    let openRouteInspector: (String) -> Void
 
     /// Terminal stopped-auto-retry state: failed, or connecting while a
     /// standing failure is being served. Retry offers exactly one dial.

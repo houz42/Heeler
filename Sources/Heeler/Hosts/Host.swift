@@ -102,7 +102,9 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         self.authMethod = authMethod
         self.sessionName = sessionName
         self.additionalAddresses = Self.normalizedAdditionalAddresses(additionalAddresses)
-        self.routeLabels = Self.normalizedRouteLabels(routeLabels, candidates: candidateAddresses)
+        self.routeLabels = Self.normalizedRouteLabels(
+            routeLabels,
+            candidates: Self.rawCandidates(address: address, additional: additionalAddresses))
         self.jumpAddress = jumpAddress
         self.jumpPort = jumpPort
         self.jumpUsername = jumpUsername
@@ -193,6 +195,14 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
     var displayName: String {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         return trimmed.isEmpty ? "\(username)@\(address)" : trimmed
+    }
+
+    /// Candidate addresses from raw init arguments, for normalization that
+    /// runs before all stored properties are initialized.
+    private static func rawCandidates(address: String, additional: [String]) -> [String] {
+        ([address] + additional)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
     }
 
     /// The name every Host surface shows: the alias when it renders, `name`
