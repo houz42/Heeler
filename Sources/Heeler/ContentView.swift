@@ -63,7 +63,11 @@ struct ContentView: View {
                 relaySettings: app.relaySettings,
                 liveActivities: app.liveActivities,
                 console: app.console,
-                hosts: app.hostStore.hosts)
+                hosts: app.hostStore.hosts),
+            // A top-level page owns the window only while the Console
+            // hasn't pushed an Agent detail — inside chat/terminal/detail
+            // the destination chrome steps aside entirely (#A).
+            isPageContentFocused: { notificationRouter.path.isEmpty }
         )
         .environment(\.sceneWindow, window)
         .environment(

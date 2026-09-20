@@ -42,6 +42,12 @@ enum AppDestination: String, CaseIterable, Identifiable, Hashable {
 /// there, and the menu stays available for the collapsed-sidebar state.
 struct AppDestinationMenu: View {
     @Binding var selection: AppDestination
+    /// True while the destination sidebar carries the destinations (wide
+    /// layouts — the preview's `pointer-events:none` on the page title) or
+    /// while a pushed detail owns the window. The title stays legible but
+    /// stops being a control, so no destination chrome competes inside
+    /// chat/terminal/details.
+    @Environment(\.appDestinationMenuInert) private var isInert
 
     var body: some View {
         Menu {
@@ -68,9 +74,13 @@ struct AppDestinationMenu: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .allowsHitTesting(!isInert)
         .accessibilityLabel("\(selection.title), switch destination")
-        .accessibilityAddTraits(.isButton)
-        .accessibilityHint("Opens the Agents, Hosts, and Settings menu.")
+        .accessibilityAddTraits(isInert ? [] : [.isButton])
+        .accessibilityHint(
+            isInert
+                ? "Destinations are in the sidebar."
+                : "Opens the Agents, Hosts, and Settings menu.")
     }
 }
 

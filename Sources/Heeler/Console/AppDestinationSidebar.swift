@@ -76,9 +76,9 @@ struct AppDestinationSidebar: View {
     }
 }
 
-/// The thin strip that replaces the sidebar when it is collapsed: one
-/// expand control, so a folded sidebar never strands the user on a wide
-/// layout with no way back.
+/// The expand control while the wide-layout sidebar is folded: a compact
+/// pill button riding in the page's header band (the preview's ☰ at the
+/// top of the screen) — never a mid-content tab over page content.
 struct AppDestinationSidebarHandle: View {
     let expand: () -> Void
 
@@ -86,17 +86,13 @@ struct AppDestinationSidebarHandle: View {
         Button(action: expand) {
             Image(systemName: "sidebar.leading")
                 .font(.subheadline)
-                .frame(width: 40, height: 44)
+                .frame(width: 36, height: 36)
+                .background(Circle().fill(.quaternary))
+                .overlay(Circle().strokeBorder(.fill.quaternary, lineWidth: 0.5))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .hoverEffect(.highlight)
-        .background(.bar)
-        .overlay(alignment: .trailing) {
-            Rectangle()
-                .fill(.separator)
-                .frame(width: 0.5)
-        }
         .accessibilityLabel("Expand sidebar")
         .accessibilityHint("Shows the Agents, Hosts, and Settings destinations.")
     }
@@ -105,11 +101,19 @@ struct AppDestinationSidebarHandle: View {
 #Preview("Sidebar") {
     AppDestinationSidebar(
         selection: .constant(.agents), isCollapsed: .constant(false))
-        .frame(height: 640)
+        .frame(width: 184, height: 640)
 }
 
-#Preview("Sidebar — dark, collapsed handle") {
-    AppDestinationSidebarHandle(expand: {})
+
+
+#Preview("Sidebar — dark") {
+    AppDestinationSidebar(
+        selection: .constant(.hosts), isCollapsed: .constant(false))
         .preferredColorScheme(.dark)
-        .frame(height: 640)
+        .frame(width: 184, height: 640)
+}
+
+#Preview("Expand handle") {
+    AppDestinationSidebarHandle(expand: {})
+        .padding()
 }

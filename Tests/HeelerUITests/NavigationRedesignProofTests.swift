@@ -30,22 +30,27 @@ final class NavigationRedesignProofTests: XCTestCase {
         // The fixture's agent rows are mounted on the Console page.
         let firstRow = app.staticTexts[UITestFixtures.agentRows[0]]
         waitToExist(firstRow)
-        captureScreenshot(app, "nav-phone-agents")
+        // A NONTRIVIAL state to preserve: scroll the list so the first
+        // row leaves the viewport, remember where it landed.
+        app.swipeUp()
+        let firstRowFrameBefore = firstRow.frame
+        captureScreenshot(app, "nav-phone-agents-scrolled")
 
         // The sheet-era toolbar buttons are gone; the compact selector
         // carries the destinations instead.
         let menu = app.buttons[UITestFixtures.destinationSelector].firstMatch
         waitToExist(menu)
         captureScreenshot(app, "nav-phone-menu-closed")
-        // Open the menu. A SwiftUI toolbar Menu can eat the first tap
-        // without presenting (highlight-state race on fresh launches), so
-        // tap-and-poll: each attempt re-taps until the Settings row is
-        // queryable, within the standard budget.
+        // Open the menu. A SwiftUI toolbar Menu can eat a tap while the
+        // launch settles, but a re-tap AFTER the menu presented would
+        // collapse it again — so each attempt waits a full presentation
+        // budget before retrying, and only retries when nothing appeared.
         let settingsItem = app.buttons["Settings"].firstMatch
-        let menuDeadline = Date().addingTimeInterval(UITestTimeouts.standard)
-        while !settingsItem.exists, Date() < menuDeadline {
+        var attempt = 0
+        while !settingsItem.exists, attempt < 3 {
+            attempt += 1
             menu.tap()
-            _ = settingsItem.waitForExistence(timeout: 2)
+            if settingsItem.waitForExistence(timeout: 5) { break }
         }
         XCTAssertTrue(
             settingsItem.exists,
@@ -67,14 +72,17 @@ final class NavigationRedesignProofTests: XCTestCase {
 
         // Round trip: back to Agents, the list state is where it was.
         settingsMenu.tap()
-        let agentsItem = app.buttons["Agents"].firstMatch
-        XCTAssertTrue(
-            agentsItem.waitForExistence(timeout: UITestTimeouts.standard))
-        agentsItem.tap()
         XCTAssertTrue(
             app.staticTexts[UITestFixtures.agentRows[0]]
                 .waitForExistence(timeout: UITestTimeouts.standard),
             "the Agents list must return with its state preserved")
+        // The scrolled position survived the round trip: the first row is
+        // at the same viewport offset it was before the switch (5 rows do
+        // not fill a 874 pt list, so a preserved offset keeps the row
+        // mid-list rather than snapping back to the top).
+        XCTAssertEqual(
+            firstRow.frame.minY, firstRowFrameBefore.minY, accuracy: 12,
+            "scroll offset must survive the destination round trip")
         captureScreenshot(app, "nav-phone-agents-back")
     }
 

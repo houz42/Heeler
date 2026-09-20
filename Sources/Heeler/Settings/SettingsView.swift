@@ -169,10 +169,12 @@ struct SettingsView: View {
                 }
             }
             // As a top-level destination page the compact destination
-            // selector sits here, replacing the sheet-era Done button;
-            // embedded in a sheet (previews, Demo captures, in-Console
-            // presentation) Done keeps the sheet dismissable.
-            .navigationTitle("Settings")
+            // selector IS the page's heading (#A): one destination title,
+            // top-left — no duplicate centered title beside it. Embedded
+            // in a sheet (previews, Demo captures, in-Console presentation)
+            // the plain "Settings" title and Done button keep the sheet
+            // dismissable.
+            .navigationTitle(destinationMenu == nil ? "Settings" : "")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if let destinationMenu {

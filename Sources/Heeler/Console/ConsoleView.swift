@@ -149,6 +149,17 @@ struct ConsoleView: View {
                                 .accessibilityValue(listPresentation.mode.title)
                             }
                         }
+                        // The prototype keeps + directly reachable in the
+                        // populated list (#A review): the empty detail and
+                        // keyboard commands are not equivalent on phone.
+                        if !hosts.hosts.isEmpty {
+                            ToolbarItem(placement: .primaryAction) {
+                                Button("New Agent", systemImage: "plus") {
+                                    isStartingAgent = true
+                                }
+                                .hoverEffect(.highlight)
+                            }
+                        }
                     }
             } detail: {
                 detail
