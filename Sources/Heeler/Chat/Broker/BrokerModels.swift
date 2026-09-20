@@ -349,3 +349,87 @@ struct BrokerCommandsResult: Decodable, Sendable {
     var scope: String?
     var complete: Bool?
 }
+
+// MARK: - Ask capability (design-time model; gate stays CLOSED)
+
+/// One broker-side ask dialog, keyed for the future ask-wrapper protocol
+/// (ask_pending/ask_resolved events + ask_pending snapshot). The card
+/// model is (requestId, optionId) keyed so the later wiring is data-only;
+/// the UI gate (`askUnsupported`) stays on until the integrated contract
+/// lands — this type is NOT advertised as a capability yet.
+///
+/// Design constraints from the prototype review:
+/// - A late subscriber can miss a live ask_pending event, so the store
+///   renders pending asks from a SNAPSHOT first, events second.
+/// - Multiple asks may be pending at once (no single-pending assumption);
+///   identity is the requestId, never array position.
+/// - optionId is opaque and travels with its label; option payloads are
+///   omitted in v1 and must not be assumed.
+struct BrokerPendingAskOption: Sendable, Equatable {
+    /// Opaque wire key; travels back on the answer call untouched.
+    let optionId: String
+    /// Display-only label.
+    let label: String
+
+    init(optionId: String, label: String) {
+        self.optionId = optionId
+        self.label = label
+    }
+}
+
+struct BrokerPendingAsk: Sendable, Equatable, Identifiable {
+    let requestId: String
+    let question: String
+    /// Option pairs; payloads are omitted in v1 and never assumed.
+    let options: [BrokerPendingAskOption]
+
+    var id: String { requestId }
+
+    init(requestId: String, question: String, options: [BrokerPendingAskOption]) {
+        self.requestId = requestId
+        self.question = question
+        self.options = options
+    }
+
+    /// Maps onto the chat layer's PendingInteraction (label-rendering
+    /// row). The optionId keying is preserved for the answer call.
+    var interaction: PendingInteraction {
+        PendingInteraction(
+            id: requestId,
+            question: question,
+            options: options.map(\.label))
+    }
+}
+
+/// The pending-ask state reducer: snapshot (authoritative) + live events
+/// (incremental), resolution removes exactly the resolved requestId.
+/// Pure so the store's ask wiring stays one-line folds.
+enum BrokerPendingAsks: Sendable {
+    /// Decodes a `ask_pending` snapshot array (the late-subscriber path).
+    static func mergeSnapshot(
+        _ asks: [BrokerPendingAsk], into pending: [BrokerPendingAsk]
+    ) -> [BrokerPendingAsk] {
+        var byId = Dictionary(pending.map { ($0.requestId, $0) }, uniquingKeysWith: { _, new in new })
+        for ask in asks {
+            byId[ask.requestId] = ask
+        }
+        return byId.values.sorted { $0.requestId < $1.requestId }
+    }
+
+    /// One ask_pending event: upsert keyed by requestId (a replayed or
+    /// re-announced ask replaces, never duplicates).
+    static func upsert(
+        _ ask: BrokerPendingAsk, into pending: [BrokerPendingAsk]
+    ) -> [BrokerPendingAsk] {
+        mergeSnapshot([ask], into: pending)
+    }
+
+    /// One ask_resolved event: remove exactly that requestId; a
+    /// resolution for an unknown id is a no-op (late replay), never an
+    /// error state.
+    static func resolve(
+        requestId: String, in pending: [BrokerPendingAsk]
+    ) -> [BrokerPendingAsk] {
+        pending.filter { $0.requestId != requestId }
+    }
+}

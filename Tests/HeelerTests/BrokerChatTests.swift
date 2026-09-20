@@ -453,3 +453,52 @@ struct BrokerChatMapperTests {
         #expect(result.content == "contents")
     }
 }
+
+@Suite("Broker pending asks (design model, gate closed)")
+struct BrokerPendingAskTests {
+    private func ask(
+        _ requestId: String, question: String = "Proceed?",
+        options: [BrokerPendingAskOption] = [
+            BrokerPendingAskOption(optionId: "opt_a", label: "Yes"),
+            BrokerPendingAskOption(optionId: "opt_b", label: "No"),
+        ]
+    ) -> BrokerPendingAsk {
+        BrokerPendingAsk(
+            requestId: requestId, question: question, options: options)
+    }
+
+    @Test("identity is the requestId; multi-pending preserved")
+    func multiPending() {
+        let merged = BrokerPendingAsks.mergeSnapshot([ask("r1"), ask("r2")], into: [])
+        #expect(merged.count == 2)
+        #expect(merged.map(\.requestId).sorted() == ["r1", "r2"])
+        // The chat row keys on requestId too.
+        #expect(merged[0].interaction.id == merged[0].requestId)
+    }
+
+    @Test("snapshot merge is id-keyed upsert, not append")
+    func snapshotUpserts() {
+        // A late subscriber's snapshot replaces the live-announced ask
+        // with the same requestId instead of duplicating it.
+        let announced = BrokerPendingAsks.upsert(ask("r1"), into: [])
+        let snapshot = BrokerPendingAsks.mergeSnapshot([ask("r1")], into: announced)
+        #expect(snapshot.count == 1)
+    }
+
+    @Test("resolution removes exactly one; unknown id is a no-op")
+    func resolution() {
+        var pending = BrokerPendingAsks.mergeSnapshot([ask("r1"), ask("r2")], into: [])
+        pending = BrokerPendingAsks.resolve(requestId: "r1", in: pending)
+        #expect(pending.map(\.requestId) == ["r2"])
+        // Late replay of an already-resolved ask cannot corrupt state.
+        let unchanged = BrokerPendingAsks.resolve(requestId: "gone", in: pending)
+        #expect(unchanged == pending)
+    }
+
+    @Test("free-text ask (no options) still renders a question row")
+    func freeTextAsk() {
+        let text = ask("r3", question: "Name the release?", options: [])
+        #expect(text.interaction.options.isEmpty)
+        #expect(text.interaction.question == "Name the release?")
+    }
+}
