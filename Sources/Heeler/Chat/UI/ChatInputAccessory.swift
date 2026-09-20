@@ -188,6 +188,16 @@ final class ChatInputUITextView: UITextView {
     /// from a hardware keyboard Cmd+V, which arrives through the
     /// responder-chain `paste:` action too — one seam covers both.
     var onPaste: (() -> Bool)?
+    /// True while the attachment flow can consume an image paste —
+    /// the owner (ChatScreen.handlePaste) sets this whenever
+    /// attachments are wired. The system edit menu consults
+    /// `canPerformAction` (via `pasteboard` eligibility) before it
+    /// offers Paste; a plain UITextView only declares text pasteability,
+    /// so an IMAGE-ONLY pasteboard shows no Paste item at all (the
+    /// device regression: "no where to paste"). Overriding the action's
+    /// availability adds the item back; the `paste(_:)` override then
+    /// routes the image into the attachment flow.
+    var canPasteImages = false
     /// A caret position (UTF-16) the next `updateUIView` text sync must
     /// apply after an external draft rewrite (suggestion accept). The
     /// representable distinguishes "preserve the caret" (typical
@@ -216,6 +226,21 @@ final class ChatInputUITextView: UITextView {
     override func paste(_ sender: Any?) {
         if onPaste?() == true { return }
         super.paste(sender)
+    }
+
+    /// Paste availability: stock text pasteability OR (the attachment
+    /// flow is armed AND the pasteboard holds an image) — without the
+    /// image arm, an image-only pasteboard leaves no Paste item in the
+    /// edit menu and the seamless paste is unreachable.
+    override func canPerformAction(
+        _ action: Selector, withSender sender: Any?
+    ) -> Bool {
+        if action == #selector(paste(_:)), canPasteImages,
+            UIPasteboard.general.hasImages
+        {
+            return true
+        }
+        return super.canPerformAction(action, withSender: sender)
     }
 
     private func installPrefixBar() {
@@ -362,6 +387,10 @@ struct ChatInputTextView: UIViewRepresentable {
         textView.onPrefixInsert = onEdit
         textView.onReturnKey = onReturnKey
         textView.onPaste = onPaste
+        // The edit menu's Paste item needs the image arm whenever the
+        // paste arbitration is wired (an image-only pasteboard hides it
+        // otherwise).
+        textView.canPasteImages = onPaste != nil
         if let accept = pendingAccept {
             // The suggestion-accept path: text and caret land together,
             // so the caret follows the end of the insertion (after the

@@ -533,6 +533,10 @@ struct ChatScreen: View {
     /// The pasted image's local preview bytes, kept for the thumbnail
     /// chip until Send (the upload itself streams to the Host).
     @State private var pendingImagePreviewData: Data?
+    /// An attachment-flow error that predates the bundle (a selection
+    /// racing the rebuild) — the bundle's own error row covers
+    /// everything after it exists.
+    @State private var attachmentErrorMessage: String?
 
     /// The thumbnail chip's image source; nil hides the chip.
     private var pendingImagePreview: Data? {
@@ -557,10 +561,17 @@ struct ChatScreen: View {
 
     /// The + button's actions, mirroring the terminal Composer's
     /// `AgentComposerActions` shape but scoped to attachments only.
-    private var attachmentActions: AgentComposerActions? {
-        guard let attachments else { return nil }
+    /// Bundle-INDEPENDENT: the + renders whenever the chat is
+    /// interactive (router + deliver wired), not whenever the
+    /// attachments bundle happens to be alive — a stranded bundle
+    /// (spurious disappear teardown) must never hide the button
+    /// (device regression: + gone on re-entry while the input frame
+    /// itself kept working). With no bundle the menu renders disabled:
+    /// the build/rebuild gap is a moment, not a state.
+    private var attachmentActions: AgentComposerActions {
+        let canBegin = attachments?.staging.canBegin ?? false
         return AgentComposerActions(
-            canBegin: attachments.staging.canBegin,
+            canBegin: canBegin,
             attachLinkCount: 0,
             addImage: { isSelectingPhoto = true },
             addFile: { isSelectingFile = true },
@@ -597,6 +608,7 @@ struct ChatScreen: View {
         guard let attachments else { return }
         isPasteImageAttachment = true
         pendingImagePreviewData = data
+        attachmentErrorMessage = nil
         attachments.draftStore.clearUploadFailure()
         guard let operationStarted = attachments.staging.begin(
             .photo(DataImageSelection(data: data)))
@@ -691,8 +703,10 @@ struct ChatScreen: View {
                     .padding(.horizontal, 12)
                     .padding(.top, 6)
                 }
-                if let attachments, let uploadFailure = attachments.draftStore.uploadFailureMessage {
-                    Text(uploadFailure)
+                if let attachmentError = attachmentErrorMessage
+                    ?? attachments?.draftStore.uploadFailureMessage
+                {
+                    Text(attachmentError)
                         .font(.caption)
                         .foregroundStyle(.red)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -733,23 +747,22 @@ struct ChatScreen: View {
                             .contentShape(Rectangle())
                     }
                     .accessibilityLabel("Close input")
-                    if let actions = attachmentActions {
-                        Menu {
-                            AgentActionMenuContent(
-                                actions: actions,
-                                sections: AgentActionMenuPolicy.composerAddSections)
-                        } label: {
-                            Image(systemName: "plus")
-                                .font(.system(size: 15, weight: .semibold))
-                                .frame(width: 18, height: 18)
-                        }
-                        .buttonStyle(.bordered)
-                        .buttonBorderShape(.circle)
-                        .tint(Color(uiColor: .label).opacity(0.72))
-                        .frame(minWidth: 28, minHeight: 28)
-                        .accessibilityLabel("Add")
-                        .accessibilityHint("Adds an image or file to the draft")
+                    Menu {
+                        AgentActionMenuContent(
+                            actions: attachmentActions,
+                            sections: AgentActionMenuPolicy.composerAddSections)
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(width: 18, height: 18)
                     }
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.circle)
+                    .tint(Color(uiColor: .label).opacity(0.72))
+                    .frame(minWidth: 28, minHeight: 28)
+                    .accessibilityLabel("Add")
+                    .accessibilityHint("Adds an image or file to the draft")
+
                     ChatInputTextView(
                         text: draft,
                         placeholder: "Message — / # @ ! for commands",
@@ -799,12 +812,19 @@ struct ChatScreen: View {
             }
             .onChange(of: selectedPhoto) { _, item in
                 // The + menu's Add Image picker: same shape the terminal
-                // Composer's photo picker uses.
+                // Composer's photo picker uses. The menu's items are
+                // disabled while the bundle is missing, but a selection
+                // that raced the rebuild still guards loudly here.
                 guard let item else { return }
                 selectedPhoto = nil
+                guard let attachments else {
+                    attachmentErrorMessage = "Attachments are still loading. Try again."
+                    return
+                }
                 isPasteImageAttachment = false
-                attachments?.draftStore.clearUploadFailure()
-                attachments?.staging.begin(.photo(PhotosPickerImageSelection(item: item)))
+                attachmentErrorMessage = nil
+                attachments.draftStore.clearUploadFailure()
+                attachments.staging.begin(.photo(PhotosPickerImageSelection(item: item)))
             }
             .photosPicker(
                 isPresented: $isSelectingPhoto,
@@ -815,9 +835,14 @@ struct ChatScreen: View {
                 allowedContentTypes: [.data]
             ) { result in
                 guard case .success(let url) = result else { return }
+                guard let attachments else {
+                    attachmentErrorMessage = "Attachments are still loading. Try again."
+                    return
+                }
                 isPasteImageAttachment = false
-                attachments?.draftStore.clearUploadFailure()
-                attachments?.staging.begin(.file(url))
+                attachmentErrorMessage = nil
+                attachments.draftStore.clearUploadFailure()
+                attachments.staging.begin(.file(url))
             }
             .onChange(of: attachments?.staging.state) { _, newState in
                 syncAttachmentUploadState(newState)
@@ -847,11 +872,25 @@ struct ChatScreen: View {
         case .completed(let outcome):
             attachments.draftStore.clearUploadFailure()
             if outcome.medium == .image, isPasteImageAttachment {
-                // Hold the image for Send: remove the path the staging
-                // store inserted — the thumbnail chip shows the
-                // attachment instead of a bare path in the text.
-                removePathFromDraft(outcome.path)
+                // Hold the image for Send: the path the staging store
+                // inserted lives in the DRAFT MIRROR only — the
+                // thumbnail chip shows the attachment instead of a bare
+                // path in the text.
                 attachments.draftStore.holdPendingImage(path: outcome.path)
+                removePathFromDraft(outcome.path)
+            } else {
+                // The explicit + add flow (picker image, file): the
+                // staging store inserted the path into the DRAFT MIRROR
+                // (ComposerDraftOperations.insertIntoDraft). Sink the
+                // mirror into the visible draft so the path reference
+                // actually appears in the text field — without this
+                // sink the upload landed in a store the text view
+                // never rendered, Send composed a path-less message,
+                // and nothing arrived (device regression on de3ba20).
+                let mirrored = attachments.draftStore.draft
+                if mirrored != draft {
+                    draft = mirrored
+                }
             }
         case nil:
             break
@@ -860,13 +899,17 @@ struct ChatScreen: View {
 
 
     /// Removes one remote path reference (and one trailing space) the
-    /// staging store inserted, keeping the caret anchored at the end of
-    /// the remaining text.
+    /// staging store inserted. The insertion landed in the draft mirror;
+    /// remove it there and sink the result into the visible draft —
+    /// the thumbnail chip shows the attachment instead of a bare path
+    /// in the text.
     private func removePathFromDraft(_ path: String) {
         let inserted = "\(path) "
-        guard let range = draft.range(of: inserted) else { return }
-        draft = draft.replacingCharacters(in: range, with: "")
-        attachments?.draftStore.replaceDraft(with: draft)
+        let mirrored = attachments?.draftStore.draft ?? draft
+        guard let range = mirrored.range(of: inserted) else { return }
+        let cleaned = mirrored.replacingCharacters(in: range, with: "")
+        attachments?.draftStore.replaceDraft(with: cleaned)
+        draft = cleaned
     }
 
     private func sendDraft() {

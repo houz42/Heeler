@@ -335,6 +335,77 @@ struct ChatAttachmentLifecycleTests {
         #expect(staging.canBegin, "a settled store accepts a new begin")
     }
 
+    /// The + render contract's device regression (de3ba20): the button
+    /// must not depend on the bundle's existence. ChatScreen mirrors
+    /// this exact fallback — actions with canBegin=false while the
+    /// bundle is missing — so a stranded bundle renders a disabled
+    /// menu, never a missing button.
+    @Test func plusActionsRenderWithoutABundleWithDisabledBegin() {
+        let attachments: ChatAttachments? = nil
+        let canBegin = attachments?.staging.canBegin ?? false
+        #expect(!canBegin, "a missing bundle must render disabled actions, not hide the +")
+        #expect(
+            !AgentActionMenuPolicy.isEnabled(
+                .addImage,
+                actions: AgentComposerActions(
+                    canBegin: canBegin,
+                    attachLinkCount: 0,
+                    addImage: {},
+                    addFile: {},
+                    showAttachLinks: {},
+                    openTerminal: nil,
+                    isOpeningTerminal: false,
+                    startAgent: {},
+                    manageSnippets: {},
+                    showSkills: nil,
+                    showWorktreeDetails: nil,
+                    renameAgent: {},
+                    renameWorkspace: {},
+                    closeAgent: {})),
+            "Add Image must be disabled, not gone, while the bundle is missing")
+    }
+
+    /// The + add flow's device regression (de3ba20): the completed
+    /// upload's path insertion landed in the DRAFT MIRROR, which the
+    /// visible draft never sinks — the path reference must appear in
+    /// the text the user sees and sends. The screen's completion sink
+    /// mirrors this exact sequence.
+    @Test func completedAddUploadSinksTheMirrorIntoTheVisibleDraft() async throws {
+        let bundle = await Self.buildBundle()
+        // The visible draft's state (empty; the user just opened input).
+        var visibleDraft = ""
+        bundle.draftStore.applyEditorDraft(visibleDraft, selection: NSRange(location: 0, length: 0))
+
+        // The staging store completes and inserts into the mirror.
+        _ = bundle.staging.begin(.file(URL(fileURLWithPath: "/provider/report.txt")))
+        try await waitUntil("upload should complete") {
+            if case .completed = bundle.staging.state { return true }
+            return false
+        }
+        // The screen's completion sink (syncAttachmentUploadState's
+        // non-paste branch): mirror → visible.
+        let mirrored = bundle.draftStore.draft
+        if mirrored != visibleDraft {
+            visibleDraft = mirrored
+        }
+        #expect(
+            visibleDraft.hasPrefix("/tmp/heeler-upload/lifecycle.txt"),
+            "the path reference must reach the VISIBLE draft the user sends")
+    }
+
+    private func waitUntil(
+        _ comment: Comment,
+        timeout: Duration = .seconds(5),
+        condition: () async -> Bool
+    ) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            if await condition() { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(await condition(), comment)
+    }
+
     /// Mirrors AgentDetailView.buildChatIfPossible's construction.
     private static func buildBundle() async -> ChatAttachments {
         let draftStore = ChatAttachmentDraftStore()
