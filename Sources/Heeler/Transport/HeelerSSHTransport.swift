@@ -1857,6 +1857,21 @@ actor HeelerSSHTransport: Transport {
         }
     }
 
+    /// The provisioning seam's SSH realization: the same exec-channel
+    /// admission, `LC_ALL=C` wrapping, and error mapping as every other
+    /// host command, but the command's own exit status is returned to the
+    /// caller rather than classified (see ``Transport/runProvisioningCommand(_:)``).
+    func runProvisioningCommand(_ command: String) async throws -> RemoteCommandResult {
+        try await withRequestDeadline {
+            let result = try await self.runExec(Self.cLocaleCommand(command))
+            guard result.reachedEOF else {
+                throw TransportError.channelFailed(
+                    detail: "Host command closed before EOF")
+            }
+            return RemoteCommandResult(stdout: result.stdout, exitStatus: result.exitStatus)
+        }
+    }
+
     private func runExec(_ command: String) async throws -> SSHExecResult {
         try await channelAdmission.withChannel(.ordinarySession) {
             do {
