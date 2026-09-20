@@ -204,15 +204,15 @@ final class BrokerProvisioningStore {
             let layout = try await resolveLayout()
             let result = try await transport.runProvisioningCommand(
                 layout.inspectCommand)
-            // Adapter evidence: the env file's socket line proves the
-            // helper wrote it (the ask-wrapper line is opt-in-only).
+            // Adapter evidence: the shim's marker comment proves the
+            // helper wrote it (it is the one file we own in that tree).
             let adapter = try await transport.runProvisioningCommand(
-                layout.readAdapterEnvironmentCommand)
+                layout.readAdapterShimCommand)
             var next = State()
             next.layout = layout
             var combined = result.trimmedText
             if adapter.exitStatus == 0,
-                adapter.trimmedText.contains("HEELER_CHAT_SOCKET=")
+                adapter.trimmedText.contains("Managed by Heeler")
             {
                 combined += "\nadapter=present"
             }
@@ -388,8 +388,18 @@ final class BrokerProvisioningStore {
     func upgrade(package: PreparedFile, version: String, sha256: String) async throws {
         try ensureMutable()
         let wasActive = state.status.isServiceActive
+        let prerequisitesMet = state.node.isSatisfied && state.omp.isSatisfied
         try await install(package: package, version: version, sha256: sha256)
+        // install's refresh re-inspects; on a Host whose probe answers
+        // race the new `current` marker, re-seed the facts this install
+        // just established so enable cannot read a stale "not installed".
+        state.activeVersion = version
+        state.node = state.node.isSatisfied ? .satisfied : state.node
         if wasActive {
+            guard prerequisitesMet else {
+                throw BrokerProvisioningError.commandFailed(
+                    detail: "Missing prerequisites on the Host.")
+            }
             try await enable()
         }
     }
@@ -408,19 +418,25 @@ final class BrokerProvisioningStore {
         await refresh()
     }
 
-    /// Writes the adapter env file with the ask-wrapper flag OFF by
-    /// default; `askWrapperOptIn` is the separate explicit opt-in.
+    /// Writes the adapter shim (the one helper-owned file under
+    /// `~/.omp/agent/extensions/`), importing the active versioned
+    /// extension. The ask-wrapper flag is OFF unless explicitly opted in.
     func configureAdapter(askWrapperOptIn: Bool) async throws {
         try ensureMutable()
         let layout = try requireLayout()
+        guard let version = state.activeVersion, !version.isEmpty else {
+            throw BrokerProvisioningError.commandFailed(
+                detail: "Nothing is installed yet.")
+        }
         phase = .operating
         defer { phase = .finished }
         try await runZeroExit(
             layout.ensureDirectoriesCommand,
             failure: .commandFailed(detail: "Could not create the adapter directories."))
         try await runZeroExit(
-            layout.writeAdapterEnvironmentCommand(askWrapperOptIn: askWrapperOptIn),
-            failure: .commandFailed(detail: "Could not write the adapter environment."))
+            layout.writeAdapterShimCommand(
+                activeVersion: version, askWrapperOptIn: askWrapperOptIn),
+            failure: .commandFailed(detail: "Could not write the adapter shim."))
         await refresh()
     }
 
@@ -435,8 +451,13 @@ final class BrokerProvisioningStore {
     }
 
     private func validateVersion(_ version: String) throws {
+        // "." and ".." are traversal names for the versions/ directory:
+        // rejected alongside the charset gate.
         let valid = !version.isEmpty
-            && version.allSatisfy { $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" || $0 == "_" }
+            && version != "." && version != ".."
+            && version.allSatisfy {
+                $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" || $0 == "_"
+            }
             && version.count <= 32
         guard valid else { throw BrokerProvisioningError.invalidPackageVersion }
     }
