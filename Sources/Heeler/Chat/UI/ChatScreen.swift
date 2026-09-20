@@ -57,6 +57,9 @@ struct ChatScreen: View {
     /// unsupported state — the broker backend has no verified answering
     /// API in v1. False keeps the JSONL backend's interactive rows.
     var pendingUnsupported: Bool = false
+    /// The assistant article's author line, e.g. "Heeler · omp" —
+    /// resolved from the real runtime identity by the surface owner.
+    var authorLabel: String = ""
 
     @State private var level: DetailLevel
     init(
@@ -72,7 +75,8 @@ struct ChatScreen: View {
         stripAccessory: AnyView? = nil,
         router: ComposerRouterStore? = nil,
         deliver: ((String) async throws -> Void)? = nil,
-        pendingUnsupported: Bool = false
+        pendingUnsupported: Bool = false,
+        authorLabel: String = ""
     ) {
         self.paneID = paneID
         self.agentName = agentName
@@ -85,6 +89,7 @@ struct ChatScreen: View {
         self.stripAccessory = stripAccessory
         self.deliver = deliver
         self.pendingUnsupported = pendingUnsupported
+        self.authorLabel = authorLabel
         self._level = State(initialValue: initialLevel)
     }
 
@@ -287,14 +292,32 @@ struct ChatScreen: View {
     private func transcriptView(for item: ChatTranscriptItem) -> some View {
         switch item {
         case .bubble(let bubble):
-            ChatBubbleView(
-                bubble: bubble,
-                router: openRouter,
-                isFocused: focusedBubble == bubble,
-                onLongPress: { enterBubbleFocus(bubble) })
+            // Conversation redesign: USER keeps the compact bubble;
+            // ASSISTANT renders as the full-width article (author
+            // line + reading-width text). Both keep the long-press
+            // affordances via the same focus layer.
+            if bubble.role == .user {
+                ChatBubbleView(
+                    bubble: bubble,
+                    router: openRouter,
+                    isFocused: focusedBubble == bubble,
+                    onLongPress: { enterBubbleFocus(bubble) })
+            } else {
+                ChatAssistantArticleView(
+                    bubble: bubble,
+                    router: openRouter,
+                    authorLabel: authorLabel,
+                    isFocused: focusedBubble == bubble,
+                    onLongPress: { enterBubbleFocus(bubble) })
+            }
         case .row(let row):
             if pendingUnsupported, case .pending(let interaction) = row {
                 AgentUnsupportedAskRow(interaction: interaction)
+            } else if case .pending(let interaction) = row {
+                AgentPendingQuestionCard(
+                    interaction: interaction,
+                    step: 1, stepCount: 1,
+                    choose: { _ in })
             } else {
                 LinkifiedChatRow(row: row, router: openRouter)
             }

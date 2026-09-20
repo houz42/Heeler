@@ -352,6 +352,38 @@ struct AgentDetailView: View {
             statusUpdates: console.agentStatusUpdates(for: agent.id))
     }
 
+    #if DEBUG
+        /// Demo-mode-only pending fixture for the redesign proofs: a
+        /// blocked demo agent renders both card shapes — short compact
+        /// options and descriptive full-width options. Debug + demo
+        /// screenshot mode only; never in release.
+        @MainActor
+        private static func demoPendingFixture(
+            agent: ConsoleAgent, chatAgentState: ChatAgentState,
+            content: ChatContent
+        ) -> ChatContent {
+            guard DemoScreenshotMode.isEnabled,
+                chatAgentState == .blocked
+            else { return content }
+            var content = content
+            content.pending = [
+                PendingInteraction(
+                    id: "demo-pending-short",
+                    question: "Keep the original camera timing?",
+                    options: ["Yes", "No", "Normalize"]),
+                PendingInteraction(
+                    id: "demo-pending-long",
+                    question: "The verification run found one failing check. How should the retry be staged?",
+                    options: [
+                        "Retry only the failing check on a clean checkout — apply no local patches before re-running.",
+                        "Retry the full suite to catch any coupled regressions from the fix.",
+                        "Skip the retry and mark the change verified on manual review.",
+                    ]),
+            ]
+            return content
+        }
+    #endif
+
     /// Builds (once per agent identity) and starts the chat store, then
     /// renders the chat surface.
     @ViewBuilder
@@ -363,8 +395,11 @@ struct AgentDetailView: View {
                 paneID: agent.agent.paneID,
                 agentName: agent.tabLabel ?? agent.agent.displayName,
                 state: chatAgentState,
-
-                content: chat.content,
+                // DEMO FIXTURE (Debug + demo mode only): the blocked demo
+                // agent carries one pending for the card proofs.
+                content: Self.demoPendingFixture(
+                    agent: agent, chatAgentState: chatAgentState,
+                    content: chat.content),
                 initialLevel: chatLevels.level(paneID: agent.agent.paneID),
                 changeLevel: { [chatLevels] level, paneID in
                     chatLevels.setLevel(level, paneID: paneID)
@@ -377,7 +412,8 @@ struct AgentDetailView: View {
                     try await console.promptAgent(
                         AgentPromptParams(target: agent.agent.paneID, text: text),
                         on: agent.hostID)
-                })
+                },
+                authorLabel: "Heeler · \(agent.agent.kind.lowercased())")
         } else {
             ChatUnavailablePlaceholder()
         }
@@ -406,7 +442,8 @@ struct AgentDetailView: View {
                 deliver: { text in
                     try await store.send(text)
                 },
-                pendingUnsupported: !store.askSupported)
+                pendingUnsupported: !store.askSupported,
+                authorLabel: "Heeler · \(agent.agent.kind.lowercased())")
                 .overlay(alignment: .bottom) {
                     if case .disconnected(let reason) = store.phase {
                         AgentChatStateBanner(
@@ -444,6 +481,14 @@ struct AgentDetailView: View {
             content.messages.append(
                 ChatMessage(role: .assistant, blocks: [.text(tail.text)]))
         }
+        // Real pending asks from the broker interactions map into the
+        // chat content's pending surface (the redesigned question card).
+        content.pending = brokerChat?.interactions.map { interaction in
+            PendingInteraction(
+                id: interaction.requestId,
+                question: interaction.questions.first?.text ?? "",
+                options: interaction.questions.first?.options.map { $0.label } ?? [])
+        } ?? []
         return content
     }
 

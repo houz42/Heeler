@@ -788,3 +788,184 @@ private struct ChatRowsPreviewSurface: View {
         .background(.bar)
         .preferredColorScheme(.light)
 }
+
+// MARK: - Assistant article render (conversation redesign)
+//
+// Design contract (approved prototype, verbatim): ASSISTANT messages are
+// NOT bubbles — full-width text article, no background, no border; small
+// author line (11pt, weight 650, accent) then the answer (15pt,
+// line-height 1.65). USER messages keep the compact right bubble.
+// Affordances (long-press pill/menu) still apply to assistant content —
+// article-ness is the render, not the interactions.
+
+struct ChatAssistantArticleView: View {
+    let bubble: ChatBubble
+    let router: OpenRouterCore
+    /// e.g. "Heeler · omp" — from the real runtime identity, never guessed.
+    var authorLabel: String
+    var isFocused: Bool = false
+    var onLongPress: (() -> Void)? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(authorLabel)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color(
+                    red: 0x22 / 255.0, green: 0x64 / 255.0, blue: 0x4D / 255.0))
+            ChatLinkText(bubble.text, style: .assistant, router: router)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.bottom, 12)
+        .opacity(isFocused ? 0 : 1)
+        .onLongPressGesture { onLongPress?() }
+    }
+}
+
+// MARK: - Pending question card (conversation redesign)
+
+private struct OptionFlowLayout: Layout {
+    var spacing: CGFloat = 8
+    func sizeThatFits(
+        proposal: ProposedViewSize, subviews: Subviews, cache: inout ()
+    ) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            x += (x > 0 ? spacing : 0) + size.width
+            rowHeight = max(rowHeight, size.height)
+        }
+        return CGSize(width: maxWidth == .infinity ? x : maxWidth, height: y + rowHeight)
+    }
+    func placeSubviews(
+        in bounds: CGRect, proposal: ProposedViewSize,
+        subviews: Subviews, cache: inout ()
+    ) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            if x > bounds.minX { x += spacing }
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(size))
+            x += size.width
+            rowHeight = max(rowHeight, size.height)
+        }
+    }
+}
+
+private func optionIsCompact(_ label: String) -> Bool {
+    label.count <= 24 && !label.contains("\n")
+}
+
+/// The redesigned pending-question card: border + paper + eyebrow with
+/// step dots + question + quiet instruction + adaptive options. Short
+/// labels flow compactly; descriptive labels stack full-width.
+struct AgentPendingQuestionCard: View {
+    let interaction: PendingInteraction
+    var step: Int
+    var stepCount: Int
+    var isMultiSelect: Bool = false
+    var selectedOptionIds: Set<String> = []
+    var choose: (String) -> Void
+    var confirmMultiSelect: (() -> Void)? = nil
+
+    private var accent: Color {
+        Color(red: 0x22 / 255.0, green: 0x64 / 255.0, blue: 0x4D / 255.0)
+    }
+    private var cardBorder: Color {
+        Color(red: 0xC4 / 255.0, green: 0xD5 / 255.0, blue: 0xCB / 255.0)
+    }
+    private var optionBorder: Color {
+        Color(red: 0xCA / 255.0, green: 0xD5 / 255.0, blue: 0xCD / 255.0)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text("Your input needed · \(step) of \(stepCount)")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(accent)
+                Spacer(minLength: 0)
+                HStack(spacing: 5) {
+                    ForEach(0..<max(stepCount, 1), id: \.self) { index in
+                        Circle()
+                            .fill(index < step ? accent : Color.secondary.opacity(0.25))
+                            .frame(width: 5, height: 5)
+                    }
+                }
+            }
+            Text(interaction.question)
+                .font(.headline)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(isMultiSelect
+                ? "Select one or more options, then confirm."
+                : "Tap an option to answer and continue.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            optionsView
+            if isMultiSelect, let confirmMultiSelect {
+                Button(action: confirmMultiSelect) {
+                    Text("Confirm")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                        .background(accent, in: RoundedRectangle(cornerRadius: 9))
+                        .foregroundStyle(.white)
+                }
+                .disabled(selectedOptionIds.isEmpty)
+                .accessibilityLabel("Confirm answers")
+            }
+        }
+        .padding(16)
+        .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 15))
+        .overlay(RoundedRectangle(cornerRadius: 15).strokeBorder(cardBorder, lineWidth: 1))
+    }
+
+    @ViewBuilder
+    private var optionsView: some View {
+        if interaction.options.allSatisfy(optionIsCompact) {
+            OptionFlowLayout(spacing: 8) {
+                ForEach(Array(interaction.options.enumerated()), id: \.offset) { pair in
+                    optionButton(label: pair.element, id: "\(pair.offset)")
+                }
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(interaction.options.enumerated()), id: \.offset) { pair in
+                    optionButton(label: pair.element, id: "\(pair.offset)", fullWidth: true)
+                }
+            }
+        }
+    }
+
+    private func optionButton(label: String, id: String, fullWidth: Bool = false) -> some View {
+        let selected = isMultiSelect && selectedOptionIds.contains(id)
+        return Button {
+            choose(id)
+        } label: {
+            Text(label)
+                .font(.subheadline)
+                .multilineTextAlignment(.leading)
+                .padding(.horizontal, 11)
+                .frame(maxWidth: fullWidth ? .infinity : nil, minHeight: 44, alignment: .leading)
+                .background(selected ? accent : Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(optionBorder, lineWidth: 1))
+                .foregroundStyle(selected ? .white : .primary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Answer: \(label)")
+    }
+}

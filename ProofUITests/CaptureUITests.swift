@@ -38,3 +38,50 @@ final class CaptureUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 12)
     }
 }
+
+extension CaptureUITests {
+    func testConversationRedesignProofs() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--demo-screenshots"]
+        app.launch()
+        Thread.sleep(forTimeInterval: 12)
+        let row = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'ios-polish'")).firstMatch
+        if !row.exists {
+            let any = app.buttons.matching(
+                NSPredicate(format: "label CONTAINS 'docs-review'")).firstMatch
+            XCTAssertTrue(any.waitForExistence(timeout: 15), "no demo agents")
+            any.tap()
+        } else {
+            row.tap()
+        }
+        Thread.sleep(forTimeInterval: 8)
+        screenshot("redesign-conversation-latest")
+        for _ in 0..<6 { app.swipeDown() }
+        Thread.sleep(forTimeInterval: 2)
+        screenshot("redesign-conversation-article-and-bubble")
+        app.terminate()
+        Thread.sleep(forTimeInterval: 2)
+        let app2 = XCUIApplication()
+        app2.launchArguments = ["--demo-screenshots"]
+        app2.launch()
+        Thread.sleep(forTimeInterval: 10)
+        let blocked = app2.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'reviewer'")).firstMatch
+        XCTAssertTrue(blocked.waitForExistence(timeout: 15), "reviewer row missing")
+        blocked.tap()
+        Thread.sleep(forTimeInterval: 7)
+        screenshot("redesign-pending-card")
+    }
+
+    private func screenshot(_ name: String) {
+        let dir = URL(fileURLWithPath: "/tmp/heeler-proof-signals/redesign")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let png = XCUIScreen.main.screenshot().pngRepresentation
+        try? png.write(to: dir.appendingPathComponent(name + ".png"))
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+}
