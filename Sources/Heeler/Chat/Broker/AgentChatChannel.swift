@@ -63,6 +63,7 @@ actor AgentChatChannel {
     /// hello; anything but a matching welcome fails closed
     /// (unsupportedProtocol) — no legacy arm.
     func connect() async throws {
+        AgentChatChannelEvidence.connect()
         let slot = WelcomeSlot()
         welcomeSlot = slot
         startReader()
@@ -252,6 +253,11 @@ actor AgentChatChannel {
 
     /// Sends one request and awaits its result value.
     func request(_ request: AgentChatRequest) async throws -> JSONValue {
+        AgentChatChannelEvidence.request(
+            request.method,
+            params: (try? String(
+                data: JSONEncoder().encode(request),
+                encoding: .utf8)) ?? nil)
         guard !closed else { throw AgentChatError.connectionClosed }
         let id = "c\(nextID)"
         nextID &+= 1
@@ -346,6 +352,7 @@ actor AgentChatChannel {
 
     func close() async {
         guard !closed else { return }
+        AgentChatChannelEvidence.close(reason: "closed by client")
         closed = true
         readerTask?.cancel()
         try? await pipe.close(timeout: .seconds(2))

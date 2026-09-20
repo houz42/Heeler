@@ -9,10 +9,32 @@ final class CaptureUITests: XCTestCase {
             = "/Users/jhou/.cache/agent-chat-ui-proof/history.jsonl"
         app.launch()
         Thread.sleep(forTimeInterval: 25)
-        let row = app.buttons.containing(
-            NSPredicate(format: "label CONTAINS 'Mac Proof'")).firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 15), "host row missing")
-        row.tap()
+        // The search field can restore focus (keyboard up, suggestion
+        // panel swallowing taps). Commit the search to drop focus,
+        // then tap the first agent ROW by coordinate.
+        if app.keyboards.count > 0 {
+            let searchKey = app.keyboards.buttons["search"].firstMatch
+            let returnKey = app.keyboards.buttons["Return"].firstMatch
+            if searchKey.exists { searchKey.tap() }
+            else if returnKey.exists { returnKey.tap() }
+            Thread.sleep(forTimeInterval: 1)
+            if app.keyboards.count > 0 {
+                app.swipeDown()
+                Thread.sleep(forTimeInterval: 1)
+            }
+        }
+        screenshot("cc-list-before-tap")
+        // Tap a real agent ROW (matching, not containing).
+        let row = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'Tailscale'")).firstMatch
+        var opened = false
+        if row.waitForExistence(timeout: 8), row.isHittable {
+            row.tap()
+            opened = true
+        } else {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.66)).tap()
+        }
+        Thread.sleep(forTimeInterval: 3)
         let header = app.staticTexts.matching(
             NSPredicate(format: "label == 'omp'")).firstMatch
         XCTAssertTrue(header.waitForExistence(timeout: 30), "detail did not open")
@@ -47,10 +69,12 @@ extension CaptureUITests {
         app.launch()
         Thread.sleep(forTimeInterval: 12)
         let row = app.buttons.matching(
-            NSPredicate(format: "label CONTAINS 'ios-polish'")).firstMatch
+            NSPredicate(
+                format: "label CONTAINS 'ios-polish' OR label CONTAINS 'Polish the Attach'")).firstMatch
         if !row.exists {
             let any = app.buttons.matching(
-                NSPredicate(format: "label CONTAINS 'docs-review'")).firstMatch
+                NSPredicate(
+                    format: "label CONTAINS 'docs-review' OR label CONTAINS 'Refresh the setup guide'")).firstMatch
             XCTAssertTrue(any.waitForExistence(timeout: 15), "no demo agents")
             any.tap()
         } else {
@@ -112,7 +136,8 @@ extension CaptureUITests {
         app2.launch()
         Thread.sleep(forTimeInterval: 10)
         let blocked = app2.buttons.matching(
-            NSPredicate(format: "label CONTAINS 'reviewer'")).firstMatch
+            NSPredicate(
+                format: "label CONTAINS 'reviewer' OR label CONTAINS 'Checkout review'")).firstMatch
         XCTAssertTrue(blocked.waitForExistence(timeout: 15), "reviewer row missing")
         blocked.tap()
         Thread.sleep(forTimeInterval: 7)
@@ -128,7 +153,8 @@ extension CaptureUITests {
         app.launch()
         Thread.sleep(forTimeInterval: 10)
         let blocked = app.buttons.matching(
-            NSPredicate(format: "label CONTAINS 'reviewer'")).firstMatch
+            NSPredicate(
+                format: "label CONTAINS 'reviewer' OR label CONTAINS 'Checkout review'")).firstMatch
         XCTAssertTrue(blocked.waitForExistence(timeout: 15), "reviewer row missing")
         blocked.tap()
         Thread.sleep(forTimeInterval: 7)
@@ -271,7 +297,8 @@ extension CaptureUITests {
         app.launch()
         Thread.sleep(forTimeInterval: 10)
         let row = app.buttons.matching(
-            NSPredicate(format: "label CONTAINS 'ios-polish'")).firstMatch
+            NSPredicate(
+                format: "label CONTAINS 'ios-polish' OR label CONTAINS 'Polish the Attach'")).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 15), "demo agent row missing")
         row.tap()
         Thread.sleep(forTimeInterval: 6)
@@ -401,5 +428,214 @@ extension CaptureUITests {
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+}
+
+extension CaptureUITests {
+    /// A1 channel-continuity smoke (follow-up): a uniquely-identified,
+    /// timestamped hold/open-count/request run. Every channel
+    /// open/close/request appends to an ISOLATED per-run evidence file
+    /// (run ID + ISO timestamp), so an independent read can separate
+    /// mid-hold events from teardown — closing the 'continuity
+    /// unproven' caveat.
+    func testA1ChannelContinuity() throws {
+        let runID = "a1cc-\(Int(Date().timeIntervalSince1970))"
+        let evidencePath = "/tmp/heeler-proof-signals/a1-continuity/\(runID).jsonl"
+        try? FileManager.default.removeItem(atPath: evidencePath)
+        let app = XCUIApplication()
+        app.launchEnvironment["HEELER_A1_RUN_ID"] = runID
+        app.launchEnvironment["HEELER_AGENT_CHAT_PROOF_SESSION_FILE"]
+            = "/Users/jhou/.cache/agent-chat-ui-proof/history.jsonl"
+        app.launch()
+        Thread.sleep(forTimeInterval: 14)
+        // Tap a real agent ROW (matching, not containing; the pinned
+        // broker session matches ANY agent on the host).
+        let row = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'Tailscale'")).firstMatch
+        var opened = false
+        if row.waitForExistence(timeout: 8), row.isHittable {
+            row.tap()
+            opened = true
+        } else {
+            // Fall back to any row that renders the host metadata;
+            // scroll first if the keyboard obscured things.
+            app.swipeDown()
+            Thread.sleep(forTimeInterval: 1)
+            let anyRow = app.buttons.matching(
+                NSPredicate(format: "label CONTAINS 'Mac Proof'")).firstMatch
+            XCTAssertTrue(anyRow.waitForExistence(timeout: 10), "agent row missing")
+            anyRow.tap()
+        }
+        Thread.sleep(forTimeInterval: 3)
+        screenshot("cc-agent-detail-entry")
+        _ = opened
+        // The persistent composer must resolve (the router-fix binary).
+        let field = app.textViews.firstMatch
+        XCTAssertTrue(
+            field.waitForExistence(timeout: 25),
+            "persistent composer missing on the proof agent")
+        // HOLD: >90s idle-and-subscribed on the same channel.
+        Thread.sleep(forTimeInterval: 100)
+        // REQUEST on the (same, un-reconnected) channel — the unique
+        // marker is run-scoped so the broker record is independently
+        // matchable to THIS evidence file.
+        let marker = "channel-continuity \(runID)"
+        field.tap()
+        Thread.sleep(forTimeInterval: 1)
+        field.typeText("Reply exactly: \(marker).")
+        let send = app.buttons["Send"].firstMatch
+        XCTAssertTrue(send.waitForExistence(timeout: 5), "send button")
+        send.tap()
+        Thread.sleep(forTimeInterval: 12)
+        // The reply must render in the transcript.
+        let reply = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS 'channel-continuity'")).firstMatch
+        XCTAssertTrue(reply.waitForExistence(timeout: 10), "reply missing")
+        // The durable per-run artifact IS the isolated /tmp evidence
+        // file (the committed evidence/a1-continuity/ set is copied by
+        // the runner); the rolling xcresult Logs are not relied on.
+    }
+}
+
+extension CaptureUITests {
+    /// TEMP diag: dumps the app's (keychain-resident) device key for
+    /// out-of-band proof authorization after a reinstall.
+    func testDumpDeviceKey() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["HEELER_DIAG_DEVICE_KEY"] = "1"
+        app.launch()
+        Thread.sleep(forTimeInterval: 4)
+        app.terminate()
+    }
+}
+
+extension CaptureUITests {
+    /// TEMP: re-provisions the Mac Proof host record (the device key is
+    /// keychain-resident and authorized; only the record was lost in
+    /// the cache-clear uninstall). Values verified by Main.
+    func testProvisionMacProofHost() throws {
+        let app = XCUIApplication()
+        app.launch()
+        Thread.sleep(forTimeInterval: 6)
+        // Switch to the HOSTS page: the compact destination menu.
+        let menuButton = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'switch destination'")).firstMatch
+        if menuButton.waitForExistence(timeout: 8) {
+            menuButton.tap()
+            Thread.sleep(forTimeInterval: 1)
+            let hosts = app.buttons["Hosts"].firstMatch
+            if hosts.waitForExistence(timeout: 5) {
+                hosts.tap()
+                Thread.sleep(forTimeInterval: 2)
+            }
+        }
+        screenshot("provision-hosts-page")
+        // The Hosts page: the empty state's Add Manually (or the +
+        // icon) opens the manual form.
+        let manual = app.buttons.matching(
+            NSPredicate(format: "label == 'Add Manually'"))
+            .allElementsBoundByIndex.first(where: { $0.isHittable })
+        if let manual = manual {
+            manual.tap()
+        } else {
+            let plus = app.buttons.matching(
+                NSPredicate(format: "label == 'Add Host' OR label == 'plus'")).firstMatch
+            XCTAssertTrue(plus.waitForExistence(timeout: 10), "add-host control missing")
+            plus.tap()
+        }
+        Thread.sleep(forTimeInterval: 3)
+        screenshot("provision-form")
+        // DIAGNOSTIC: dump every text field's placeholder.
+        let fields = app.textFields.allElementsBoundByIndex
+        let dump = fields.enumerated()
+            .map { "\($0.offset): ph=[\($0.element.placeholderValue ?? "nil")] val=[\($0.element.value ?? "nil")]" }
+            .joined(separator: "\n")
+        try? dump.write(to: URL(fileURLWithPath: "/tmp/heeler-proof-signals/provision-fields.txt"),
+                        atomically: true, encoding: .utf8)
+        // Fill by placeholder (LabeledTextField prompts).
+        func field(_ prompt: String) -> XCUIElement {
+            let hit = app.textFields.matching(
+                NSPredicate(format: "placeholderValue CONTAINS %@", prompt)).firstMatch
+            XCTAssertTrue(hit.waitForExistence(timeout: 5), "field \(prompt) missing")
+            return hit
+        }
+        let name = field("Optional")
+        name.tap(); name.typeText("Mac Proof")
+        let user = field("user on the Host")
+        user.tap(); user.typeText("jhou")
+        // The route rows are buttons — tap the first route to open its
+        // editor, then fill the Hostname or address field.
+        let route = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'unnamed' OR label CONTAINS 'route'")).firstMatch
+        XCTAssertTrue(route.waitForExistence(timeout: 5), "route row missing")
+        route.tap()
+        Thread.sleep(forTimeInterval: 1)
+        screenshot("provision-route-editor")
+        let address = field("host.example.com")
+        address.tap(); address.typeText("192.168.31.71")
+        // The route editor is a sheet with its own Save.
+        let routeSave = app.buttons["Save"].firstMatch
+        XCTAssertTrue(routeSave.waitForExistence(timeout: 5), "route Save missing")
+        routeSave.tap()
+        Thread.sleep(forTimeInterval: 2)
+        // Scroll to the broker field (below the fold) + fill.
+        app.swipeUp()
+        Thread.sleep(forTimeInterval: 1)
+        let broker = field("Chat broker socket path")
+        broker.tap()
+        broker.typeText("/Users/jhou/.cache/agent-chat-ui-proof/broker.sock")
+        screenshot("provision-filled")
+        let save = app.buttons["Save"].firstMatch
+        XCTAssertTrue(save.waitForExistence(timeout: 5), "Save missing")
+        save.tap()
+        Thread.sleep(forTimeInterval: 4)
+        // The first-connection TOFU dialog: trust the host's key.
+        let trust = app.buttons["Trust"].firstMatch
+        if trust.waitForExistence(timeout: 8) {
+            trust.tap()
+        }
+        Thread.sleep(forTimeInterval: 10)
+        screenshot("provision-saved")
+    }
+}
+
+extension XCUIElement {
+    /// Clears the field's text (the port prefills with 22).
+    func clearText() {
+        tap()
+        let value = (value as? String) ?? ""
+        if !value.isEmpty {
+            typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: value.count))
+        }
+    }
+}
+
+extension CaptureUITests {
+    /// TEMP diag: the provisioned host's current state (preflight).
+    func testHostPreflightDiag() throws {
+        let app = XCUIApplication()
+        app.launch()
+        Thread.sleep(forTimeInterval: 8)
+        let menuButton = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'switch destination'")).firstMatch
+        XCTAssertTrue(menuButton.waitForExistence(timeout: 10))
+        menuButton.tap()
+        Thread.sleep(forTimeInterval: 1)
+        let hosts = app.buttons["Hosts"].firstMatch
+        if hosts.exists { hosts.tap(); Thread.sleep(forTimeInterval: 2) }
+        screenshot("diag-hosts-list")
+        let host = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'Mac Proof'")).firstMatch
+        if host.waitForExistence(timeout: 8) {
+            host.tap()
+            Thread.sleep(forTimeInterval: 2)
+            // The first-connection TOFU dialog: trust the host's key.
+            let trust = app.buttons["Trust"].firstMatch
+            if trust.waitForExistence(timeout: 8) {
+                trust.tap()
+            }
+            Thread.sleep(forTimeInterval: 12)
+            screenshot("diag-host-preflight")
+        }
     }
 }
