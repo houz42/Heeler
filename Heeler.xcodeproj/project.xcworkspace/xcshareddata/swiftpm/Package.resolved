@@ -1,5 +1,5 @@
 {
-  "originHash" : "d168e584ff3b621c6e4260f39e905b90a6b4add5d33a85f48d23bddd366b7472",
+  "originHash" : "53a9ff6214a9e4275e8fb7191379f66b1f4df1262387b59994ea9eca8011025e",
   "pins" : [
     {
       "identity" : "libghostty-spm",
@@ -7,15 +7,6 @@
       "location" : "https://github.com/Lakr233/libghostty-spm.git",
       "state" : {
         "revision" : "7e45d27160f9b34aca9ca5c9820e9207482f9f04"
-      }
-    },
-    {
-      "identity" : "markdownui",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/gonzalezreal/MarkdownUI",
-      "state" : {
-        "revision" : "5f613358148239d0292c0cef674a3c2314737f9e",
-        "version" : "2.4.1"
       }
     },
     {
@@ -52,6 +43,14 @@
       "state" : {
         "revision" : "924936d0427cb25a61169739a7660230bffa6ea6",
         "version" : "0.8.0"
+      }
+    },
+    {
+      "identity" : "swift-markdown-ui",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/houz42/swift-markdown-ui.git",
+      "state" : {
+        "revision" : "17b3ff4c678896028b71bc038558200d0c3fa22e"
       }
     }
   ],

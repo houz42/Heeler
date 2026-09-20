@@ -28,10 +28,14 @@ packages:
     url: https://github.com/Lakr233/libghostty-spm.git
     revision: "7e45d27160f9b34aca9ca5c9820e9207482f9f04"
   # Rich markdown rendering for chat text (headers, code blocks, tables).
-  # Pinned to the newest tagged 2.x release.
+  # houz42 fork of gonzalezreal/MarkdownUI 2.4.1 (fork: houz42/swift-markdown-ui,
+  # branch fix/inline-concat-depth) carrying the TextInlineRenderer patch that
+  # flattens the per-inline-node Text fold: upstream's N-deep
+  # ConcatenatedTextStorage tree overflowed the main-thread stack on cold
+  # launch (crash logs 2026-09-20). Exact commit pin, never a floating branch.
   MarkdownUI:
-    url: https://github.com/gonzalezreal/MarkdownUI
-    from: "2.4.1"
+    url: https://github.com/houz42/swift-markdown-ui.git
+    revision: "17b3ff4c678896028b71bc038558200d0c3fa22e"
   # Swift semantic syntax coloring for chat code blocks (MIT, JohnSundell).
   # Exact tag pin: 0.16.0 is the newest tagged release.
   Splash:
