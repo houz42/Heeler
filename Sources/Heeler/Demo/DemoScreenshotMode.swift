@@ -146,21 +146,39 @@
         }
 
         private var consoleRoot: some View {
-            ConsoleView(
-                hosts: hosts,
-                console: console,
-                terminal: terminal,
-                inputMode: inputMode,
-                appearance: appearance,
-                pushRegistration: pushRegistration,
-                notificationPreferences: notificationPreferences,
-                relaySettings: relaySettings,
-                notificationRouter: notificationRouter,
-                bannerStore: bannerStore,
-                presentsSettingsOnAppear: DemoScreenshotMode.presentsSettings,
-                liveActivities: liveActivities,
-                activity: activity
-            )
+            // The production navigation surface, so headless captures see
+            // the same destination menu/sidebar chrome the app ships.
+            AppRootView(
+                agents: ConsoleView(
+                    hosts: hosts,
+                    console: console,
+                    terminal: terminal,
+                    inputMode: inputMode,
+                    appearance: appearance,
+                    pushRegistration: pushRegistration,
+                    notificationPreferences: notificationPreferences,
+                    relaySettings: relaySettings,
+                    notificationRouter: notificationRouter,
+                    bannerStore: bannerStore,
+                    presentsSettingsOnAppear: DemoScreenshotMode.presentsSettings,
+                    liveActivities: liveActivities,
+                    activity: activity
+                ),
+                hosts: HostListView(
+                    store: hosts,
+                    discovery: SessionDiscoveryStore(
+                        listSessions: { hostID in
+                            try await console.listSessions(on: hostID)
+                        })),
+                settings: SettingsView(
+                    terminal: terminal,
+                    appearance: appearance,
+                    pushRegistration: pushRegistration,
+                    notificationPreferences: notificationPreferences,
+                    relaySettings: relaySettings,
+                    liveActivities: liveActivities,
+                    console: console,
+                    hosts: hosts.hosts))
             .preferredColorScheme(appearance.preferredColorScheme)
             .task {
                 console.setHosts(hosts.hosts)

@@ -269,6 +269,34 @@ struct AgentDetailView: View {
         .accessibilityLabel(surface == .chat ? "Show Terminal" : "Show Chat")
     }
 
+    /// The detail header's title as the agent switcher (#A): tapping the
+    /// title opens every other Agent, current one checked, so switching
+    /// never needs a detour back to the list. The surface toggle stays
+    /// trailing; this owns the principal slot only.
+    private var agentTitleMenu: some View {
+        Menu {
+            ForEach(console.agents) { candidate in
+                Button {
+                    onSwitch(candidate.id)
+                } label: {
+                    if candidate.id == agent.id {
+                        Label(candidate.agent.displayName, systemImage: "checkmark")
+                    } else {
+                        Text(candidate.agent.displayName)
+                    }
+                }
+            }
+        } label: {
+            headerTokens
+        }
+        // The plain button style keeps the compact header typography —
+        // no menu-chrome background behind the agent's title.
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(agent.agent.displayName), switch agent")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Opens the list of Agents to switch to.")
+    }
+
     /// The graceful empty state for an agent whose chat surface has no
     /// readable transcript (no `.path` agent session): the surface stays
     /// reachable, telling the user why it is empty.
@@ -672,7 +700,7 @@ struct AgentDetailView: View {
                     // The terminal surface keeps the nav bar transparent by
                     // design, so its header rides in a blur capsule instead
                     // of floating bare text over terminal output.
-                    headerTokens
+                    agentTitleMenu
                         .padding(.horizontal, surface == .terminal ? 10 : 0)
                         .padding(.vertical, surface == .terminal ? 5 : 0)
                         .background {

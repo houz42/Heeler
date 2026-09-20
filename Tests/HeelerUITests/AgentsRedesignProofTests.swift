@@ -79,8 +79,14 @@ final class AgentsRedesignProofTests: XCTestCase {
     /// real accept (the touch keyboard has no arrow keys; hardware-keyboard
     /// arrow+Enter parity is unit-pinned in the store tests).
     private func acceptVisibleSuggestion(_ labelFragment: String) {
+        // The suggestion row's AX label is "<Field> <value>, N agents"
+        // (value rows) — pin on that exact shape so page rows sharing the
+        // substring (a host-issue row named "Studio Mac, ..." under the
+        // integrated nav chrome) can never steal the tap.
         let row = app.buttons.matching(
-            NSPredicate(format: "label CONTAINS %@", labelFragment)).firstMatch
+            NSPredicate(
+                format: "label CONTAINS %@ AND label CONTAINS %@",
+                labelFragment, "agents")).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 5),
                       "the suggestion row must be visible to be accepted")
         row.tap()
@@ -238,21 +244,14 @@ final class AgentsRedesignProofTests: XCTestCase {
         app.waitForKeyboard()
         searchField.typeText("Pol")
         sleep(1)
-        // Open Hosts via the destination menu: keyboard must resign.
+        // Hosts arrival: keyboard must resign.
         navigateToDestination("Hosts")
         XCTAssertTrue(app.waitForKeyboardDismissal(),
                       "the keyboard must resign when Hosts opens")
         captureScreenshot(app, "agents-dest-hosts-no-keyboard", lifetime: .keepAlways)
-        // Back to Agents (the iPhone cover: swipe down to dismiss):
-        // query intact, field unfocused.
-        app.swipeDown(velocity: .fast)
-        sleep(1)
-        if !staticText(containing: "1 of 5 agents").exists {
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05))
-                .press(forDuration: 0.05, thenDragTo:
-                    app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)))
-            sleep(1)
-        }
+        // Back to Agents (the destination menu again — a page swap, no
+        // cover to swipe): query intact, field unfocused.
+        navigateToDestination("Agents")
         XCTAssertTrue(staticText(containing: "1 of 5 agents").waitForExistence(timeout: 10),
                       "the query must survive the round trip")
         XCTAssertFalse(app.keyboards.firstMatch.exists,
@@ -266,14 +265,7 @@ final class AgentsRedesignProofTests: XCTestCase {
         XCTAssertTrue(app.waitForKeyboardDismissal(),
                       "the keyboard must resign when Settings opens")
         captureScreenshot(app, "agents-dest-settings-no-keyboard", lifetime: .keepAlways)
-        app.swipeDown(velocity: .fast)
-        sleep(1)
-        if !staticText(containing: "1 of 5 agents").exists {
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05))
-                .press(forDuration: 0.05, thenDragTo:
-                    app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)))
-            sleep(1)
-        }
+        navigateToDestination("Agents")
         XCTAssertTrue(staticText(containing: "1 of 5 agents").waitForExistence(timeout: 10))
     }
 
@@ -312,7 +304,8 @@ final class AgentsRedesignProofTests: XCTestCase {
         XCTAssertTrue(staticText(containing: "Build Server").waitForExistence(timeout: 5))
         // Collapse the Build Server group (no search active: toggle works).
         app.buttons.matching(
-            NSPredicate(format: "label BEGINSWITH %@", "Build Server")).firstMatch.tap()
+            NSPredicate(
+                format: "label == %@", "Build Server, 2")).firstMatch.tap()
         sleep(1)
         XCTAssertFalse(row(containing: "Checkout review").exists,
                       "the collapsed group must hide its rows")
@@ -618,8 +611,13 @@ final class AgentsRedesignProofTests: XCTestCase {
         if done.waitForExistence(timeout: 5) { done.tap() }
         XCTAssertTrue(staticText(containing: "Needs you").waitForExistence(timeout: 5))
 
+        // The issue row carries the failure text; the grouped header
+        // shares the host NAME — pin on the SSH-unavailable copy so the
+        // tap can never land on the header.
         let issue = app.buttons.matching(
-            NSPredicate(format: "label CONTAINS %@", "Offline Server")).firstMatch
+            NSPredicate(
+                format: "label CONTAINS %@ AND label CONTAINS %@",
+                "Offline Server", "SSH unavailable")).firstMatch
         XCTAssertTrue(
             issue.waitForExistence(timeout: UITestTimeouts.standard),
             "the offline host's issue row must render in grouped mode")
