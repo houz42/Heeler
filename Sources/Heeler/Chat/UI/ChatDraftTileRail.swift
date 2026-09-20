@@ -41,37 +41,23 @@ enum ChatDraftItem: Identifiable, Equatable {
     }
 }
 
-/// Pure Send composition for the draft items + prose: every item
-/// rides EXACTLY ONCE and the prose is preserved verbatim minus the
-/// picker-inserted path strings. Extracted so the send contract is
-/// unit-testable.
+/// Pure Send composition for the draft items + prose: every item rides
+/// EXACTLY ONCE and the prose is preserved VERBATIM (attachment paths
+/// never live in the prose — they are removed at tile-creation time,
+/// so a user-typed path string can never be eaten here). Extracted so
+/// the send contract is unit-testable.
 enum ChatDraftComposer {
     static func messageText(items: [ChatDraftItem], draft: String) -> String {
-        var paths: [String] = []
-        var quotes: [String] = []
-        for item in items {
-            switch item {
-            case .image(_, let path, _), .file(_, _, let path):
-                paths.append(path)
-            case .quote(_, let text, _):
-                quotes.append(ChatQuote.draft(for: text))
-            }
-        }
-        var prose = draft
-        for item in items {
-            switch item {
-            case .image(_, let path, _), .file(_, _, let path):
-                while let range = prose.range(of: path) {
-                    prose.removeSubrange(range)
-                }
-            case .quote:
-                break
-            }
-        }
         var parts: [String] = []
-        parts.append(contentsOf: paths)
-        parts.append(contentsOf: quotes)
-        let trimmed = prose.trimmingCharacters(in: .whitespacesAndNewlines)
+        for item in items {
+            switch item {
+            case .image(_, let path, _), .file(_, _, let path):
+                parts.append(path)
+            case .quote(_, let text, _):
+                parts.append(ChatQuote.draft(for: text))
+            }
+        }
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { parts.append(trimmed) }
         return parts.joined(separator: "\n")
     }
@@ -301,6 +287,9 @@ struct ChatDraftCollectionSheet: View {
 /// openers' fetch surface).
 struct ChatDraftItemPreview: View {
     let item: ChatDraftItem
+    /// Reads the file's bytes (the host read seam) for the in-app
+    /// reader; nil = honest unavailable.
+    var fileFetch: RemoteFileFetcher? = nil
 
     var body: some View {
         NavigationStack {
@@ -317,17 +306,7 @@ struct ChatDraftItemPreview: View {
                                 "The thumbnail is not cached; it uploads with the message."))
                     }
                 case .file(_, let name, let path):
-                    VStack(alignment: .leading, spacing: 8) {
-                        Label(name, systemImage: "doc")
-                            .font(.headline)
-                        Text(path)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity,
-                           alignment: .topLeading)
-                    .padding(16)
+                    ChatDraftFileReader(name: name, path: path, fetch: fileFetch)
                 case .quote(_, let text, let author):
                     ScrollView {
                         VStack(alignment: .leading, spacing: 8) {
@@ -401,5 +380,59 @@ struct ZoomableImageView: View {
                 }
             }
             .accessibilityLabel("Image preview, pinch to zoom")
+    }
+}
+
+
+/// The in-app reader for a draft file attachment: loads the file's
+/// bytes through the host read seam and renders them read-only
+/// (monospaced, selectable). No seam or a failed read = an HONEST
+/// unavailable state, never a fake empty document.
+struct ChatDraftFileReader: View {
+    let name: String
+    let path: String
+    var fetch: RemoteFileFetcher?
+
+    @State private var contents: String?
+    @State private var failed = false
+
+    var body: some View {
+        Group {
+            if let contents {
+                ScrollView {
+                    Text(contents)
+                        .font(.system(.body, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                }
+            } else if failed {
+                ContentUnavailableView(
+                    "File unavailable",
+                    systemImage: "doc.badge.ellipsis",
+                    description: Text(
+                        "The file could not be read from the host (\(path))."))
+            } else {
+                ProgressView("Reading file…")
+            }
+        }
+        .navigationTitle(name)
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            guard let fetch else {
+                failed = true
+                return
+            }
+            do {
+                let data = try await fetch(path)
+                contents = String(data: data, encoding: .utf8)
+                    ?? "[binary file, \(data.count) bytes]"
+                if contents?.isEmpty == true {
+                    contents = "[empty file]"
+                }
+            } catch {
+                failed = true
+            }
+        }
     }
 }

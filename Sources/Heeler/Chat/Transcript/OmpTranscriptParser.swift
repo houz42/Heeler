@@ -128,6 +128,17 @@ enum OmpTranscriptParser {
                 if let thinking = block["thinking"] as? String, !thinking.isEmpty {
                     blocks.append(.thinking(thinking))
                 }
+            case "image":
+                // Image blocks ride the row model (the gallery tiles +
+                // reader); bytes stay out (the ref resolves via the
+                // host read seam).
+                if let mimeType = block["mimeType"] as? String,
+                    let ref = block["ref"] as? String
+                {
+                    blocks.append(.image(ChatImageRef(
+                        ref: ref, mimeType: mimeType,
+                        byteLength: block["byteLength"] as? Int)))
+                }
             case "toolCall":
                 guard let name = block["name"] as? String else { continue }
                 // `arguments` arrives already decoded in the line, so it is

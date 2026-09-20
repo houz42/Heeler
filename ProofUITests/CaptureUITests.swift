@@ -24,13 +24,14 @@ final class CaptureUITests: XCTestCase {
         try? allButtons.joined(separator: "\n").write(
             to: URL(fileURLWithPath: "/tmp/heeler-proof-signals/buttons-dump.txt"),
             atomically: true, encoding: .utf8)
-        let inputButton = app.buttons["Message the agent"]
-        XCTAssertTrue(
-            inputButton.waitForExistence(timeout: 10),
-            "input affordance missing after hold; buttons: \(allButtons.joined(separator: " | "))")
-        inputButton.tap()
+        // The composer is PERSISTENT at rest — the field is mounted
+        // in the bottom bar (no FAB, nothing to open).
         let field = app.textViews.firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 8), "input field did not open")
+        XCTAssertTrue(
+            field.waitForExistence(timeout: 10),
+            "persistent composer missing after hold; buttons: \(allButtons.joined(separator: " | "))")
+        field.tap()
+        Thread.sleep(forTimeInterval: 1)
         field.typeText("Reply exactly: post-hold request proof e39754b.")
         let send = app.buttons["Send"].firstMatch
         XCTAssertTrue(send.waitForExistence(timeout: 5), "send button missing")
@@ -175,20 +176,22 @@ extension CaptureUITests {
             }
         }
 
-        // Composer (interactive sessions only): collapse → grow with
-        // real typing.
-        let messageButton = app.buttons["Message the agent"]
-        if messageButton.waitForExistence(timeout: 4) {
-            messageButton.tap()
-            Thread.sleep(forTimeInterval: 3)
+        // Composer (interactive sessions only): the PERSISTENT row at
+        // rest, grow with real typing, collapse keeping the draft.
+        let field = app.textViews.firstMatch
+        if field.waitForExistence(timeout: 5) {
+            Thread.sleep(forTimeInterval: 1)
             screenshot("d2-composer-collapsed")
-            let field = app.textViews.firstMatch
-            if field.waitForExistence(timeout: 5) {
-                field.typeText("A draft that runs long enough to wrap past a single row of the composer, exercising the grow bound with genuine typed content")
+            field.typeText("A draft that runs long enough to wrap past a single row of the composer, exercising the grow bound with genuine typed content")
+            Thread.sleep(forTimeInterval: 1)
+            screenshot("d2-composer-grown")
+            // Collapse: focus off — the draft persists in the
+            // persistent row.
+            let collapse = app.buttons["Collapse input"]
+            if collapse.exists {
+                collapse.tap()
                 Thread.sleep(forTimeInterval: 1)
-                screenshot("d2-composer-grown")
-                // The rail + quote: dismiss keyboard state check.
-                screenshot("d2-composer-with-draft")
+                screenshot("d2-composer-collapsed-draft-preserved")
             }
         } else {
             // Honest absence: the demo agent's session does not resolve
@@ -229,35 +232,150 @@ extension CaptureUITests {
         }
         Thread.sleep(forTimeInterval: 8)
         screenshot("int-agent-detail-state")
-        let messageButton = app.buttons["Message the agent"]
-        XCTAssertTrue(
-            messageButton.waitForExistence(timeout: 25),
-            "real agent chat must resolve the composer")
-        messageButton.tap()
-        Thread.sleep(forTimeInterval: 3)
-        screenshot("int-composer-collapsed")
+        // The composer is PERSISTENT: the resting row is already
+        // mounted — nothing to open.
         let field = app.textViews.firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 8), "composer field")
+        XCTAssertTrue(
+            field.waitForExistence(timeout: 25),
+            "real agent chat must resolve the persistent composer")
+        Thread.sleep(forTimeInterval: 2)
+        screenshot("int-composer-resting")
+        field.tap()
+        Thread.sleep(forTimeInterval: 1)
         field.typeText("Interactive composer proof: typed live")
         Thread.sleep(forTimeInterval: 1)
         screenshot("int-composer-grown")
-        let send = app.buttons["Send"]
-        if send.exists, send.isEnabled {
-            send.tap()
-            Thread.sleep(forTimeInterval: 4)
-            // The real broker send evidence: the user message renders.
-            screenshot("int-real-broker-send")
-        }
-        let close = app.buttons["Close input"]
-        if close.exists {
-            close.tap()
+        // Collapse: focus off — the draft persists in the resting row.
+        let collapse = app.buttons["Collapse input"]
+        if collapse.exists {
+            collapse.tap()
             Thread.sleep(forTimeInterval: 1)
-            screenshot("int-closed-draft-preserved")
-            if messageButton.waitForExistence(timeout: 8) {
-                messageButton.tap()
+            screenshot("int-composer-collapsed-draft-preserved")
+        }
+        // Re-focus and send through the REAL broker.
+        field.tap()
+        Thread.sleep(forTimeInterval: 1)
+        let send = app.buttons["Send"]
+        XCTAssertTrue(send.waitForExistence(timeout: 5), "send button")
+        send.tap()
+        Thread.sleep(forTimeInterval: 4)
+        // The real broker send evidence: the user message renders.
+        screenshot("int-real-broker-send")
+    }
+
+    /// Round-3 visual evidence: the work inspector at each level, the
+    /// loaded image gallery (+N collection), and the in-app reader.
+    func testD3VisualProofs() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--demo-screenshots"]
+        app.launch()
+        Thread.sleep(forTimeInterval: 10)
+        let row = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'ios-polish'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 15), "demo agent row missing")
+        row.tap()
+        Thread.sleep(forTimeInterval: 6)
+
+        // L1: the compact Work summary row.
+        let levelButton = app.buttons["Detail level: Text"]
+        if levelButton.exists {
+            levelButton.tap()
+            Thread.sleep(forTimeInterval: 1)
+            let tools = app.buttons.matching(
+                NSPredicate(format: "label BEGINSWITH 'Tools'")).firstMatch
+            if tools.exists {
+                tools.tap()
                 Thread.sleep(forTimeInterval: 2)
-                screenshot("int-reopened-draft-intact")
             }
+        }
+        screenshot("d3-l1-work-summary")
+        // Tap the summary → the inspector sheet (collapsed rows).
+        let summary = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'Work summary'")).firstMatch
+        if summary.exists {
+            summary.tap()
+            Thread.sleep(forTimeInterval: 2)
+            screenshot("d3-work-inspector-collapsed")
+            // Expand the first call row → its result body.
+            let firstCall = app.buttons.matching(
+                NSPredicate(format: "label CONTAINS 'Call read'")).firstMatch
+            if firstCall.exists {
+                firstCall.tap()
+                Thread.sleep(forTimeInterval: 1)
+                screenshot("d3-work-inspector-expanded")
+            }
+            // Dismiss the sheet: grab above the content and pull
+            // down fast (a plain swipe just scrolls the list).
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.18))
+                .press(forDuration: 0.05, thenDragTo: app.coordinate(
+                    withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98)))
+            Thread.sleep(forTimeInterval: 2)
+        }
+
+        // L2: per-call cards.
+        if levelButton.exists {
+            levelButton.tap()
+            Thread.sleep(forTimeInterval: 1)
+            let results = app.buttons.matching(
+                NSPredicate(format: "label BEGINSWITH 'Results'")).firstMatch
+            if results.exists {
+                results.tap()
+                Thread.sleep(forTimeInterval: 2)
+                screenshot("d3-l2-per-call-card")
+            }
+        }
+
+        // L3: thinking visible.
+        if levelButton.exists {
+            levelButton.tap()
+            Thread.sleep(forTimeInterval: 1)
+            let thinking = app.buttons.matching(
+                NSPredicate(format: "label BEGINSWITH 'Thinking'")).firstMatch
+            if thinking.exists {
+                thinking.tap()
+                Thread.sleep(forTimeInterval: 2)
+                screenshot("d3-l3-thinking")
+            }
+        }
+
+        // The image gallery: SLOW swipes so the scroll doesn't
+        // overshoot the short demo transcript; check after each step.
+        var tile: XCUIElement? = nil
+        var galleryText: XCUIElement? = nil
+        var controlText: XCUIElement? = nil
+        for _ in 0..<12 {
+            app.swipeUp(velocity: .slow)
+            Thread.sleep(forTimeInterval: 1)
+            let candidate = app.buttons.matching(
+                NSPredicate(format: "label CONTAINS 'Image attachment'")).firstMatch
+            let text = app.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS 'Six verification captures'")).firstMatch
+            let control = app.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS 'Re-ran the suite'")).firstMatch
+            if text.exists { galleryText = text }
+            if control.exists { controlText = control }
+            if candidate.exists { tile = candidate; break }
+        }
+        // DIAGNOSTIC: which anchors were found at all.
+        let diag = "control=\(controlText != nil);gallery=\(galleryText != nil);tile=\(tile != nil)"
+        try? diag.write(to: URL(fileURLWithPath: "/tmp/heeler-proof-signals/d3-diag.txt"),
+                        atomically: true, encoding: .utf8)
+        if let galleryText = galleryText, tile == nil {
+            galleryText.tap()
+            Thread.sleep(forTimeInterval: 1)
+            screenshot("d3-image-gallery")
+        }
+        if let tile = tile {
+            // Bring the tile fully onscreen, open the reader, capture,
+            // dismiss, then capture the settled gallery position.
+            tile.tap()
+            Thread.sleep(forTimeInterval: 2)
+            screenshot("d3-image-reader")
+            // Dismiss the reader sheet via its Done button.
+            let done = app.buttons["Close image viewer"].firstMatch
+            if done.exists { done.tap() }
+            Thread.sleep(forTimeInterval: 2)
+            screenshot("d3-image-gallery")
         }
     }
 

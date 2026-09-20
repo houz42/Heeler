@@ -220,7 +220,15 @@
                     "docs:p2": terminalOutput,
                     "mobile:p4": terminalOutput,
                 ],
-                transcripts: [chatTranscriptPath: chatTranscript]),
+                transcripts: [
+                    chatTranscriptPath: chatTranscript,
+                    "/home/demo/.local/share/omp/shot-1.png": demoImagePNG,
+                    "/home/demo/.local/share/omp/shot-2.png": demoImagePNG,
+                    "/home/demo/.local/share/omp/shot-3.png": demoImagePNG,
+                    "/home/demo/.local/share/omp/shot-4.png": demoImagePNG,
+                    "/home/demo/.local/share/omp/shot-5.png": demoImagePNG,
+                    "/home/demo/.local/share/omp/shot-6.png": demoImagePNG,
+                ]),
             buildHostID: DemoHostProfile(
                 snapshot: snapshot(
                     agents: [
@@ -248,7 +256,15 @@
                     "checkout:p3": terminalOutput,
                     "api:p7": terminalOutput,
                 ],
-                transcripts: [chatTranscriptPath: chatTranscript]),
+                transcripts: [
+                    chatTranscriptPath: chatTranscript,
+                    "/home/demo/.local/share/omp/shot-1.png": demoImagePNG,
+                    "/home/demo/.local/share/omp/shot-2.png": demoImagePNG,
+                    "/home/demo/.local/share/omp/shot-3.png": demoImagePNG,
+                    "/home/demo/.local/share/omp/shot-4.png": demoImagePNG,
+                    "/home/demo/.local/share/omp/shot-5.png": demoImagePNG,
+                    "/home/demo/.local/share/omp/shot-6.png": demoImagePNG,
+                ]),
         ]
 
         /// The absolute path every demo agent's `.path` session points at;
@@ -268,11 +284,33 @@
             {"type":"message","id":"demo-2","timestamp":1789292105000,"message":{"role":"assistant","content":[{"type":"thinking","thinking":"The user wants the fix shipped. Read the failing test first, then run the suite."},{"type":"toolCall","id":"demo-call-1","name":"read","arguments":{"path":"CheckoutView.swift"}},{"type":"text","text":"The retry logic drops the cart because `PaymentCoordinator` resets state on the first attempt. I'll preserve the cart across retries and re-run `CheckoutFlowTests`."}],"timestamp":1789292105000}}
             {"type":"message","id":"demo-3","timestamp":1789292110000,"message":{"role":"toolResult","toolCallId":"demo-call-1","toolName":"read","content":[{"type":"text","text":"struct CheckoutView: View {\\n    var body: some View {\\n        Text(\\"Checkout\\")\\n    }\\n}"}],"timestamp":1789292110000}}
             {"type":"message","id":"demo-4","timestamp":1789292115000,"message":{"role":"assistant","content":[{"type":"text","text":"Re-ran the suite: 18 of 18 passing, no flake in the retry path."}],"timestamp":1789292115000}}
+            {"type":"message","id":"demo-images","timestamp":1789292118000,"message":{"role":"assistant","content":[{"type":"image","mimeType":"image/png","ref":"/home/demo/.local/share/omp/shot-1.png","byteLength":90},{"type":"image","mimeType":"image/png","ref":"/home/demo/.local/share/omp/shot-2.png","byteLength":90},{"type":"image","mimeType":"image/png","ref":"/home/demo/.local/share/omp/shot-3.png","byteLength":90},{"type":"image","mimeType":"image/png","ref":"/home/demo/.local/share/omp/shot-4.png","byteLength":90},{"type":"image","mimeType":"image/png","ref":"/home/demo/.local/share/omp/shot-5.png","byteLength":90},{"type":"image","mimeType":"image/png","ref":"/home/demo/.local/share/omp/shot-6.png","byteLength":90},{"type":"text","text":"Six verification captures from the run."}],"timestamp":1789292118000}}
             {"type":"message","id":"demo-5","timestamp":1789292120000,"message":{"role":"assistant","content":[{"type":"text","text":"All 18 tests pass. Ready to commit when you are."}],"timestamp":1789292120000}}
             {"type":"message","id":"demo-6","timestamp":1789292130000,"message":{"role":"assistant","content":[{"type":"text","text":"Long-run verification notes. Step 1: reproduce the failure on a clean checkout — clone the repo, apply no local patches, and run the failing test exactly as CI does, because a passing local run with uncommitted changes proves nothing about the shipped build. Step 2: capture the failure signature — the first error line, the file and line it names, and the full stack if one prints — so a fix can be matched to the failure later rather than to a guess. Step 3: form one hypothesis at a time. Change exactly one thing, re-run, and record the result; changing two things at once means a passing run cannot say which change mattered. Step 4: keep the reproduction as the regression test. If the fix cannot be shown to flip the repro from red to green, the fix is not verified — it is a hope. Step 5: when the cause is found, write the root cause down before writing the fix, because a fix written against a misread cause silently moves the bug somewhere else. Step 6: re-run the full suite before declaring done, since narrow tests pass happily while neighbors break. Step 7: note the environment — simulator version, OS build, device family — because a failure that only reproduces on one runtime is an environment bug wearing a code bug's clothes. Step 8: if two people are debugging, say out loud what you believe and why before acting; a wrong belief shared is corrected in seconds, a wrong belief private can burn an afternoon. Step 9: when the same failure appears in three places, stop patching and look for the shared seam — the bug lives in the seam, not the call sites. Step 10: after the fix ships, watch the next few CI runs for the same signature elsewhere; regressions rarely travel alone."}],"timestamp":1789292130000}}
             """
 
         static let chatTranscript = Data(chatTranscriptJSON.utf8)
+
+        /// A real 64x64 PNG the demo console serves for image-block
+        /// refs — so the gallery tiles and reader prove the actual
+        /// load path in demo screenshots (not unavailable placeholders).
+        static let demoImagePNG: Data = {
+            let renderer = UIGraphicsImageRenderer(size: CGSize(width: 64, height: 64))
+            let image = renderer.image { context in
+                let colors = [
+                    UIColor(red: 0.13, green: 0.39, blue: 0.30, alpha: 1).cgColor,
+                    UIColor(red: 0.85, green: 0.92, blue: 0.88, alpha: 1).cgColor,
+                ] as CFArray
+                let gradient = CGGradient(
+                    colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                    colors: colors, locations: [0, 1])!
+                context.cgContext.drawLinearGradient(
+                    gradient,
+                    start: .zero, end: CGPoint(x: 64, y: 64),
+                    options: [])
+            }
+            return image.pngData() ?? Data()
+        }()
 
         static let terminalOutput = """
             \u{001B}[2J\u{001B}[H\u{001B}[1;36mHERDR  •  CLAUDE CODE\u{001B}[0m\r

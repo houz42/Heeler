@@ -1001,39 +1001,61 @@ struct ChatWorkCallDetail: Identifiable {
     let entries: [Entry]
 }
 
-/// The inspector sheet: one row per call, its result body inline —
-/// the L1 surface for call results.
+/// The inspector sheet: compact COLLAPSED rows, one per call, each
+/// expandable to its result/diff. A nil result is HONEST — the row
+/// says "No recorded result" (an unavailable/unknown state, never a
+/// fake "Running" that a historical call would render forever).
 struct ChatWorkInspectorSheet: View {
     let detail: ChatWorkCallDetail
 
     var body: some View {
         NavigationStack {
             List(detail.entries) { entry in
-                VStack(alignment: .leading, spacing: 6) {
+                WorkInspectorRow(entry: entry)
+            }
+            .navigationTitle("Work · \(detail.entries.count) calls")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    private struct WorkInspectorRow: View {
+        let entry: ChatWorkCallDetail.Entry
+        @State private var expanded = false
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 6) {
+                Button {
+                    withAnimation(.snappy) { expanded.toggle() }
+                } label: {
                     HStack(spacing: 6) {
                         Image(systemName: entry.result == nil
-                            ? "gear" : (entry.result?.isError == true
+                            ? "questionmark.circle" : (entry.result?.isError == true
                                 ? "exclamationmark.triangle" : "checkmark.circle"))
                             .foregroundStyle(
                                 entry.result?.isError == true ? .red : .secondary)
                         Text(entry.name)
                             .font(.system(.footnote, design: .monospaced))
+                        Spacer(minLength: 0)
+                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
                     }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(
+                    "Call \(entry.name), \(entry.result == nil ? "no recorded result" : "result available"), \(expanded ? "collapse" : "expand")")
+                if expanded {
                     if let result = entry.result {
                         ChatResultBody(result: result)
                     } else {
-                        HStack(spacing: 6) {
-                            ProgressView().controlSize(.small)
-                            Text("Running…")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
+                        Text("No recorded result for this call.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
                 }
-                .padding(.vertical, 2)
             }
-            .navigationTitle("Work · \(detail.entries.count) calls")
-            .navigationBarTitleDisplayMode(.inline)
+            .padding(.vertical, 2)
         }
     }
 }
@@ -1121,6 +1143,12 @@ struct ChatTranscriptImageReader: View {
             }
             .navigationTitle("Image")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                        .accessibilityLabel("Close image viewer")
+                }
+            }
         }
         .task {
             guard let fetch else {
@@ -1135,5 +1163,78 @@ struct ChatTranscriptImageReader: View {
                 failed = true
             }
         }
+    }
+
+    @Environment(\.dismiss) private var dismiss
+}
+
+/// One message's images as a single-row gallery: MEASURED capacity
+/// (tile+gap math, boundary-correct), the +N tile opens the collection
+/// sheet where EVERY image is reachable.
+struct ChatTranscriptImageGallery: View {
+    let images: [ChatImageRef]
+    var fetch: ((String) async throws -> Data)?
+    var openReader: (ChatImageRef) -> Void
+
+    @State private var showsCollection = false
+
+    private static let tile: CGFloat = 56
+    private static let gap: CGFloat = 8
+
+    var body: some View {
+        GeometryReader { geo in
+            let fits = Self.fits(width: geo.size.width - 24)
+            let hasOverflow = images.count > fits
+            let visible = hasOverflow ? fits - 1 : images.count
+            HStack(spacing: Self.gap) {
+                ForEach(images.prefix(visible)) { image in
+                    ChatTranscriptImageTile(
+                        image: image, fetch: fetch, side: Self.tile)
+                    { openReader(image) }
+                }
+                if hasOverflow {
+                    Button {
+                        showsCollection = true
+                    } label: {
+                        Text("+\\(images.count - visible)")
+                            .font(.footnote.weight(.medium))
+                            .frame(width: Self.tile, height: Self.tile)
+                            .background(
+                                Color.secondary.opacity(0.1),
+                                in: RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(
+                        "\\(images.count - visible) more images, opens all")
+                }
+            }
+        }
+        .frame(height: Self.tile)
+        .padding(.horizontal, 12)
+        .sheet(isPresented: $showsCollection) {
+            NavigationStack {
+                List(images) { image in
+                    HStack(spacing: 12) {
+                        ChatTranscriptImageTile(
+                            image: image, fetch: fetch, side: 44)
+                        { openReader(image) }
+                        Text("Image \\(image.ref)")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture { openReader(image) }
+                }
+                .navigationTitle("Images")
+                .navigationBarTitleDisplayMode(.inline)
+            }
+            .presentationDetents([.medium, .large])
+        }
+    }
+
+    static func fits(width: CGFloat) -> Int {
+        guard width >= tile else { return 0 }
+        return Int((width + gap) / (tile + gap))
     }
 }

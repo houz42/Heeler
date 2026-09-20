@@ -213,11 +213,6 @@ struct ChatScreen: View {
                     router: openRouter,
                     fetch: fetch ?? { _ in throw CocoaError(.fileNoSuchFile) }))
         }
-        // The input affordance floats bottom-trailing and only while the
-        // input frame is closed; the frame's own chevron closes it.
-        .overlay {
-            if !inputPresented, router != nil && deliver != nil { inputOverlay }
-        }
         .safeAreaInset(edge: .bottom) { inputFrame }
         // The +N collection sheet: every draft item, removable there.
         .sheet(isPresented: $showsDraftCollection) {
@@ -232,12 +227,12 @@ struct ChatScreen: View {
         }
         // The tapped tile's full preview.
         .sheet(item: $previewedDraftItem) { item in
-            ChatDraftItemPreview(item: item)
+            ChatDraftItemPreview(item: item, fileFetch: fetch)
                 .presentationDetents([.large])
         }
         // A transcript image's full reader (loads via the fetch seam).
         .sheet(item: $viewingImage) { image in
-            ChatTranscriptImageReader(image: image, fetch: imageFetcher)
+            ChatTranscriptImageReader(image: image, fetch: imageFetcher ?? fetch)
                 .presentationDetents([.large])
         }
         // The L1 Work inspector's call details.
@@ -379,36 +374,20 @@ struct ChatScreen: View {
                 // Non-consecutive singles still render as one tile
                 // (they arrive grouped via .imageGallery otherwise).
                 ChatTranscriptImageTile(
-                    image: image, fetch: imageFetcher, side: 56)
+                    image: image, fetch: imageFetcher ?? fetch, side: 56)
                 { viewingImage = image }
             } else {
                 LinkifiedChatRow(row: row, router: openRouter)
             }
         case .imageGallery(_, let images):
-            // One message's images as a single small-square gallery.
-            HStack(spacing: 8) {
-                ForEach(images.prefix(5)) { image in
-                    ChatTranscriptImageTile(
-                        image: image, fetch: imageFetcher, side: 56)
-                    { viewingImage = image }
-                }
-                if images.count > 5 {
-                    Button {
-                        viewingImage = images[5]
-                    } label: {
-                        Text("+\(images.count - 5)")
-                            .font(.footnote.weight(.medium))
-                            .frame(width: 56, height: 56)
-                            .background(
-                                Color.secondary.opacity(0.1),
-                                in: RoundedRectangle(cornerRadius: 8))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(
-                        "\(images.count - 5) more images")
-                }
-            }
-            .padding(.horizontal, 12)
+            // One message's images as a single small-square gallery:
+            // MEASURED capacity (the same tile+gap math as the draft
+            // rail) — the +N tile opens the COLLECTION SHEET (every
+            // image, all reachable), never a single hidden one.
+            ChatTranscriptImageGallery(
+                images: images,
+                fetch: imageFetcher ?? fetch,
+                openReader: { image in viewingImage = image })
         case .workSummary(_, let calls):
             let names = calls.map { $0.name }
             // The L1 Work inspector: one compact summary of the call
@@ -615,12 +594,10 @@ struct ChatScreen: View {
     private func quoteAffordance(_ text: String, author: String = "Heeler") {
         let id = "quote-" + String(text.hashValue)
         guard !draftItems.contains(where: { $0.id == id }) else {
-            inputPresented = true
             inputFocused = true
             return
         }
         draftItems.append(.quote(id: id, text: text, author: author))
-        inputPresented = true
         inputFocused = true
     }
 
@@ -712,16 +689,22 @@ struct ChatScreen: View {
                 pendingImagePreviewData = nil
                 isPasteImageAttachment = false
             } else {
-                // Picker paths keep the staging store's caret-faithful
-                // path insert in the draft AND record a draft item, so
-                // the tile's corner-x can remove the path from the
-                // draft too. Exactly one item per completion.
+                // Picker completion: exactly one draft item; the
+                // staging store's inserted path comes OUT of the prose
+                // AT INSERT TIME (the tile is the visible attachment),
+                // so the prose stays ONLY the user's own text — never
+                // stripped again at Send.
+                draft = attachments.draftStore.draft
+                if let range = draft.range(of: outcome.path) {
+                    draft.removeSubrange(range)
+                }
                 switch outcome.medium {
                 case .image:
                     draftItems.append(.image(
                         id: UUID().uuidString,
                         remotePath: outcome.path,
-                        previewData: nil))
+                        previewData: pendingPickerImageData))
+                    pendingPickerImageData = nil
                 case .file:
                     let name = pendingFileURL?.lastPathComponent ?? "File"
                     draftItems.append(.file(
@@ -751,10 +734,6 @@ struct ChatScreen: View {
 
     // MARK: - Floating input
 
-    /// The lower-right input affordance: one floating button that opens the
-    /// input frame (and the keyboard). Nothing lives on the chat's vertical
-    /// axis until the user asks for it.
-    @State private var inputPresented = false
     @State private var draft = ""
     @State private var isSending = false
     @State private var inputFocused = false
@@ -800,28 +779,8 @@ struct ChatScreen: View {
     @State private var attachmentErrorMessage: String?
     /// The file picker's last selection (name for the rail tile).
     @State private var pendingFileURL: URL?
-
-    private var inputOverlay: some View {
-        VStack {
-            Spacer()
-            HStack {
-                Spacer()
-                Button {
-                    inputPresented = true
-                    inputFocused = true
-                } label: {
-                    Image(systemName: "text.cursor")
-                        .font(.title3)
-                        .frame(width: 52, height: 52)
-                }
-                .buttonStyle(.borderedProminent)
-                .clipShape(Circle())
-                .shadow(radius: 3, y: 2)
-                .accessibilityLabel("Message the agent")
-                .padding()
-            }
-        }
-    }
+    /// The photo picker's item data (the tile's preview thumbnail).
+    @State private var pendingPickerImageData: Data?
 
     /// The composer's text field (the growing/collapsing input), split
     /// out to keep each view expression within the type-checker's
@@ -872,7 +831,8 @@ struct ChatScreen: View {
         if let router {
         HStack(spacing: 8) {
             Button {
-                inputPresented = false
+                // Collapse to the resting row: keyboard down, focus
+                // off — the draft and the frame PERSIST.
                 inputFocused = false
             } label: {
                 Image(systemName: "chevron.down")
@@ -881,7 +841,7 @@ struct ChatScreen: View {
                     .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
             }
-            .accessibilityLabel("Close input")
+            .accessibilityLabel("Collapse input")
             if router != nil && deliver != nil {
                 Menu {
                     AgentActionMenuContent(
@@ -919,7 +879,7 @@ struct ChatScreen: View {
     /// commands; plain text flows to `deliver`.
     @ViewBuilder
     private var inputFrame: some View {
-        if inputPresented, let router {
+        if let router, deliver != nil {
             VStack(spacing: 0) {
                 if router.hasActiveSuggestions {
                     ComposerSuggestionRow(
@@ -998,6 +958,11 @@ struct ChatScreen: View {
                 isPasteImageAttachment = false
                 attachmentErrorMessage = nil
                 attachments.draftStore.clearUploadFailure()
+                // The tile's preview: the picked item's own bytes.
+                Task { @MainActor in
+                    pendingPickerImageData =
+                        try? await item.loadTransferable(type: Data.self) ?? nil
+                }
                 attachments.staging.begin(.photo(PhotosPickerImageSelection(item: item)))
             }
             .photosPicker(
@@ -1045,19 +1010,7 @@ struct ChatScreen: View {
     }
 
     private func removeDraftItem(_ id: String) {
-        guard let index = draftItems.firstIndex(where: { $0.id == id })
-        else { return }
-        let item = draftItems.remove(at: index)
-        // Picker inserts put the remote path IN the draft; removing the
-        // tile removes the path too (paste images never had it there).
-        switch item {
-        case .image(_, let path, _), .file(_, _, let path):
-            if let range = draft.range(of: path) {
-                draft.removeSubrange(range)
-            }
-        case .quote:
-            break
-        }
+        draftItems.removeAll { $0.id == id }
     }
 
     private func sendDraft() {
