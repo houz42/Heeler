@@ -13,6 +13,9 @@ struct HostOnboardingView: View {
     /// `EventsSessionStatus.reconnecting`.
     let isManualReconnectInFlight: Bool
     let retryConnection: (@MainActor @Sendable () async -> Void)?
+    /// The address the live Console session is dialed through right now,
+    /// nil while disconnected. Supplied by the Console's single-source map.
+    let connectedAddress: String?
     @State private var store: HostOnboardingStore
     @State private var isEditing = false
     @State private var isConfirmingHostKeyReplacement = false
@@ -24,14 +27,26 @@ struct HostOnboardingView: View {
         connectionStatus: EventsSessionStatus? = nil,
         standingFailure: TransportError? = nil,
         isManualReconnectInFlight: Bool = false,
-        retryConnection: (@MainActor @Sendable () async -> Void)? = nil
+        retryConnection: (@MainActor @Sendable () async -> Void)? = nil,
+        /// Which address the Host's live Console session is dialed through
+        /// right now, or nil while disconnected. The Console's single-source
+        /// map (`ConsoleStore.hostConnectedAddresses`) supplies it: at most
+        /// one candidate can ever carry the in-use mark.
+        connectedAddress: String? = nil,
+        /// Pre-built store override for demo screenshots; nil builds the
+        /// production store keyed to this Host.
+        store: HostOnboardingStore? = nil
     ) {
         self.catalog = catalog
         self.connectionStatus = connectionStatus
         self.standingFailure = standingFailure
         self.isManualReconnectInFlight = isManualReconnectInFlight
         self.retryConnection = retryConnection
-        _store = State(initialValue: HostOnboardingStore(host: host))
+        self.connectedAddress = connectedAddress
+        _store = State(
+            initialValue: store ?? HostOnboardingStore(
+                host: host,
+                preferredAddresses: PreferredAddressStore(hostID: host.id)))
     }
 
     var body: some View {
@@ -42,6 +57,27 @@ struct HostOnboardingView: View {
                 LabeledContent(
                     "Auth",
                     value: store.host.authMethod == .deviceKey ? "Device Key" : "Password")
+            }
+
+            // Every way this Host can be reached — one line per address:
+            // status icon, the address, and an inline Use control on the
+            // reachable rows while a pick is pending. No separate pick
+            // card: picking happens on the rows themselves.
+            Section {
+                ForEach(store.orderedCandidates, id: \.self) { address in
+                    candidateRow(address)
+                }
+                if store.pendingAddressChoice != nil {
+                    Text(
+                        "Several paths answered. Use the one you want — "
+                            + "it becomes this Host's preferred path.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Addresses")
+            } footer: {
+                Text(addressSectionFooter)
             }
 
             if retryConnection != nil {
@@ -188,8 +224,15 @@ struct HostOnboardingView: View {
             set: { _ in })
     }
 
+    /// The summary line: user@primary:port, plus a count hint when more
+    /// paths exist so a multi-path Host is legible without scrolling.
     private var addressLine: String {
-        "\(store.host.username)@\(store.host.address):\(String(store.host.port))"
+        var line = "\(store.host.username)@\(store.host.address):\(String(store.host.port))"
+        let extra = store.host.candidateAddresses.count - 1
+        if extra > 0 {
+            line += "  +\(extra) more"
+        }
+        return line
     }
 
     private var sessionLine: String {
@@ -197,6 +240,68 @@ struct HostOnboardingView: View {
             return name
         }
         return "default"
+    }
+
+    /// One line per address: status icon, the address (with an inline,
+    /// subtle Preferred mark), and a Use button on every reachable row
+    /// that is not the live connection — picking is not a one-shot state,
+    /// the user can switch paths anytime a probe proved them reachable.
+    /// The connected row shows the bolt instead; unreachable rows show no
+    /// control (using them cannot succeed until they answer again).
+    private func candidateRow(_ address: String) -> some View {
+        let state = store.candidateStates[address] ?? .unknown
+        let isPreferred = store.orderedCandidates.first == address
+        let isInUse = connectedAddress == address
+        let isReachable =
+            state == .reachable
+            || store.pendingAddressChoice?.contains(address) ?? false
+        let pickable = isReachable && !isInUse
+        return HStack(spacing: 10) {
+            if isInUse {
+                Image(systemName: "bolt.fill")
+                    .foregroundStyle(.green)
+            } else {
+                switch state {
+                case .unknown:
+                    Image(systemName: "questionmark.circle")
+                        .foregroundStyle(.secondary)
+                case .probing:
+                    ProgressView()
+                        .controlSize(.small)
+                case .reachable:
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                case .unreachable:
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.red)
+                }
+            }
+            Text(address)
+            if isPreferred, !isInUse {
+                Text("Preferred")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if pickable {
+                Button("Use") {
+                    Task { await store.chooseAddress(address) }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+    }
+
+    private var addressSectionFooter: String {
+        if store.pendingAddressChoice != nil {
+            return "Several paths answered — pick the one to connect through."
+        }
+        if store.host.candidateAddresses.count > 1 {
+            return "Addresses are dialed in order until one answers. "
+                + "A pick made here becomes the preferred path."
+        }
+        return ""
     }
 
     private func retry() {

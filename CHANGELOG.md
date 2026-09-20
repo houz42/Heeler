@@ -8,6 +8,13 @@ Entries reference the issue that motivated them.
 ## [Unreleased]
 
 ### Added
+- A Host can carry additional addresses for the same machine (home LAN and
+  VPN, for example). The Host form gives each address its own row (add,
+  remove, reorder; the primary address always stays), the Host detail page
+  lists every address with its live probe state, and a connect that finds
+  several reachable paths asks which one to use — the pick becomes the
+  Host's preferred path going forward. Existing single-address Hosts are
+  unchanged.
 - Configure the in-Agent header (the title area on the chat and terminal
   screens) independently from the Agent list: a Same as agent list toggle
   keeps the current behavior, and turning it off offers a custom global

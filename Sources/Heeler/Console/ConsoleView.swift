@@ -175,6 +175,7 @@ struct ConsoleView: View {
                 connectionStatuses: console.hostStatuses,
                 standingFailures: console.hostStandingFailures,
                 latencies: console.hostLatencies,
+                connectedAddresses: console.hostConnectedAddresses,
                 manualReconnectInFlightHostIDs: manualReconnectInFlightHostIDs,
                 retryConnection: { await reconnectHost($0) },
                 // One discovery store per sheet presentation, probing over

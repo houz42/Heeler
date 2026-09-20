@@ -40,23 +40,53 @@ struct HostFormView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Host") {
+                Section {
                     TextField("Name (optional)", text: $draft.name)
                     TextField(
                         aliasPlaceholder,
                         text: $draft.alias,
                         prompt: Text(verbatim: aliasPlaceholder)
                     )
-                    TextField("Address", text: $draft.address)
-                        .textContentType(.URL)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
+                    ForEach($draft.addresses) { $row in
+                        HStack(spacing: 8) {
+                            TextField(
+                                row.id == draft.addresses.first?.id
+                                    ? "Address" : "Additional address",
+                                text: $row.address
+                            )
+                            .textContentType(.URL)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            Button(role: .destructive) {
+                                draft.removeAddress(id: row.id)
+                            } label: {
+                                Image(systemName: "minus.circle.fill")
+                            }
+                            .buttonStyle(.borderless)
+                            // The floor is one row: the last address can
+                            // never be removed, or the Host has nothing to
+                            // dial.
+                            .disabled(draft.addresses.count <= 1)
+                        }
+                    }
+                    .onMove { source, destination in
+                        draft.moveAddresses(from: source, to: destination)
+                    }
+                    Button {
+                        draft.addAddress()
+                    } label: {
+                        Label("Add address", systemImage: "plus.circle.fill")
+                    }
                     TextField("Port", text: $draft.port)
                         .keyboardType(.numberPad)
                     TextField("User", text: $draft.username)
                         .textContentType(.username)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
+                } header: {
+                    Text("Host")
+                } footer: {
+                    Text(addressFooter)
                 }
 
                 Section {
@@ -191,6 +221,13 @@ struct HostFormView: View {
             + "a loopback-only reverse tunnel. \(credentialRequirement) You confirm each "
             + "machine's host key fingerprint independently on first connect."
     }
+
+    private var addressFooter: String {
+        "Addresses are dialed top to bottom until one answers; drag to "
+            + "reorder, and removing the first promotes the next one. They "
+            + "should all name the same machine."
+    }
+
 
     @ViewBuilder
     private var deviceKeySection: some View {

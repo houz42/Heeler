@@ -65,6 +65,11 @@ struct SSHTransportSettings: Sendable {
     }
 
     var host: String
+    /// Ordered fallback addresses for the same physical Host, dialed by
+    /// `SSHTransportConnector` when `host` does not answer. `HeelerSSHTransport`
+    /// itself dials only `host`; it never sees this list.
+    /// Empty means a single-address Host.
+    var candidateAddresses: [String] = []
     var port: Int
     var username: String
     var credentials: SSHCredentials

@@ -59,6 +59,7 @@
 		1ADE76974DEBFD636189EE45 /* NotificationRelayEndpoint.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6876069E2B641D09FF1520E6 /* NotificationRelayEndpoint.swift */; };
 		1CF0CDEFC1C46433C1F4CF06 /* IBMPlexMono-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 6FF0DA87C092E176838C1EF7 /* IBMPlexMono-Bold.ttf */; };
 		1EDDD0227C94C6B7C2586A68 /* ImagePreparerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4889F56EFEFCC5004A55B4C /* ImagePreparerTests.swift */; };
+		1F1E82042C6ED570A2DE463B /* PreferredAddressStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DD90DCB811C1C5A330B4397 /* PreferredAddressStore.swift */; };
 		20D4C5FBFAE65D07558E684B /* TerminalThemeSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 921CA559141776BD0F02FDA7 /* TerminalThemeSettingsTests.swift */; };
 		210403DB0109B2C3E58A7975 /* StagingPhaseBarrierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37A3D919A216A921D420F00D /* StagingPhaseBarrierTests.swift */; };
 		2148C7A8E3AD93AD1943AD77 /* AppActivityCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFB39D40748D247CC747A83D /* AppActivityCoordinatorTests.swift */; };
@@ -277,6 +278,7 @@
 		91BF879F537B1B0DD0B5E78B /* HostConsoleProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88E1434C9C39A6419A3A0D79 /* HostConsoleProjection.swift */; };
 		9271ADB70DD9860389821A92 /* AgentDetailStatusChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1AA33CB009DE705AC691967 /* AgentDetailStatusChrome.swift */; };
 		94545D0497AD7AC234C37D67 /* AppModelActivityDriverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9F961651EBA7FE1BEE00647 /* AppModelActivityDriverTests.swift */; };
+		9470EE9B9EB5D39E246AD01E /* HostMultiPathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7CA03A7CE9C42D576671992 /* HostMultiPathTests.swift */; };
 		950179DD8580B71A6BBAF0C2 /* HerdrAPITypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F7065C3BE109D2F52AE3BC2 /* HerdrAPITypes.swift */; };
 		9583D6804B8922588AD7F154 /* HostDraftTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9D664871CA1A56418C106BC /* HostDraftTests.swift */; };
 		959E4E2F852C4CCF7A9770AA /* TerminalAttach.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB48C946E14722E93FAAA410 /* TerminalAttach.swift */; };
@@ -620,6 +622,7 @@
 		3A84F06EC2D4448E5DF72D76 /* TerminalTitleGlyphsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalTitleGlyphsTests.swift; sourceTree = "<group>"; };
 		3CB3A0C20671F436B322D0F3 /* SkillFrontmatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillFrontmatter.swift; sourceTree = "<group>"; };
 		3D59A41B6D776AFD3F2B4D41 /* ComposerRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerRouter.swift; sourceTree = "<group>"; };
+		3DD90DCB811C1C5A330B4397 /* PreferredAddressStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferredAddressStore.swift; sourceTree = "<group>"; };
 		3F4858DA258C7032AC64AD52 /* RelayContentStateDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayContentStateDecodeTests.swift; sourceTree = "<group>"; };
 		401F5B396F9F00568A4FFF88 /* AgentNotificationIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentNotificationIdentity.swift; sourceTree = "<group>"; };
 		414B652A16576BEDEE9AE000 /* ClosePaneStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClosePaneStoreTests.swift; sourceTree = "<group>"; };
@@ -811,6 +814,7 @@
 		A579E1DA3F59AFBC3ECAD69C /* SSHChannelAdmissionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHChannelAdmissionTests.swift; sourceTree = "<group>"; };
 		A5C6340A9A91119C998F64C3 /* SkillFrontmatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillFrontmatterTests.swift; sourceTree = "<group>"; };
 		A7103745D02C07787E49AC70 /* NotificationEnvelopeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationEnvelopeTests.swift; sourceTree = "<group>"; };
+		A7CA03A7CE9C42D576671992 /* HostMultiPathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostMultiPathTests.swift; sourceTree = "<group>"; };
 		A8CFADE255E1F943BC2DCED5 /* AgentActivityContentBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentActivityContentBuilderTests.swift; sourceTree = "<group>"; };
 		A919DFA1EA567B59F865D738 /* ChatCodeHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatCodeHighlighter.swift; sourceTree = "<group>"; };
 		A9B369B42301D8ACC286AC50 /* AgentListFieldsEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentListFieldsEditor.swift; sourceTree = "<group>"; };
@@ -1105,6 +1109,7 @@
 				F9D664871CA1A56418C106BC /* HostDraftTests.swift */,
 				DEABDC4E573B0F9EA67F64F1 /* HostListViewTests.swift */,
 				D3A7DD50C003CDD7220D86CE /* HostLiveActivityCoordinatorTests.swift */,
+				A7CA03A7CE9C42D576671992 /* HostMultiPathTests.swift */,
 				67D6865847B4D827038D1AF0 /* HostOnboardingPresentationTests.swift */,
 				4D961656A6D8B4F3964740BD /* HostOnboardingStoreTests.swift */,
 				2F48E9AF0870D90DF0829852 /* HostRetryPolicyTests.swift */,
@@ -1309,6 +1314,7 @@
 				1E9D993852C5C7BFE8515A46 /* HostOnboardingStore.swift */,
 				7FC1C5701C464ADBBAE0525D /* HostOnboardingView.swift */,
 				0AEC3D31861DABF40C05EE8D /* HostStore.swift */,
+				3DD90DCB811C1C5A330B4397 /* PreferredAddressStore.swift */,
 				FE0B6961E10487A3AC3547E9 /* Preflight.swift */,
 				96A41E40939438986DE30402 /* TransportConnector.swift */,
 			);
@@ -2120,6 +2126,7 @@
 				430EDF8111CC397CA9BD2008 /* PairingScanView.swift in Sources */,
 				D08663BD250210835FE7ED49 /* PhotosPickerImageSelection.swift in Sources */,
 				DDD5A27BA1126296E5AF7EAA /* PinnedAgentsStore.swift in Sources */,
+				1F1E82042C6ED570A2DE463B /* PreferredAddressStore.swift in Sources */,
 				72E99C92D2255267E6444485 /* PrefixSwipeRecognizer.swift in Sources */,
 				2292C89F605CE42073D49B11 /* Preflight.swift in Sources */,
 				F1896998EA513073CF4EE713 /* PushRegistrationStore.swift in Sources */,
@@ -2312,6 +2319,7 @@
 				9583D6804B8922588AD7F154 /* HostDraftTests.swift in Sources */,
 				B7C3D46ED9FE621924D10C7D /* HostListViewTests.swift in Sources */,
 				18266687C19C47984496DD47 /* HostLiveActivityCoordinatorTests.swift in Sources */,
+				9470EE9B9EB5D39E246AD01E /* HostMultiPathTests.swift in Sources */,
 				388498BDF8F2848EA515819B /* HostOnboardingPresentationTests.swift in Sources */,
 				D6620368048468EFA09B4142 /* HostOnboardingStoreTests.swift in Sources */,
 				A53E6BD53A72B1733CAFE699 /* HostRetryPolicyTests.swift in Sources */,

@@ -33,6 +33,9 @@ struct HostOnboardingStoreTests {
             knownHosts: knownHosts,
             credentials: HostCredentialsProvider(
                 deviceKeys: DeviceKeyStore(secrets: InMemorySecretStore()), secrets: secrets),
+            preferredAddresses: PreferredAddressStore(
+                defaults: try #require(UserDefaults(suiteName: "hm-onboarding-\(host.id.uuidString)")),
+                hostID: host.id),
             fingerprintTimeout: fingerprintTimeout)
         return (store, connector)
     }
@@ -103,15 +106,19 @@ struct HostOnboardingStoreTests {
 
     @Test func corruptDeviceKeyExplainsTheReplacementRecovery() async throws {
         let account = "corrupt-device-key"
+        let host = Host.fixture(authMethod: .deviceKey)
         let secrets = InMemorySecretStore()
         try secrets.write(Data("not-an-ed25519-key".utf8), account: account)
         let connector = FakeTransportConnector(outcome: .connects(pingResult: Self.healthyPing))
         let store = HostOnboardingStore(
-            host: .fixture(authMethod: .deviceKey),
+            host: host,
             connector: connector,
             knownHosts: InMemoryKnownHostsStore(),
             credentials: HostCredentialsProvider(
-                deviceKeys: DeviceKeyStore(secrets: secrets, account: account), secrets: secrets))
+                deviceKeys: DeviceKeyStore(secrets: secrets, account: account), secrets: secrets),
+            preferredAddresses: PreferredAddressStore(
+                defaults: try #require(UserDefaults(suiteName: "hm-onboarding-corrupt-\(host.id.uuidString)")),
+                hostID: host.id))
 
         await store.runChecks()
 

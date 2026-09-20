@@ -23,6 +23,12 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
     /// while this field remains editable for older herdr versions. Blank
     /// means the default herdr session.
     var sessionName: String
+    /// Alternative addresses that reach the same physical Host over a
+    /// different network path (home LAN vs VPN, for example). Dialed in
+    /// order after `address`; see ``candidateAddresses``. Empty means the
+    /// Host has exactly one way to be reached, like every Host saved before
+    /// this field existed.
+    var additionalAddresses: [String]
     /// Optional Jump Host this Host is reached through. Blank means a direct
     /// connection; when set, `address`/`port` are resolved from the Jump Host
     /// and normally point at a loopback port held open by a reverse tunnel.
@@ -42,7 +48,7 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
     /// on decode and drops it on the Host's next save.
     private enum CodingKeys: String, CodingKey {
         case id, name, address, port, username, authMethod, sessionName
-        case jumpAddress, jumpPort, jumpUsername, alias
+        case additionalAddresses, jumpAddress, jumpPort, jumpUsername, alias
     }
 
     /// Whether this Host is reached through a Jump Host.
@@ -56,6 +62,15 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         return trimmed.isEmpty ? username : trimmed
     }
 
+    /// The dialing order: the stored default `address` first, then each
+    /// additional address in stored order. The stored default stays first so
+    /// existing Hosts never change which path wins while it works.
+    var candidateAddresses: [String] {
+        ([address] + additionalAddresses)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
     init(
         id: UUID = UUID(),
         name: String = "",
@@ -64,6 +79,7 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         username: String,
         authMethod: AuthMethod = .deviceKey,
         sessionName: String = "",
+        additionalAddresses: [String] = [],
         jumpAddress: String = "",
         jumpPort: Int = 22,
         jumpUsername: String = "",
@@ -76,6 +92,7 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         self.username = username
         self.authMethod = authMethod
         self.sessionName = sessionName
+        self.additionalAddresses = Self.normalizedAdditionalAddresses(additionalAddresses)
         self.jumpAddress = jumpAddress
         self.jumpPort = jumpPort
         self.jumpUsername = jumpUsername
@@ -91,6 +108,11 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         username = try container.decode(String.self, forKey: .username)
         authMethod = try container.decode(AuthMethod.self, forKey: .authMethod)
         sessionName = try container.decodeIfPresent(String.self, forKey: .sessionName) ?? ""
+        // Absent in Hosts saved before multi-path addresses; those Hosts
+        // keep their single reachable address unchanged.
+        additionalAddresses =
+            try container.decodeIfPresent([String].self, forKey: .additionalAddresses)
+            .map(Self.normalizedAdditionalAddresses) ?? []
         // Absent in Hosts saved before jump-host support; a blank address
         // decodes as the direct connection those Hosts already had.
         jumpAddress = try container.decodeIfPresent(String.self, forKey: .jumpAddress) ?? ""
@@ -116,6 +138,13 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    /// An additional address only counts when it dials: trimmed, empty
+    /// dropped. One normalization so decode, the form, and the dialer all
+    /// agree on what a candidate is.
+    private static func normalizedAdditionalAddresses(_ raw: [String]) -> [String] {
+        raw.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+
     var displayName: String {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         return trimmed.isEmpty ? "\(username)@\(address)" : trimmed
@@ -125,11 +154,24 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
     /// (itself falling back to `user@address`) otherwise. Decode and the
     /// form already normalize stored aliases, so the blank check only
     /// guards direct construction.
+    ///
+    /// A label that exactly matches one of the Host's candidate addresses
+    /// is skipped: an address in the title slot is address-as-label
+    /// pollution (typed into the wrong field), never a name, and showing
+    /// it turns the Hosts list into a list of addresses with the real name
+    /// nowhere. The chain falls to the next label instead.
     var displayAliasName: String {
-        guard let alias, !alias.trimmingCharacters(in: .whitespaces).isEmpty else {
-            return displayName
+        let candidates = Set(candidateAddresses.map { $0.lowercased() })
+        if let alias, !alias.trimmingCharacters(in: .whitespaces).isEmpty,
+            !candidates.contains(alias.lowercased())
+        {
+            return alias
         }
-        return alias
+        let trimmedName = name.trimmingCharacters(in: .whitespaces)
+        if !trimmedName.isEmpty, !candidates.contains(trimmedName.lowercased()) {
+            return trimmedName
+        }
+        return "\(username)@\(address)"
     }
 
     /// The herdr socket this Host's session name points at.
