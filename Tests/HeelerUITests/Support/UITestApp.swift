@@ -75,9 +75,9 @@ enum UITestFixtures {
     /// The multipath Host the form routes edit.
     static let hostFormTitle = "Edit Host"
     static let hostFormExistingAddress = "192.168.31.71"
-    /// Toolbar buttons on the Console (labelled, not identified).
-    static let consoleToolbarHosts = "Hosts"
-    static let consoleToolbarSettings = "Settings"
+    /// The compact top-left destination selector on the Console (#A): the
+    /// sheet-era Hosts/Settings toolbar buttons it replaced are gone.
+    static let destinationSelector = "Agents, switch destination"
 }
 
 /// Timeout budget: one shared set so tests stay snappy but not flaky.

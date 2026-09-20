@@ -20,9 +20,9 @@ final class AgentsListSmokeTests: XCTestCase {
     func testAgentsListShowsFixtureRows() {
         waitToExist(app.staticTexts[UITestFixtures.agentRows[0]])
         waitToExist(app.staticTexts[UITestFixtures.agentRows[4]])
-        // Toolbar surfaces the primary actions.
-        waitToExist(app.buttons[UITestFixtures.consoleToolbarHosts])
-        waitToExist(app.buttons[UITestFixtures.consoleToolbarSettings])
+        // The compact destination selector carries the destinations
+        // (#A); the sheet-era Hosts/Settings toolbar buttons are gone.
+        waitToExist(app.buttons[UITestFixtures.destinationSelector])
         captureScreenshot(app, "agents-list")
     }
 

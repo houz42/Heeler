@@ -34,7 +34,7 @@ final class NavigationRedesignProofTests: XCTestCase {
 
         // The sheet-era toolbar buttons are gone; the compact selector
         // carries the destinations instead.
-        let menu = app.buttons["Agents, switch destination"].firstMatch
+        let menu = app.buttons[UITestFixtures.destinationSelector].firstMatch
         waitToExist(menu)
         captureScreenshot(app, "nav-phone-menu-closed")
 
