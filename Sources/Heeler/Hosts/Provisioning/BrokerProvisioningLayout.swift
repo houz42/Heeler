@@ -146,13 +146,6 @@ struct BrokerProvisioningLayout: Sendable, Equatable {
         "\(versionsDirectory)/\(activeVersion)/broker/bin/broker"
     }
 
-    /// The systemd/launchd unit's file path on the Host.
-    var unitFilePath: String {
-        switch platform {
-        case .linux: "\(configRoot)/../systemd/user/\(serviceName).service"
-        case .macOS: "~/Library/LaunchAgents/\(serviceName).plist"
-        }
-    }
 
     // MARK: - Command builders
 
@@ -410,6 +403,20 @@ struct BrokerProvisioningLayout: Sendable, Equatable {
                 + "> \(unitInstallPath).tmp "
                 + "&& chmod 600 \(unitInstallPath).tmp "
                 + "&& mv \(unitInstallPath).tmp \(unitInstallPath)"
+        }
+    }
+
+    /// The unit file path as the platform writes it (used for both the
+    /// unit write and uninstall). Production macOS uses the real
+    /// LaunchAgents dir; dev layouts stage under their own root so
+    /// development never touches the user's agents.
+    var unitInstallPath: String {
+        switch platform {
+        case .linux: "\(configRoot)/../systemd/user/\(serviceName).service"
+        case .macOS:
+            usesRealLaunchAgentsDir
+                ? "~/Library/LaunchAgents/\(serviceName).plist"
+                : "\(configRoot)/\(serviceName).plist"
         }
     }
 
