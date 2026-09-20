@@ -241,6 +241,21 @@ targets:
       - package: GhosttyTerminal
       - package: MarkdownUI
       - package: Splash
+  # Persistent UI-proof harness (see Tests/HeelerUITests/USAGE.md). A
+  # separate bundle-ui-testing target: XCUITest drives the installed app
+  # through the accessibility tree, so proof tests (typing, navigation,
+  # sheets, trust alerts) live here instead of throwaway temp targets.
+  HeelerUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - Tests/HeelerUITests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: dev.houz42.heeler.uitests
+    dependencies:
+      - target: Heeler
 
 schemes:
   Heeler:
@@ -260,3 +275,14 @@ schemes:
         HEELER_SSH_E2E_REQUIRED: $(HEELER_SSH_E2E_REQUIRED)
     run:
       config: Debug
+
+  # The Heeler scheme's test action stays HeelerTests-only so every
+  # worker's default full-suite run is unaffected; UI proofs run via
+  # this dedicated scheme (USAGE.md's run command).
+  HeelerUITests:
+    build:
+      targets:
+        HeelerUITests: all
+    test:
+      targets:
+        - HeelerUITests
