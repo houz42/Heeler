@@ -40,10 +40,21 @@ struct ToolCall: Sendable, Equatable, Identifiable {
 /// One user-visible content block of a chat message. Kept as an ordered
 /// per-message array so an assistant turn can render (thinking, toolCall,
 /// toolCall, text) in its original order.
+/// An image block's reference: the wire keeps bytes OUT of the row
+/// model (an id the fetch seam resolves; the UI loads on demand).
+struct ChatImageRef: Sendable, Equatable, Identifiable {
+    let ref: String
+    let mimeType: String
+    var byteLength: Int?
+
+    var id: String { ref }
+}
+
 enum ChatBlock: Sendable, Equatable {
     case text(String)
     case thinking(String)
     case toolCall(ToolCall)
+    case image(ChatImageRef)
 }
 
 /// A `role:"toolResult"` record, flattened for display: the id it pairs to,

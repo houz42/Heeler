@@ -51,6 +51,9 @@ struct HostDraft: Equatable, Sendable {
     var jumpUsername = ""
     /// Optional presentation alias; blank means no alias.
     var alias = ""
+    /// Optional native chat broker socket path on the Host; blank means
+    /// no broker (the chat surface stays on the transcript backend).
+    var brokerChatSocketPath = ""
 
     init() {}
 
@@ -71,6 +74,7 @@ struct HostDraft: Equatable, Sendable {
         jumpPort = String(host.jumpPort)
         jumpUsername = host.jumpUsername
         alias = host.alias ?? ""
+        brokerChatSocketPath = host.brokerChatSocketPath
     }
 
     var portNumber: Int? {
@@ -127,7 +131,8 @@ struct HostDraft: Equatable, Sendable {
             jumpAddress: jumpAddress.trimmingCharacters(in: .whitespaces),
             jumpPort: jumpPortNumber ?? 22,
             jumpUsername: jumpUsername.trimmingCharacters(in: .whitespaces),
-            alias: trimmedAlias)
+            alias: trimmedAlias,
+            brokerChatSocketPath: brokerChatSocketPath.trimmingCharacters(in: .whitespaces))
     }
 
     /// The form's addresses as dialed: trimmed, empty entries dropped, order

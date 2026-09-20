@@ -21,6 +21,16 @@ enum JSONValue: Sendable, Equatable {
         guard case .string(let value) = self else { return nil }
         return value
     }
+
+    var boolValue: Bool? {
+        guard case .bool(let value) = self else { return nil }
+        return value
+    }
+
+    var intValue: Int? {
+        guard case .number(let value) = self else { return nil }
+        return Int(exactly: value)
+    }
 }
 
 extension JSONValue: Encodable {

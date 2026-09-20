@@ -127,8 +127,6 @@ final class ChatStore {
         let (messages, results) = OmpTranscriptParser.parse(lines: lines)
         content.messages.append(contentsOf: messages)
         content.toolResults.append(contentsOf: results)
-        content.pending = OmpTranscriptParser.askPendingInteractions(
-            messages: content.messages, toolResults: content.toolResults)
         return content
     }
 
@@ -143,8 +141,6 @@ final class ChatStore {
         let (messages, results) = OmpTranscriptParser.parse(lines: lines)
         content.messages.insert(contentsOf: messages, at: 0)
         content.toolResults.insert(contentsOf: results, at: 0)
-        content.pending = OmpTranscriptParser.askPendingInteractions(
-            messages: content.messages, toolResults: content.toolResults)
         return content
     }
 

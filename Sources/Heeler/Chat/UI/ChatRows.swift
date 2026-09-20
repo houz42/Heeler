@@ -15,8 +15,6 @@ fileprivate enum ChatWash {
     static func turn(isDark: Bool) -> Double { isDark ? 0.16 : 0.07 }
     /// The orange wash behind the blocked-agent pending card.
     static func pending(isDark: Bool) -> Double { isDark ? 0.12 : 0.06 }
-    /// The dimmed orange wash behind an answered pending card.
-    static func pendingAnswered(isDark: Bool) -> Double { isDark ? 0.05 : 0.03 }
 }
 
 /// One full-width chat row. Rows are plain (no bubbles, no avatars) — the
@@ -45,7 +43,11 @@ struct ChatRowView: View {
                 ChatResultBody(result: result)
             }
         case .pending(let interaction):
-            ChatPendingRow(interaction: interaction, answer: interaction.answer, choose: { _ in })
+            ChatPendingRow(interaction: interaction, choose: { _ in })
+        case .image:
+            // Handled by the screen (fetch seam + reader); the plain
+            // row renderer never sees it.
+            EmptyView()
         }
     }
 }
@@ -274,122 +276,44 @@ struct ChatCollapsibleRow<Content: View>: View {
 
 /// The blocked-agent affordance: the raw question plus one tappable button
 /// per option. Visible at every detail level — it is the conversation's live
-/// edge. While unanswered it is loud (orange wash, full-width buttons); the
-/// answered form dims to history, marks the chosen option, and drops the
-/// tap targets.
+/// edge.
 struct ChatPendingRow: View {
     let interaction: PendingInteraction
-    /// The effective answer (local choice or the transcript's own record);
-    /// non-nil renders the answered form.
-    let answer: String?
-    /// True while the chosen option's delivery is in flight: buttons show
-    /// progress and ignore taps.
-    var isDelivering: Bool = false
-    /// The user-visible text for the last failed delivery, if any.
-    var failureMessage: String? = nil
-    let choose: (PendingInteraction.Option) -> Void
+    let choose: (String) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
     private var isDark: Bool { colorScheme == .dark }
 
-    private var isAnswered: Bool { answer != nil }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label(
-                isAnswered ? "Answered" : "Waiting for your answer",
-                systemImage: isAnswered ? "checkmark.circle" : "questionmark.circle"
-            )
-            .font(.footnote.weight(.semibold))
-            .foregroundStyle(isAnswered ? Color.secondary : Color.orange)
+            Label("Waiting for your answer", systemImage: "questionmark.circle")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.orange)
             ChatBlockText(interaction.question, style: .assistant)
             if !interaction.options.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
-                    ForEach(interaction.options, id: \.label) { option in
-                        optionButton(option)
+                    ForEach(interaction.options, id: \.self) { option in
+                        Button {
+                            choose(option)
+                        } label: {
+                            Text(option)
+                                .font(.subheadline)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 8))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.primary)
+                        .accessibilityLabel("Answer: \(option)")
                     }
                 }
-            }
-            if let failureMessage, !isAnswered {
-                Label(failureMessage, systemImage: "exclamationmark.triangle")
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-                    // The failure text is selectable so it can be read in
-                    // full even when it runs long.
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(12)
         .background(
-            .orange.opacity(
-                isAnswered ? ChatWash.pendingAnswered(isDark: isDark)
-                    : ChatWash.pending(isDark: isDark)),
+            .orange.opacity(ChatWash.pending(isDark: isDark)),
             in: RoundedRectangle(cornerRadius: 10))
-        .opacity(isAnswered ? 0.6 : 1)
-    }
-
-    /// One option: a full-width rounded button while the question blocks,
-    /// a dimmed marked line once answered. Descriptions (omp's `ask`
-    /// options carry them) ride as secondary text inside the target.
-    @ViewBuilder
-    private func optionButton(_ option: PendingInteraction.Option) -> some View {
-        if isAnswered {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(
-                    systemName: option.label == answer
-                        ? "checkmark.circle.fill" : "circle"
-                )
-                .imageScale(.small)
-                .foregroundStyle(option.label == answer ? .orange : .secondary)
-                optionText(option)
-            }
-        } else {
-            Button {
-                choose(option)
-            } label: {
-                HStack(alignment: .center, spacing: 8) {
-                    if isDelivering {
-                        ProgressView()
-                            .controlSize(.mini)
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(option.label)
-                            .font(.subheadline)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        if let description = option.description {
-                            Text(description)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 8))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.primary)
-            // The whole button is the tap target — the background wash and
-            // both text lines all hit. Disabled only while this question's
-            // delivery is in flight; a Button keeps its accessibility
-            // label either way.
-            .disabled(isDelivering)
-            .opacity(isDelivering ? 0.55 : 1)
-            .accessibilityLabel("Answer: \(option.label)")
-        }
-    }
-
-    @ViewBuilder
-    private func optionText(_ option: PendingInteraction.Option) -> some View {
-        Text(option.label)
-            .font(.subheadline)
-            .strikethrough(false)
-        if let description = option.description {
-            Text(description)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
     }
 }
 
@@ -568,7 +492,7 @@ struct ChatBubbleBody: View {
                     router: router,
                     // iMessage outgoing convention: saturated blue fill,
                     // white text (the markdown body inherits the color).
-                    foregroundOverride: isUser ? .white : nil)
+                    foregroundOverride: nil)
             }
         }
         .padding(.horizontal, 12)
@@ -576,9 +500,17 @@ struct ChatBubbleBody: View {
         .background(fill, in: ChatBubbleSilhouette.shape(userSide: isUser))
     }
 
+    /// The approved preview's --bubble values: #eaf0ec light /
+    /// #31483b dark — soft green-neutral paper, NOT vivid blue.
+    private static let userBubbleTint = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0x31 / 255, green: 0x48 / 255, blue: 0x3B / 255, alpha: 1)
+            : UIColor(red: 0xEA / 255, green: 0xF0 / 255, blue: 0xEC / 255, alpha: 1)
+    })
+
     private var fill: some ShapeStyle {
         isUser
-            ? AnyShapeStyle(Color.blue)
+            ? AnyShapeStyle(Self.userBubbleTint)
             : AnyShapeStyle(.fill.tertiary)
     }
 }
@@ -593,8 +525,10 @@ struct ChatBubbleBody: View {
 struct ChatBubbleView: View {
     let bubble: ChatBubble
     let router: OpenRouterCore
-    var isFocused: Bool = false
-    var onLongPress: (() -> Void)? = nil
+    /// Short tap toggles the inline actions rail (final interaction
+    /// spec). Long press is NOT attached — it stays native text
+    /// selection.
+    var onToggleActions: (() -> Void)? = nil
 
     @State private var rowWidth: CGFloat = 320
     private var isUser: Bool { bubble.role == .user }
@@ -606,150 +540,7 @@ struct ChatBubbleView: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { _, w in
                 rowWidth = w
             }
-            .opacity(isFocused ? 0 : 1)
-            .onLongPressGesture { onLongPress?() }
-    }
-}
-
-/// The iMessage long-press focus state: the transcript blurs and dims
-/// behind a light veil, the selected bubble lifts above it with the
-/// Tapback pill near-kissing above (reactions only) and the action menu
-/// card below (Quote / Copy / Select rows). Tapping the veil dismisses.
-/// Reactions deliver as the emoji plus a block-quoted reference to this
-/// message; Quote prefills the composer with the quoted draft (caret
-/// after the quote); Copy puts the plain text on the pasteboard; Select
-/// swaps the lifted bubble to selectable plain text.
-struct ChatBubbleFocusLayer: View {
-    let bubble: ChatBubble
-    let router: OpenRouterCore
-    /// Sends one quick reaction's composed message. Nil hides the pill.
-    var react: ((String) -> Void)? = nil
-    /// Prefills the composer with the quoted text. Nil hides Quote.
-    var quote: ((String) -> Void)? = nil
-    /// Puts the text on the pasteboard. Nil hides Copy.
-    var copy: ((String) -> Void)? = nil
-    let dismiss: () -> Void
-
-    @State private var selectsText = false
-    @Environment(\.colorScheme) private var colorScheme
-    private var isDark: Bool { colorScheme == .dark }
-    private var isUser: Bool { bubble.role == .user }
-
-    var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                // The veil covers edge to edge (its own ignore of the
-                // safe areas); the content column respects them, so the
-                // pill and menu sit inside the reachable screen.
-                veil
-                VStack(alignment: isUser ? .trailing : .leading, spacing: 8) {
-                    reactionPill
-                    // The lifted bubble clamps to the space the pill and
-                    // menu leave, and scrolls when it is taller than
-                    // that — so the pill stays pinned under the top
-                    // inset and the menu above the bottom, reachable
-                    // regardless of message height (iMessage behavior).
-                    ScrollView {
-                        ChatBubbleBody(
-                            bubble: bubble, router: router,
-                            selectable: selectsText)
-                            .frame(
-                                maxWidth: geo.size.width * 0.78,
-                                alignment: .leading)
-                            .scaleEffect(1.03)
-                            .shadow(color: .black.opacity(0.25), radius: 18, y: 8)
-                    }
-                    .scrollBounceBehavior(.basedOnSize)
-                    .frame(maxHeight: .infinity)
-                    actionMenu
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-    }
-
-    private var veil: some View {
-        Rectangle()
-            .fill(.ultraThinMaterial)
-            .overlay(
-                Rectangle().fill(
-                    Color(white: isDark ? 0 : 1)
-                        .opacity(isDark ? 0.55 : 0.35)))
-            .ignoresSafeArea()
-            .onTapGesture(perform: dismiss)
-    }
-
-    /// iMessage's Tapback pill: only the reactions, generous glyph
-    /// circles on a fully-rounded capsule, near-kissing above the bubble.
-    private var reactionPill: some View {
-        HStack(spacing: 10) {
-            ForEach(ChatReaction.allCases, id: \.rawValue) { reaction in
-                Button {
-                    react?(reaction.message(for: bubble.text))
-                    dismiss()
-                } label: {
-                    Text(reaction.rawValue)
-                        .font(.system(.title3))
-                        .frame(width: 34, height: 34)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .disabled(react == nil)
-                .accessibilityLabel(reaction.accessibilityLabel)
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .background(.regularMaterial, in: Capsule())
-        .shadow(color: .black.opacity(0.2), radius: 10, y: 4)
-    }
-
-    /// iMessage's text-action menu: Quote / Copy / Select as context-menu
-    /// rows (SF-symbol icon left, label right) in a compact card sized to
-    /// its rows — never the full transcript width — below the bubble,
-    /// its edge flush with the bubble's (leading under agent bubbles,
-    /// trailing under user bubbles, via the VStack's alignment).
-    private var actionMenu: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            menuRow("text.quote", label: "Quote") {
-                quote?(bubble.text)
-                dismiss()
-            }
-            .disabled(quote == nil)
-            menuRow("doc.on.doc", label: "Copy") {
-                copy?(bubble.text)
-                dismiss()
-            }
-            .disabled(copy == nil)
-            menuRow("textformat", label: "Select") {
-                selectsText = true
-            }
-        }
-        .frame(width: 220)
-        .padding(6)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-        .shadow(color: .black.opacity(0.2), radius: 10, y: 4)
-    }
-
-    private func menuRow(
-        _ systemImage: String, label: String, action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 15, weight: .medium))
-                    .frame(width: 24)
-                Text(label)
-                    .font(.system(.body))
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 11)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
+            .onTapGesture { onToggleActions?() }
     }
 }
 
@@ -810,19 +601,7 @@ private enum ChatRowPreviewFixture {
         let pending = [
             PendingInteraction(
                 question: "Run the full CheckoutFlowTests suite before committing?",
-                options: [
-                    PendingInteraction.Option(
-                        label: "Run the tests",
-                        description: "About 40s; catches regressions before they land."),
-                    PendingInteraction.Option(label: "Commit without tests"),
-                ]),
-            PendingInteraction(
-                question: "Squash the two fixup commits before pushing?",
-                options: [
-                    PendingInteraction.Option(label: "Squash"),
-                    PendingInteraction.Option(label: "Keep separate"),
-                ],
-                answer: "Squash"),
+                options: ["Run the tests", "Commit without tests"]),
         ]
         return ChatContent(
             messages: messages, toolResults: results, pending: pending)
@@ -879,4 +658,585 @@ private struct ChatRowsPreviewSurface: View {
         .padding()
         .background(.bar)
         .preferredColorScheme(.light)
+}
+
+// MARK: - Assistant article render (conversation redesign)
+//
+// Design contract (approved prototype, verbatim): ASSISTANT messages are
+// NOT bubbles — full-width text article, no background, no border; small
+// author line (11pt, weight 650, accent) then the answer (15pt,
+// line-height 1.65). USER messages keep the compact right bubble.
+// Affordances (long-press pill/menu) still apply to assistant content —
+// article-ness is the render, not the interactions.
+
+struct ChatAssistantArticleView: View {
+    let bubble: ChatBubble
+    let router: OpenRouterCore
+    /// e.g. "Heeler · omp" — from the real runtime identity, never guessed.
+    var authorLabel: String
+    /// Short tap toggles the inline actions rail. Long press stays
+    /// native text selection.
+    var onToggleActions: (() -> Void)? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(authorLabel)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color(
+                    red: 0x22 / 255.0, green: 0x64 / 255.0, blue: 0x4D / 255.0))
+            ChatLinkText(bubble.text, style: .assistant, router: router)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onTapGesture { onToggleActions?() }
+    }
+}
+
+// MARK: - Local helpful reactions
+
+/// Per-message "Helpful" marks, persisted on-device (UserDefaults).
+/// There is NO feedback contract yet — this is a real LOCAL reaction
+/// (survives restarts, honestly local), never presented as sent.
+struct ChatHelpfulReactions {
+    private let key = "chat.helpfulMessages.v1"
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    private func ids() -> Set<String> {
+        Set(defaults.stringArray(forKey: key) ?? [])
+    }
+
+    func contains(_ id: String) -> Bool {
+        ids().contains(id)
+    }
+
+    /// Toggles; returns the new state.
+    @discardableResult
+    func toggle(_ id: String) -> Bool {
+        var set = ids()
+        let nowOn: Bool
+        if set.contains(id) {
+            set.remove(id)
+            nowOn = false
+        } else {
+            set.insert(id)
+            nowOn = true
+        }
+        defaults.set(Array(set), forKey: key)
+        return nowOn
+    }
+}
+
+// MARK: - Message actions rail (final interaction spec)
+
+/// The inline Copy/Quote/Helpful rail toggled under a selected message
+/// by a SHORT TAP. One rail open at a time; outside tap dismisses; long
+/// press is reserved for native text selection. Copy/Quote carry the
+/// message's PLAIN text (no author lines, file labels, or other
+/// chrome); Helpful is an honest stub — no feedback contract exists yet,
+/// so it confirms locally and sends nothing.
+struct ChatMessageActionsRail: View {
+    var isAssistant: Bool
+    /// Quote needs the composer (a place for the quoted draft to
+    /// land); read-only transcripts keep Copy only.
+    var supportsQuote: Bool
+    /// True when THIS message is already marked helpful locally — the
+    /// button shows the actual state, never a fake success.
+    var isMarkedHelpful: Bool
+    var copy: () -> Void
+    var quote: () -> Void
+    var helpful: () -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+            railButton("Copy", icon: "doc.on.doc", action: copy)
+            if supportsQuote {
+                railButton("Quote", icon: "text.quote", action: quote)
+            }
+            if isAssistant {
+                railButton(
+                    isMarkedHelpful ? "Helpful ✓" : "Helpful",
+                    icon: "hand.thumbsup",
+                    action: helpful)
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(
+            Color(.secondarySystemBackground),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Actions for selected message")
+    }
+
+    private func railButton(
+        _ title: String, icon: String, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: icon).font(.caption2)
+                Text(title).font(.footnote.weight(.medium))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Color(uiColor: .label).opacity(0.8))
+        .accessibilityLabel(title)
+    }
+}
+
+// MARK: - Pending question card (conversation redesign)
+
+private struct OptionFlowLayout: Layout {
+    var spacing: CGFloat = 8
+    func sizeThatFits(
+        proposal: ProposedViewSize, subviews: Subviews, cache: inout ()
+    ) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            x += (x > 0 ? spacing : 0) + size.width
+            rowHeight = max(rowHeight, size.height)
+        }
+        return CGSize(width: maxWidth == .infinity ? x : maxWidth, height: y + rowHeight)
+    }
+    func placeSubviews(
+        in bounds: CGRect, proposal: ProposedViewSize,
+        subviews: Subviews, cache: inout ()
+    ) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            if x > bounds.minX { x += spacing }
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(size))
+            x += size.width
+            rowHeight = max(rowHeight, size.height)
+        }
+    }
+}
+
+private func optionIsCompact(_ label: String) -> Bool {
+    label.count <= 24 && !label.contains("\n")
+}
+
+/// The redesigned pending-question card: border + paper + eyebrow with
+/// step dots + question + quiet instruction + adaptive options. Short
+/// labels flow compactly; descriptive labels stack full-width.
+struct AgentPendingQuestionCard: View {
+    let interaction: PendingInteraction
+    /// 1-based current question index.
+    var step: Int
+    var stepCount: Int
+    var isMultiSelect: Bool = false
+    var selectedOptionIds: Set<String> = []
+    var choose: (String) -> Void
+    var confirmMultiSelect: (() -> Void)? = nil
+    /// Back to the previous question (choices preserved by the owner).
+    var back: (() -> Void)? = nil
+    /// Cancel the whole ask (small secondary; the real
+    /// cancelInteraction path — nil hides it honestly).
+    var cancel: (() -> Void)? = nil
+    /// A failed/stale submit or cancel — surfaced HERE; choices are
+    /// retained so the user can retry or Back.
+    var errorMessage: String? = nil
+
+    private var questions: [PendingAskQuestion] {
+        interaction.effectiveQuestions
+    }
+    private var currentQuestion: PendingAskQuestion? {
+        let list = questions
+        guard step >= 1, step <= list.count else { return list.first }
+        return list[step - 1]
+    }
+
+    private var accent: Color {
+        Color(red: 0x22 / 255.0, green: 0x64 / 255.0, blue: 0x4D / 255.0)
+    }
+    private var cardBorder: Color {
+        Color(red: 0xC4 / 255.0, green: 0xD5 / 255.0, blue: 0xCB / 255.0)
+    }
+    private var optionBorder: Color {
+        Color(red: 0xCA / 255.0, green: 0xD5 / 255.0, blue: 0xCD / 255.0)
+    }
+
+    var body: some View {
+        // Tightened card (refinement): compressed header, gaps, and
+        // question (body sizes unchanged; only chrome whitespace
+        // shrank). Options keep the 44 pt floor.
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 6) {
+                Text("Your input needed · \(step) of \(stepCount)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(accent)
+                Spacer(minLength: 0)
+                HStack(spacing: 4) {
+                    ForEach(0..<max(stepCount, 1), id: \.self) { index in
+                        Circle()
+                            .fill(index < step ? accent : Color.secondary.opacity(0.25))
+                            .frame(width: 4, height: 4)
+                    }
+                }
+            }
+            Text(currentQuestion?.text ?? interaction.question)
+                .font(.subheadline.weight(.semibold))
+                .fixedSize(horizontal: false, vertical: true)
+            if isMultiSelect {
+                Text("Select one or more, then confirm.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            optionsView
+            if let errorMessage {
+                Label(errorMessage, systemImage: "exclamationmark.triangle")
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
+            if step > 1 || cancel != nil {
+                HStack {
+                    if let back, step > 1 {
+                        Button(action: back) {
+                            Label("Back", systemImage: "chevron.left")
+                                .font(.footnote)
+                        }
+                        .accessibilityLabel("Previous question")
+                    }
+                    Spacer(minLength: 0)
+                    if let cancel {
+                        Button(action: cancel) {
+                            Text("Cancel")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        .accessibilityLabel("Cancel this question")
+                    }
+                }
+            }
+            if isMultiSelect, let confirmMultiSelect {
+                Button(action: confirmMultiSelect) {
+                    Text("Confirm")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                        .background(accent, in: RoundedRectangle(cornerRadius: 9))
+                        .foregroundStyle(.white)
+                }
+                .disabled(selectedOptionIds.isEmpty)
+                .accessibilityLabel("Confirm answers")
+            }
+        }
+        .padding(12)
+        .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 15))
+        .overlay(RoundedRectangle(cornerRadius: 15).strokeBorder(cardBorder, lineWidth: 1))
+    }
+
+    @ViewBuilder
+    private var optionsView: some View {
+        let options = currentQuestion?.options ?? []
+        if options.allSatisfy({ $0.label.count <= 24 }) {
+            OptionFlowLayout(spacing: 8) {
+                ForEach(options) { option in
+                    optionButton(label: option.label, id: option.id)
+                }
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(options) { option in
+                    optionButton(label: option.label, id: option.id, fullWidth: true)
+                }
+            }
+        }
+    }
+
+    private func optionButton(label: String, id: String, fullWidth: Bool = false) -> some View {
+        let selected = isMultiSelect && selectedOptionIds.contains(id)
+        return Button {
+            choose(id)
+        } label: {
+            Text(label)
+                .font(.subheadline)
+                .multilineTextAlignment(.leading)
+                .padding(.horizontal, 11)
+                .frame(maxWidth: fullWidth ? .infinity : nil, minHeight: 44, alignment: .leading)
+                .background(selected ? accent : Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(optionBorder, lineWidth: 1))
+                .foregroundStyle(selected ? .white : .primary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Answer: \(label)")
+    }
+}
+
+// MARK: - L1 Work inspector
+
+/// The tapped Work summary's payload: every call in the run with its
+/// paired result (nil while still running).
+struct ChatWorkCallDetail: Identifiable {
+    struct Entry: Identifiable {
+        let id = UUID().uuidString
+        let name: String
+        let result: ToolResult?
+    }
+    let id: String
+    let entries: [Entry]
+}
+
+/// The inspector sheet: compact COLLAPSED rows, one per call, each
+/// expandable to its result/diff. A nil result is HONEST — the row
+/// says "No recorded result" (an unavailable/unknown state, never a
+/// fake "Running" that a historical call would render forever).
+struct ChatWorkInspectorSheet: View {
+    let detail: ChatWorkCallDetail
+
+    var body: some View {
+        NavigationStack {
+            List(detail.entries) { entry in
+                WorkInspectorRow(entry: entry)
+            }
+            .navigationTitle(
+                "Work · \(detail.entries.count) call\(detail.entries.count == 1 ? "" : "s")")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    private struct WorkInspectorRow: View {
+        let entry: ChatWorkCallDetail.Entry
+        @State private var expanded = false
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 6) {
+                Button {
+                    withAnimation(.snappy) { expanded.toggle() }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: entry.result == nil
+                            ? "questionmark.circle" : (entry.result?.isError == true
+                                ? "exclamationmark.triangle" : "checkmark.circle"))
+                            .foregroundStyle(
+                                entry.result?.isError == true ? .red : .secondary)
+                        Text(entry.name)
+                            .font(.system(.footnote, design: .monospaced))
+                        Spacer(minLength: 0)
+                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(
+                    "Call \(entry.name), \(entry.result == nil ? "no recorded result" : "result available"), \(expanded ? "collapse" : "expand")")
+                if expanded {
+                    if let result = entry.result {
+                        ChatResultBody(result: result)
+                    } else {
+                        Text("No recorded result for this call.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(.vertical, 2)
+        }
+    }
+}
+
+// MARK: - Transcript image tiles + reader (§D fix 3)
+
+/// One square gallery tile for an image block. Loads bytes through the
+/// fetch seam on demand; without a seam (or on failure) renders an
+/// honest unavailable tile — never a spinner pretending content.
+struct ChatTranscriptImageTile: View {
+    let image: ChatImageRef
+    var fetch: ((String) async throws -> Data)?
+    /// The square's side (56 in galleries, 96 standalone).
+    var side: CGFloat = 96
+    var openReader: () -> Void
+
+    @State private var loadedImage: UIImage?
+    @State private var failed = false
+
+    var body: some View {
+        Button(action: openReader) {
+            Group {
+                if let loadedImage {
+                    Image(uiImage: loadedImage)
+                        .resizable()
+                        .scaledToFill()
+                } else if failed {
+                    VStack(spacing: 4) {
+                        Image(systemName: "photo.badge.exclamationmark")
+                            .font(.subheadline)
+                        Text("Unavailable")
+                            .font(.system(size: 8))
+                    }
+                    .foregroundStyle(.secondary)
+                } else {
+                    Image(systemName: "photo")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: side, height: side)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.secondary.opacity(0.25), lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+        .task {
+            guard loadedImage == nil, !failed, let fetch else { return }
+            do {
+                let data = try await fetch(image.ref)
+                loadedImage = UIImage(data: data)
+                if loadedImage == nil { failed = true }
+            } catch {
+                failed = true
+            }
+        }
+        .accessibilityLabel("Image attachment, opens full view")
+    }
+}
+
+/// The full-size reader for a transcript image: loads via the fetch
+/// seam, pinch-zooms (ZoomableImageView).
+struct ChatTranscriptImageReader: View {
+    let image: ChatImageRef
+    var fetch: ((String) async throws -> Data)?
+
+    @State private var loadedImage: UIImage?
+    @State private var failed = false
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let loadedImage {
+                    ZoomableImageView(image: loadedImage)
+                } else if failed {
+                    ContentUnavailableView(
+                        "Image unavailable",
+                        systemImage: "photo.badge.exclamationmark",
+                        description: Text(
+                            "The image could not be loaded (\(image.ref))."))
+                } else {
+                    ProgressView("Loading image…")
+                }
+            }
+            .navigationTitle("Image")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                        .accessibilityLabel("Close image viewer")
+                }
+            }
+        }
+        .task {
+            guard let fetch else {
+                failed = true
+                return
+            }
+            do {
+                let data = try await fetch(image.ref)
+                loadedImage = UIImage(data: data)
+                if loadedImage == nil { failed = true }
+            } catch {
+                failed = true
+            }
+        }
+    }
+
+    @Environment(\.dismiss) private var dismiss
+}
+
+/// One message's images as a single-row gallery: MEASURED capacity
+/// (tile+gap math, boundary-correct), the +N tile opens the collection
+/// sheet where EVERY image is reachable.
+struct ChatTranscriptImageGallery: View {
+    let images: [ChatImageRef]
+    var fetch: ((String) async throws -> Data)?
+    var openReader: (ChatImageRef) -> Void
+
+    @State private var showsCollection = false
+
+    private static let tile: CGFloat = 56
+    private static let gap: CGFloat = 8
+
+    var body: some View {
+        GeometryReader { geo in
+            let fits = Self.fits(width: geo.size.width - 24)
+            let hasOverflow = images.count > fits
+            // fits can be 0 at constrained widths; never negative.
+            let visible = hasOverflow ? max(fits - 1, 0) : images.count
+            HStack(spacing: Self.gap) {
+                ForEach(images.prefix(visible)) { image in
+                    ChatTranscriptImageTile(
+                        image: image, fetch: fetch, side: Self.tile)
+                    { openReader(image) }
+                }
+                if hasOverflow {
+                    Button {
+                        showsCollection = true
+                    } label: {
+                        Text("+\(images.count - visible)")
+                            .font(.footnote.weight(.medium))
+                            .frame(width: Self.tile, height: Self.tile)
+                            .background(
+                                Color.secondary.opacity(0.1),
+                                in: RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(
+                        "\(images.count - visible) more images, opens all")
+                }
+            }
+        }
+        .frame(height: Self.tile)
+        .padding(.horizontal, 12)
+        .sheet(isPresented: $showsCollection) {
+            NavigationStack {
+                List(images) { image in
+                    HStack(spacing: 12) {
+                        ChatTranscriptImageTile(
+                            image: image, fetch: fetch, side: 44)
+                        { openReader(image) }
+                        Text("Image \(image.ref)")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture { openReader(image) }
+                }
+                .navigationTitle("Images")
+                .navigationBarTitleDisplayMode(.inline)
+            }
+            .presentationDetents([.medium, .large])
+        }
+    }
+
+    static func fits(width: CGFloat) -> Int {
+        guard width >= tile else { return 0 }
+        return Int((width + gap) / (tile + gap))
+    }
 }

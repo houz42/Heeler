@@ -51,12 +51,19 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
     /// label for the connection, while the alias is presentation-only.
     var alias: String?
 
+    /// Absolute path of the native chat broker's Unix socket on this
+    /// Host (reached over the same SSH connection's direct-streamlocal
+    /// forwarding). Blank means no broker configured; the chat surface
+    /// then stays on the JSONL transcript backend.
+    var brokerChatSocketPath: String
+
     /// `socatPath` is deliberately absent: Hosts serialized before ADR 0011
     /// still carry it on disk, and leaving it out of the keys both ignores it
     /// on decode and drops it on the Host's next save.
     private enum CodingKeys: String, CodingKey {
         case id, name, address, port, username, authMethod, sessionName
         case additionalAddresses, routeLabels, jumpAddress, jumpPort, jumpUsername, alias
+        case brokerChatSocketPath = "broker_chat_socket_path"
     }
 
     /// Whether this Host is reached through a Jump Host.
@@ -92,7 +99,8 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         jumpAddress: String = "",
         jumpPort: Int = 22,
         jumpUsername: String = "",
-        alias: String? = nil
+        alias: String? = nil,
+        brokerChatSocketPath: String = ""
     ) {
         self.id = id
         self.name = name
@@ -109,6 +117,7 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         self.jumpPort = jumpPort
         self.jumpUsername = jumpUsername
         self.alias = alias
+        self.brokerChatSocketPath = brokerChatSocketPath
     }
 
     init(from decoder: any Decoder) throws {
@@ -138,6 +147,8 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         // alias decodes as nil so presentation never shows a blank label.
         alias = try container.decodeIfPresent(String.self, forKey: .alias)
             .flatMap { Self.normalizedAlias($0) }
+        brokerChatSocketPath =
+            try container.decodeIfPresent(String.self, forKey: .brokerChatSocketPath) ?? ""
 
         let trimmedSessionName = sessionName.trimmingCharacters(in: .whitespaces)
         guard trimmedSessionName.isEmpty || HerdrSessionName.isValid(trimmedSessionName) else {
@@ -233,5 +244,10 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
     var socketLocation: HerdrSocketLocation {
         let trimmed = sessionName.trimmingCharacters(in: .whitespaces)
         return trimmed.isEmpty ? .defaultSession : .namedSession(trimmed)
+    }
+
+    /// Whether this Host has a chat broker configured.
+    var hasBrokerChat: Bool {
+        !brokerChatSocketPath.trimmingCharacters(in: .whitespaces).isEmpty
     }
 }

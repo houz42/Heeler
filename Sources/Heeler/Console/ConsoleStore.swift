@@ -311,9 +311,24 @@ final class ConsoleStore {
         return projection
     }
 
+    /// The catalog record of a connected Host (nil when the Host is not
+    /// connected). Consumers needing up-to-date catalog state pass their
+    /// own Host record instead.
+    func host(for hostID: Host.ID) -> Host? {
+        projections[hostID]?.host
+    }
+
     func availableAgentKinds(on hostID: Host.ID) async throws -> [SupportedAgentKind] {
         try await projection(for: hostID).availableAgentKinds()
     }
+    /// Reads one whole remote file (the chat openers' fetch seam:
+    /// Markdown/text previews and file links route through here).
+    func readRemoteFile(at path: String, on hostID: Host.ID) async throws -> Data {
+        try await projection(for: hostID).session.withTransport { transport in
+            try await transport.readTranscriptFile(atPath: path)
+        }
+    }
+
     /// Resolves the Host's remote home directory for the New Workspace
     /// directory browser (#280). Throws the error's own presentation,
     /// including homeDirectoryUnresolvable when the probe fails.

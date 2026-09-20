@@ -259,6 +259,19 @@ targets:
 
 
 
+  HeelerProofUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - ProofUITests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: dev.houz42.heeler.proofuitests
+        TEST_TARGET_NAME: Heeler
+    dependencies:
+      - target: Heeler
+
 schemes:
   Heeler:
     build:
@@ -267,6 +280,7 @@ schemes:
     test:
       targets:
         - HeelerTests
+        - HeelerProofUITests
       # The only variable the app test process needs from the invoking shell.
       # The fixture itself arrives through the Simulator's launchd environment
       # as HEELER_SSH_E2E_CONFIG / HEELER_SSH_JUMP_E2E_CONFIG /

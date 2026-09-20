@@ -10,67 +10,58 @@ import Foundation
 /// Rendered as the raw question text plus one tappable button per option; an
 /// empty `options` list renders the question alone (free-text answers go
 /// through the composer, not this row).
-internal struct PendingInteraction: Sendable, Equatable, Identifiable {
-    /// One tappable answer choice. omp's `ask` tool carries label +
-    /// description pairs plus a `recommended` index; the terminal dialog
-    /// highlights `recommended` and selects with ↑/↓ + Enter, so answers
-    /// are delivered as a key sequence against that highlight (verified
-    /// against a live blocked agent).
-    struct Option: Sendable, Equatable {
+/// One question of a pending ask, with the option IDs the answer
+/// payload needs (single-question demos synthesize index ids).
+internal struct PendingAskQuestion: Sendable, Equatable, Identifiable {
+    struct Option: Sendable, Equatable, Identifiable {
+        let id: String
         let label: String
-        var description: String? = nil
-        /// The option's index in the dialog's list — the `down` count the
-        /// answer must send (relative to `recommended`).
-        var index: Int = 0
-
-        init(label: String, description: String? = nil, index: Int = 0) {
-            self.label = label
-            self.description = description
-            self.index = index
-        }
     }
-
     let id: String
-    /// The `ask` toolCall's opaque id — the pairing key that anchors the
-    /// card INLINE at the call's transcript position (call ids contain
-    /// `|`/`#`, so it is carried separately, never parsed out of `id`).
-    let callID: String
-    let question: String
-    let options: [Option]
-    /// The option the terminal dialog highlights when the question lands
-    /// (omp's `recommended`); answers key off it.
-    let recommendedIndex: Int
-    /// The chosen option's label once answered; nil while the question
-    /// blocks the run. The transcript's own answer (the `ask` result
-    /// record) is set by the parser; a locally made choice lives in
-    /// `PendingAnswerDelivery` until that record lands.
-    var answer: String?
+    let text: String
+    var multi: Bool = false
+    var options: [Option] = []
 
     init(
-        id: String = UUID().uuidString,
-        callID: String = "",
-        question: String,
-        options: [Option],
-        recommendedIndex: Int = 0,
-        answer: String? = nil
+        id: String, text: String, multi: Bool = false,
+        options: [Option] = []
     ) {
         self.id = id
-        self.callID = callID
+        self.text = text
+        self.multi = multi
+        self.options = options
+    }
+}
+
+internal struct PendingInteraction: Sendable, Equatable, Identifiable {
+    let id: String
+    let question: String
+    let options: [String]
+    /// The full ask structure (multi-question first-class); empty for
+    /// legacy single-question fixtures, which synthesize it.
+    var questions: [PendingAskQuestion] = []
+
+    init(
+        id: String = UUID().uuidString, question: String, options: [String],
+        questions: [PendingAskQuestion] = []
+    ) {
+        self.id = id
         self.question = question
         self.options = options
-        self.recommendedIndex = recommendedIndex
-        self.answer = answer
+        self.questions = questions
     }
 
-    /// The key sequence that selects `option` in the terminal dialog from
-    /// the highlighted `recommendedIndex`: `down` once per step below the
-    /// highlight, then `enter`. (A `down` count of zero is just `enter`.)
-    /// The dialog opens highlighting `recommended`; the card answers
-    /// immediately on tap, so the highlight has not moved.
-    func selectionKeys(for option: Option) -> [String] {
-        let steps = option.index - recommendedIndex
-        if steps <= 0 { return ["enter"] }
-        return Array(repeating: "down", count: steps) + ["enter"]
+    /// The effective question list: the real structure when present,
+    /// else the single-question synthesis (index-keyed option ids).
+    var effectiveQuestions: [PendingAskQuestion] {
+        if !questions.isEmpty { return questions }
+        return [
+            PendingAskQuestion(
+                id: "q0", text: question, multi: false,
+                options: options.enumerated().map { index, label in
+                    PendingAskQuestion.Option(id: "o\(index)", label: label)
+                })
+        ]
     }
 }
 
@@ -89,6 +80,9 @@ internal enum ChatRow: Sendable, Equatable, Identifiable {
     case text(messageID: UUID, blockIndex: Int, role: ChatRole, text: String)
     /// An assistant `ChatBlock.thinking` payload — L3+, collapsed by default.
     case thinking(messageID: UUID, blockIndex: Int, text: String)
+    /// An image block (sent by the user, or returned by a tool):
+    /// conversation content, visible at every level as gallery tiles.
+    case image(messageID: UUID, blockIndex: Int, image: ChatImageRef)
     /// An assistant `ChatBlock.toolCall` — at the tool's visibility level:
     /// L1 for ordinary tools; todo checklists ride L2 (they are rendered
     /// results), subagent (`task`) spawns ride L3 (they are agent
@@ -107,7 +101,8 @@ internal enum ChatRow: Sendable, Equatable, Identifiable {
         switch self {
         case .text(let messageID, let blockIndex, _, _),
              .thinking(let messageID, let blockIndex, _),
-             .toolCall(let messageID, let blockIndex, _, _):
+             .toolCall(let messageID, let blockIndex, _, _),
+             .image(let messageID, let blockIndex, _):
             return "\(messageID.uuidString)#\(blockIndex)"
         case .orphanResult(let result):
             return "result#\(result.toolCallId)"
@@ -145,14 +140,35 @@ internal struct ChatBubble: Sendable, Equatable, Identifiable {
 /// What the transcript renders: bubbles for conversation text, plain rows
 /// for everything else. Ordering is the row order; bubbles only replace
 /// the consecutive `.text` runs they were built from.
+/// One call in an L1 Work-inspector summary.
+internal struct ChatWorkEntry: Sendable, Equatable, Identifiable {
+    let id: String
+    let name: String
+    let result: ToolResult?
+
+    init(index: Int, name: String, result: ToolResult?) {
+        self.id = "\(name)#\(index)"
+        self.name = name
+        self.result = result
+    }
+}
+
 internal enum ChatTranscriptItem: Sendable, Equatable, Identifiable {
     case bubble(ChatBubble)
     case row(ChatRow)
+    /// The L1 Work inspector: consecutive tool calls collapsed into one
+    /// compact summary; the inspector's sheet shows each call's result.
+    case workSummary(id: String, calls: [ChatWorkEntry])
+    /// One message's consecutive image blocks as a single small-square
+    /// gallery (not one tile per row).
+    case imageGallery(id: String, images: [ChatImageRef])
 
     var id: String {
         switch self {
         case .bubble(let bubble): bubble.id
         case .row(let row): row.id
+        case .workSummary(let id, _): id
+        case .imageGallery(let id, _): id
         }
     }
 }
@@ -178,10 +194,8 @@ internal enum ChatFiltering {
     }
 
     /// Full form, including the blocked-agent affordance rows. Pending
-    /// interactions render at every level, INLINE at their ask call's
-    /// transcript position (a question is part of the turn that asked it,
-    /// answered or not); pendings whose call is outside the visible
-    /// window fall to the tail as the live edge.
+    /// interactions render at every level, after all transcript rows — they
+    /// are the conversation's live edge, not chrome to be filtered.
     static func visibleRows(
         messages: [ChatMessage],
         toolResults: [ToolResult],
@@ -194,17 +208,6 @@ internal enum ChatFiltering {
         for result in toolResults where resultsByCall[result.toolCallId] == nil {
             resultsByCall[result.toolCallId] = result
         }
-        // Pending interactions indexed by their ask call's id: the card
-        // renders INLINE at the call's transcript position (a question is
-        // part of the turn that asked it, answered or not — verified on
-        // device: bottom-appended cards detach from their conversation).
-        // Multiple questions from one call keep their wire order.
-        var pendingByCall: [String: [PendingInteraction]] = [:]
-        for interaction in pending {
-            pendingByCall[interaction.callID, default: []].append(interaction)
-        }
-        var emittedPending = Set<String>()
-
         // Which ids exist as calls in the visible messages. Classified
         // independently of level so a result does not flip orphan/non-orphan
         // when the level changes — only whether orphans render does.
@@ -215,13 +218,6 @@ internal enum ChatFiltering {
             }
         }
 
-        /// Emits the interactions paired to `callID`, in wire order.
-        func pendingRows(for callID: String) -> [ChatRow] {
-            guard let interactions = pendingByCall[callID] else { return [] }
-            emittedPending.formUnion(interactions.map(\.id))
-            return interactions.map(ChatRow.pending)
-        }
-
         var rows: [ChatRow] = []
         for message in messages {
             switch message.role {
@@ -230,8 +226,13 @@ internal enum ChatFiltering {
                 // visible at every level. Non-text blocks in a user message
                 // (not produced by the parser) are dropped.
                 for (index, block) in message.blocks.enumerated() {
-                    if case .text(let text) = block {
+                    switch block {
+                    case .text(let text):
                         rows.append(.text(messageID: message.id, blockIndex: index, role: .user, text: text))
+                    case .image(let image):
+                        rows.append(.image(messageID: message.id, blockIndex: index, image: image))
+                    default:
+                        break
                     }
                 }
 
@@ -243,25 +244,16 @@ internal enum ChatFiltering {
                     case .thinking(let text) where level >= .l3:
                         rows.append(.thinking(messageID: message.id, blockIndex: index, text: text))
                     case .toolCall(let call) where level >= Self.visibilityLevel(for: call):
-                        // The result only pairs in at L2; L1 is the
-                        // name-only line.
-                        let result = level >= .l2 ? resultsByCall[call.id] : nil
+                        // Results pair at every level: at L1 the call
+                        // collapses into the Work-inspector summary,
+                        // whose sheet needs the result; at L2+ the
+                        // per-call card shows it inline.
+                        let result = resultsByCall[call.id]
                         rows.append(.toolCall(messageID: message.id, blockIndex: index, call: call, result: result))
-                        // The ask call's question card rides at the call's
-                        // position — visible at every level, right after the
-                        // call row it belongs to, whether answered or not.
-                        rows.append(contentsOf: pendingRows(for: call.id))
+                    case .image(let image):
+                        rows.append(.image(messageID: message.id, blockIndex: index, image: image))
                     case .thinking, .toolCall:
-                        // Below the call's level the row is hidden — but an
-                        // `ask` card is never filtered: emit its card at
-                        // this block's position anyway (pending renders at
-                        // every level; only the collapsed tool-call chrome
-                        // is level-gated).
-                        if case .toolCall(let call) = block,
-                            !(pendingByCall[call.id] ?? []).isEmpty
-                        {
-                            rows.append(contentsOf: pendingRows(for: call.id))
-                        }
+                        break  // below its level
                     }
                 }
 
@@ -292,13 +284,7 @@ internal enum ChatFiltering {
             rows.append(.orphanResult(result))
         }
 
-        // Stray pendings whose call is outside the visible window (or built
-        // by hand in previews) keep the old tail placement — the live edge,
-        // after everything rendered.
-        rows.append(
-            contentsOf: pending
-                .filter { !emittedPending.contains($0.id) }
-                .map(ChatRow.pending))
+        rows.append(contentsOf: pending.map(ChatRow.pending))
         return rows
     }
 
@@ -338,9 +324,25 @@ internal enum ChatFiltering {
     /// per contiguous run. The item ids are the underlying row ids (a
     /// bubble takes its first row's), so level switching stays monotonic
     /// in the item list exactly as it is in the row list.
-    static func visibleItems(from rows: [ChatRow]) -> [ChatTranscriptItem] {
+    static func visibleItems(
+        from rows: [ChatRow], level: DetailLevel = .l2
+    ) -> [ChatTranscriptItem] {
         var items: [ChatTranscriptItem] = []
         var run: [ChatRow] = []
+        // L1 Work-inspector grouping: consecutive tool rows collapse
+        // into ONE compact summary. Non-tool rows and L2+ keep the
+        // per-row shapes.
+        var workCalls: [ChatWorkEntry] = []
+        // Consecutive image rows of one message collect into a single
+        // gallery item.
+        var galleryImages: [ChatImageRef] = []
+
+        func flushGallery() {
+            guard !galleryImages.isEmpty else { return }
+            items.append(.imageGallery(
+                id: "gallery-\(items.count)", images: galleryImages))
+            galleryImages = []
+        }
 
         func flush() {
             // The loop only ever buffers user/assistant `.text` rows
@@ -353,7 +355,42 @@ internal enum ChatFiltering {
             run = []
         }
 
+        func flushWork() {
+            guard !workCalls.isEmpty else { return }
+            items.append(.workSummary(
+                id: "work-summary-\(items.count)", calls: workCalls))
+            workCalls = []
+        }
+
         for row in rows {
+            let isWorkRow: Bool
+            switch row {
+            case .toolCall, .orphanResult: isWorkRow = true
+            default: isWorkRow = false
+            }
+            if isWorkRow, level == .l1 {
+                flush()
+                flushGallery()
+                switch row {
+                case .toolCall(_, _, let call, let result):
+                    workCalls.append(ChatWorkEntry(
+                        index: workCalls.count, name: call.name, result: result))
+                case .orphanResult(let result):
+                    workCalls.append(ChatWorkEntry(
+                        index: workCalls.count, name: result.toolName, result: result))
+                default:
+                    break
+                }
+                continue
+            }
+            if case .image(_, _, let image) = row {
+                flush()
+                flushWork()
+                galleryImages.append(image)
+                continue
+            }
+            flushWork()
+            flushGallery()
             if case .text(let messageID, _, let role, _) = row,
                 role == .user || role == .assistant,
                 let previous = run.last,
@@ -372,6 +409,8 @@ internal enum ChatFiltering {
                 }
             }
         }
+        flushWork()
+        flushGallery()
         flush()
         return items
     }
