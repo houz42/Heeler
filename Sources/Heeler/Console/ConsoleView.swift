@@ -483,47 +483,46 @@ struct ConsoleView: View {
                 onReset: { agentSearch.clearAll() })
             if searchedAgents.isEmpty {
                 emptySearchState
-            } else {
+            } else if agentListLayout.grouping == .none {
                 List(selection: selectedAgent) {
                     visibleHostIssueRows
-                    if agentListLayout.grouping == .none {
-                        ForEach(searchedAgents) { agent in
-                            agentRow(agent)
-                        }
-                    } else {
+                    ForEach(searchedAgents) { agent in
+                        agentRow(agent)
+                    }
+                }
+                .listStyle(.plain)
+            } else {
+                // Density re-review (final directive): native List/Section
+                // chrome cannot reach the prototype's ~40px heading strip,
+                // so the grouped mode renders in a ScrollView+LazyVStack
+                // with EXPLICIT compact rows — the header strip is exactly
+                // its content height, agent rows are plain, and the header
+                // keeps the 44pt-scale toggle target with Dynamic Type.
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2, pinnedViews: []) {
+                        visibleHostIssuesView
                         ForEach(agentGroupSections) { section in
-                            Section {
-                                // Review finding #4: an active search or
-                                // filter forces matching groups OPEN — the
-                                // stored collapse state applies only when
-                                // the list is unconstrained, and survives
-                                // the search for when it clears.
-                                if !isEffectivelyCollapsed(section.id) {
-                                    ForEach(section.agents) { agent in
-                                        agentRow(agent)
-                                    }
+                            AgentListGroupHeaderView(
+                                section: section,
+                                isCollapsed: isEffectivelyCollapsed(section.id)
+                            ) {
+                                toggleAgentListGroup(section.id)
+                            }
+                            .padding(.horizontal, 16)
+                            // Review finding #4: an active search or filter
+                            // forces matching groups OPEN — the stored
+                            // collapse applies only unconstrained, and
+                            // survives the search for when it clears.
+                            if !isEffectivelyCollapsed(section.id) {
+                                ForEach(section.agents) { agent in
+                                    agentRow(agent)
+                                        .padding(.horizontal, 16)
+                                        .padding(.vertical, 2)
                                 }
-                            } header: {
-                                AgentListGroupHeaderView(
-                                    section: section,
-                                    isCollapsed: isEffectivelyCollapsed(section.id)
-                                ) {
-                                    toggleAgentListGroup(section.id)
-                                }
-                                .textCase(nil)
                             }
                         }
                     }
                 }
-                .listStyle(.plain)
-                // Re-review finding #3: the grouped mode's approved compact
-                // strip — native plain-List section spacing is far looser
-                // than the design; tighten the section spacing and the
-                // minimum header/row heights while Dynamic Type still
-                // scales fonts and tap targets keep their minimums. The
-                // flat list keeps its native spacing.
-                .modifier(CompactGroupedListSpacing(
-                    applies: agentListLayout.grouping != .none))
             }
         }
     }
@@ -547,6 +546,17 @@ struct ConsoleView: View {
             } description: {
                 Text("Agents detected on your Hosts appear here.")
             }
+        }
+    }
+
+    /// Host issues in the ScrollView grouped path: same rows, no List
+    /// chrome.
+    @ViewBuilder
+    private var visibleHostIssuesView: some View {
+        ForEach(visibleHostIssues) { issue in
+            hostIssueRow(issue, showsChevron: issue.navigates)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 2)
         }
     }
 
@@ -752,26 +762,6 @@ struct ConsoleView: View {
         await console.retryHost(id)
         try? await Task.sleep(for: .milliseconds(1_200))
         manualReconnectInFlightHostIDs.remove(id)
-    }
-}
-
-/// Re-review finding #3: the grouped Agents list's approved compact strip.
-/// Native plain-List sections carry large default gaps; tighten the
-/// section spacing and the minimum header/row heights for the grouped
-/// mode only (flat keeps native spacing). Fonts still follow Dynamic
-/// Type and the group toggle keeps a 44pt-scale hit area.
-private struct CompactGroupedListSpacing: ViewModifier {
-    let applies: Bool
-
-    func body(content: Content) -> some View {
-        if applies {
-            content
-                .listSectionSpacing(2)
-                .environment(\.defaultMinListHeaderHeight, 8)
-                .environment(\.defaultMinListRowHeight, 8)
-        } else {
-            content
-        }
     }
 }
 

@@ -358,6 +358,21 @@ final class AgentsRedesignProofTests: XCTestCase {
         XCTAssertTrue(staticText(containing: "Needs you").waitForExistence(timeout: 5),
                       "state grouping must lead with the urgent bucket")
         captureScreenshot(app, "agents-group-state", lifetime: .keepAlways)
+        // MEASURED density proof (final directive): the group heading block
+        // must be the prototype's compact strip. The AX frame of the
+        // heading row (chevron+title+count) at default type measures the
+        // whole rendered strip; ~40pt at 1x/3x scales with Dynamic Type.
+        let needsHeader = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "Needs you")).firstMatch
+        XCTAssertTrue(needsHeader.waitForExistence(timeout: 5))
+        let headerHeight = needsHeader.frame.height
+        XCTAssertLessThanOrEqual(
+            headerHeight, 48,
+            "group heading strip must stay compact, measured \(headerHeight)pt")
+        XCTAssertGreaterThanOrEqual(
+            headerHeight, 30,
+            "the 44pt-scale toggle target needs the strip to keep its height")
+        print("MEASURED group header height: \(headerHeight)pt")
     }
 
     // MARK: §B2 — empty state
