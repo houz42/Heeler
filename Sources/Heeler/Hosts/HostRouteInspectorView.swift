@@ -25,6 +25,10 @@ enum RouteCheckState: Equatable, Sendable {
 @Observable
 final class HostRouteInspectorStore {
     private(set) var checkState: RouteCheckState = .unchecked
+    /// Actionable explanation when a check could not run at all (§E:
+    /// the user's Check must never appear to silently do nothing). nil
+    /// while the check ran and produced a reachability verdict.
+    private(set) var checkFailureExplanation: String?
     private(set) var trustedFingerprint: HostKeyFingerprint?
     @ObservationIgnored private let connector: any TransportConnector
     @ObservationIgnored private let knownHosts: any KnownHostsStore
@@ -55,8 +59,24 @@ final class HostRouteInspectorStore {
     func check(host: Host, address: String) async {
         guard checkState != .checking else { return }
         checkState = .checking
-        guard let resolved = try? credentials.credentials(for: host) else {
+        checkFailureExplanation = nil
+        guard
+            let resolved = try? credentials.credentials(
+                for: host)
+        else {
+            // The check could not even start: say WHY (no silent reset —
+            // §E: the user's press must surface an actionable failure).
             checkState = .unchecked
+            switch host.authMethod {
+            case .password:
+                checkFailureExplanation =
+                    "The check could not run: no password is saved for "
+                    + "\(host.displayAliasName)."
+            case .deviceKey:
+                checkFailureExplanation =
+                    "The check could not run: the Device Key could not "
+                    + "be loaded. Open Edit and replace it if it is corrupt."
+            }
             return
         }
         // No TOFU prompt from a probe: keys not already trusted fail the
@@ -200,6 +220,14 @@ struct HostRouteInspectorView: View {
                         Label("Check this route", systemImage: "antenna.radiowaves.left.and.right")
                     }
                     .disabled(store.checkState == .checking)
+                    if let failure = store.checkFailureExplanation {
+                        // The check could not run: the actionable why,
+                        // never a silent no-op (§E).
+                        Label(failure, systemImage: "exclamationmark.triangle")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                            .accessibilityIdentifier("route-check-failure")
+                    }
                 } footer: {
                     Text(routeExplanation)
                 }

@@ -22,7 +22,13 @@ struct HostFormView: View {
     @State private var deviceKeyReplacementError: String?
     @State private var isDiscoveringSessions = false
     @State private var editingRouteID: AdditionalAddressRow.ID?
+    @State private var isAddingRoute = false
+    /// Discard confirmation when Canceling a dirty host form (approved
+    /// behavior contract: dirty drafts are protected).
+    @State private var isConfirmingDiscard = false
     @State private var isShowingAdvanced = false
+    /// The draft as first shown — Cancel's dirty check compares against it.
+    @State private var initialDraft: HostDraft = HostDraft()
     @Environment(\.dismiss) private var dismiss
 
     private let credentials = HostCredentialsProvider()
@@ -40,7 +46,9 @@ struct HostFormView: View {
         self.editing = editing
         self.onSaved = onSaved
         self.sessionConnector = sessionConnector
-        _draft = State(initialValue: editing.map(HostDraft.init) ?? HostDraft())
+        let initial = editing.map(HostDraft.init) ?? HostDraft()
+        _draft = State(initialValue: initial)
+        _initialDraft = State(initialValue: initial)
     }
 
     var body: some View {
@@ -80,7 +88,7 @@ struct HostFormView: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { dismiss() }
+                        Button("Cancel") { requestCancel() }
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Save") { save() }
@@ -89,11 +97,37 @@ struct HostFormView: View {
                 }
                 .sheet(item: routeEditorBinding) { route in
                     HostRouteEditView(
+                        hostName: routeEditorHostName,
                         route: route,
-                        isPrimaryRoute: draft.addresses.first?.id == route.id)
-                        { updated in
+                        isPrimaryRoute: draft.addresses.first?.id == route.id,
+                        onSave: { updated in
                             applyRouteEdit(updated)
-                        }
+                        },
+                        onRemove: { rowID in
+                            removeRoute(id: rowID)
+                        })
+                }
+                .sheet(isPresented: $isAddingRoute) {
+                    // Add mode: a route not yet in the draft; created only
+                    // on Save (Cancel touches nothing).
+                    HostRouteEditView(
+                        hostName: routeEditorHostName,
+                        route: nil,
+                        isPrimaryRoute: false,
+                        onSave: { updated in
+                            applyRouteEdit(updated)
+                        },
+                        onRemove: nil)
+                }
+                .confirmationDialog(
+                    "Discard changes?",
+                    isPresented: $isConfirmingDiscard,
+                    titleVisibility: .visible
+                ) {
+                    Button("Discard Changes", role: .destructive) { dismiss() }
+                    Button("Keep Editing", role: .cancel) {}
+                } message: {
+                    Text("Your edits to this Host have not been saved.")
                 }
                 .alert("Could not save the Host", isPresented: $saveFailed) {
                     Button("OK", role: .cancel) {}
@@ -161,9 +195,10 @@ struct HostFormView: View {
                 .accessibilityIdentifier("host-form-route-\(row.id.uuidString)")
             }
             Button {
-                let row = AdditionalAddressRow()
-                draft.addresses.append(row)
-                editingRouteID = row.id
+                // Add mode: the editor opens WITHOUT appending anything;
+                // the row is only created when the user Saves the new
+                // route. Cancel leaves the draft exactly as it was.
+                isAddingRoute = true
             } label: {
                 Label("Add connection route", systemImage: "plus.circle.fill")
             }
@@ -190,11 +225,43 @@ struct HostFormView: View {
     }
 
     private func applyRouteEdit(_ updated: AdditionalAddressRow) {
+        if isAddingRoute {
+            // Save on a NEW route: the row is created here, not on open —
+            // a canceled Add never leaves a blank row in the draft.
+            draft.addresses.append(updated)
+            isAddingRoute = false
+            return
+        }
         guard let index = draft.addresses.firstIndex(where: { $0.id == updated.id })
         else { return }
         draft.addresses[index] = updated
     }
 
+    /// Deliberate route removal (approved §E): the multi-path floor
+    /// lives in the model — the LAST remaining route always survives, so
+    /// a Host is never left with nothing to dial.
+    private func removeRoute(id: UUID) {
+        draft.removeAddress(id: id)
+        editingRouteID = nil
+    }
+
+    /// Cancel protects a dirty draft (approved behavior contract):
+    /// unchanged drafts dismiss directly; edited ones confirm first.
+    private func requestCancel() {
+        if draft != initialDraft {
+            isConfirmingDiscard = true
+        } else {
+            dismiss()
+        }
+    }
+
+    /// The Host identity the route editor scopes itself to (§E 3): the
+    /// form's draft names this Host; a brand-new Host falls back to a
+    /// generic phrase rather than a fake name.
+    private var routeEditorHostName: String {
+        let trimmed = draft.name.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? "this Host" : trimmed
+    }
     private func routeName(for row: AdditionalAddressRow) -> String {
         let trimmed = row.label.trimmingCharacters(in: .whitespaces)
         if !trimmed.isEmpty { return trimmed }
@@ -437,21 +504,31 @@ private struct LabeledTextField: View {
 struct HostRouteEditView: View {
     @State private var label: String
     @State private var address: String
-    private let routeID: AdditionalAddressRow.ID
+    private let hostName: String
+    private let routeID: AdditionalAddressRow.ID?
     private let isPrimaryRoute: Bool
     private let onSave: (AdditionalAddressRow) -> Void
+    /// Deliberate removal (§E): nil in add mode (nothing to remove) and
+    /// for the last remaining route (the model's floor keeps it).
+    private let onRemove: ((AdditionalAddressRow.ID) -> Void)?
+    private let isNewRoute: Bool
     @Environment(\.dismiss) private var dismiss
 
     init(
-        route: AdditionalAddressRow,
+        hostName: String,
+        route: AdditionalAddressRow?,
         isPrimaryRoute: Bool,
-        onSave: @escaping (AdditionalAddressRow) -> Void
+        onSave: @escaping (AdditionalAddressRow) -> Void,
+        onRemove: ((AdditionalAddressRow.ID) -> Void)?
     ) {
-        _label = State(initialValue: route.label)
-        _address = State(initialValue: route.address)
-        self.routeID = route.id
+        _label = State(initialValue: route?.label ?? "")
+        _address = State(initialValue: route?.address ?? "")
+        self.hostName = hostName
+        self.routeID = route?.id
         self.isPrimaryRoute = isPrimaryRoute
         self.onSave = onSave
+        self.onRemove = onRemove
+        self.isNewRoute = route == nil
     }
 
     var body: some View {
@@ -469,8 +546,8 @@ struct HostRouteEditView: View {
                         .keyboardType(.URL)
                 } footer: {
                     Text(
-                        "Routes apply only to this Host. Changing an address "
-                            + "never bypasses host-key verification.")
+                        "Routes apply only to \(hostName). Changing an "
+                            + "address never bypasses host-key verification.")
                 }
                 if isPrimaryRoute {
                     Section {
@@ -482,8 +559,24 @@ struct HostRouteEditView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                if let onRemove, let routeID {
+                    Section {
+                        Button("Remove route", role: .destructive) {
+                            onRemove(routeID)
+                            dismiss()
+                        }
+                        .accessibilityIdentifier("route-editor-remove")
+                    } footer: {
+                        Text(
+                            "Removing keeps every other route; the last "
+                                + "remaining route cannot be removed.")
+                    }
+                }
             }
-            .navigationTitle(isPrimaryRoute ? "Edit primary route" : "Edit route")
+            // Identity-scoped title (§E 3): the editor names WHICH Host's
+            // route is being added or edited.
+            .navigationTitle(
+                (isNewRoute ? "Add route on " : "Edit route on ") + hostName)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -491,9 +584,15 @@ struct HostRouteEditView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        onSave(
-                            AdditionalAddressRow(
-                                id: routeID, address: address, label: label))
+                        if let routeID {
+                            onSave(
+                                AdditionalAddressRow(
+                                    id: routeID, address: address, label: label))
+                        } else {
+                            // Add mode: the row is born here, with its own
+                            // UUID identity.
+                            onSave(AdditionalAddressRow(address: address, label: label))
+                        }
                         dismiss()
                     }
                     .accessibilityIdentifier("route-editor-save")

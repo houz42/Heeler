@@ -74,6 +74,6 @@ final class HostFormTypingSmokeTests: XCTestCase {
             (name.value as? String ?? "").trimmingCharacters(in: .whitespaces),
             "Studio Mac Pro",
             "typed name not retained after focus moved")
-        captureScreenshot(app, "host-form-typed")
+        captureScreenshot(app, "host-form-typed", lifetime: .keepAlways)
     }
 }

@@ -85,6 +85,9 @@ struct HostListView: View {
     @State private var isScanningToPair = false
     @State private var manualFallbackRequested = false
     @State private var path: [Host.ID] = []
+    /// The Host being edited from a card's scoped Edit action (§E 3):
+    /// the host form sheet always targets exactly this Host.
+    @State private var editingHost: Host?
     @State private var inspectedRoute: HostRouteInspection?
     /// Top-level destination selector (handoff §A): mounted by the app
     /// root; nil in sheets/tests keeps the plain "Hosts" title.
@@ -193,6 +196,11 @@ struct HostListView: View {
                     path.append(saved.id)
                 }
             }
+            .sheet(item: $editingHost) { host in
+                // A card's scoped Edit (§E 3): the form edits exactly the
+                // Host the user tapped, keyed by that Host value.
+                HostFormView(store: store, editing: host)
+            }
             .sheet(item: $inspectedRoute) { inspection in
                 // Tapping a route on a Host card: the inspector targets
                 // THAT Host's THAT route, never a global connection.
@@ -299,11 +307,6 @@ struct HostListView: View {
         return { await retryConnection(id) }
     }
 
-    /// Sessions/Hosts blending (Phase 5): unclaimed herdr sessions found on
-    /// a connected Host's machine, offered as one-tap Host entries. Adding
-    /// keeps every connection coordinate and the auth method, changing only
-    /// the session.
-
     /// One Host card, split from `body` so the list stays type-checkable.
     private func hostCard(for host: Host) -> some View {
         HostCardSection(
@@ -317,6 +320,7 @@ struct HostListView: View {
                 { await retry(host.id) }
             },
             openDetail: { path.append(host.id) },
+            openEditor: { editingHost = host },
             openRouteInspector: { address in
                 inspectedRoute = HostRouteInspection(hostID: host.id, address: address)
             })
@@ -396,6 +400,9 @@ private struct HostCardSection: View {
     let isRetryInFlight: Bool
     let retryConnection: (@MainActor @Sendable () async -> Void)?
     let openDetail: () -> Void
+    /// Scoped Edit: opens the host form for THIS host, straight from the
+    /// card (approved §E: host edit targets the selected host).
+    let openEditor: () -> Void
     let openRouteInspector: (String) -> Void
 
     /// Terminal stopped-auto-retry state: failed, or connecting while a
@@ -417,43 +424,57 @@ private struct HostCardSection: View {
 
     var body: some View {
         Section {
-            // The heading: tapping the name opens the Host detail
-            // (onboarding/preflight); Edit opens the host form. Both
-            // target THIS host.
-            Button {
-                openDetail()
-            } label: {
-                HStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(host.displayAliasName)
-                            .font(.headline)
-                            .foregroundStyle(.primary)
-                        HostConnectionIndicator(presentation: connectionPresentation)
-                    }
-                    Spacer(minLength: 0)
-                    if isRetryable {
-                        Button {
-                            Task { await retryConnection?() }
-                        } label: {
-                            if isRetryInFlight {
-                                ProgressView()
-                            } else {
-                                Image(systemName: "arrow.clockwise")
-                            }
+            // The heading row: tapping the name area opens the Host
+            // detail (onboarding/preflight); the scoped Edit button sits
+            // BESIDE it as a sibling (a Button nested inside another
+            // Button's label never fires its own action). Both target
+            // THIS host.
+            HStack(spacing: 12) {
+                Button {
+                    openDetail()
+                } label: {
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(host.displayAliasName)
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                            HostConnectionIndicator(presentation: connectionPresentation)
                         }
-                        .buttonStyle(.bordered)
-                        .tint(.orange)
-                        .disabled(isRetryInFlight)
-                        .accessibilityLabel("Retry connecting to \(host.displayAliasName)")
+                        Spacer(minLength: 0)
                     }
-                    Image(systemName: "chevron.right")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel(
+                    "Open details for \(host.displayAliasName), "
+                        + connectionPresentation.accessibilityLabel)
+                if isRetryable {
+                    Button {
+                        Task { await retryConnection?() }
+                    } label: {
+                        if isRetryInFlight {
+                            ProgressView()
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.orange)
+                    .disabled(isRetryInFlight)
+                    .accessibilityLabel("Retry connecting to \(host.displayAliasName)")
+                }
+                // Scoped Edit for THIS host, directly on the card
+                // (§E requirement 3): opens the host form editing
+                // exactly this Host, never a hardcoded one.
+                Button("Edit") { openEditor() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityLabel("Edit \(host.displayAliasName)")
+                    .accessibilityIdentifier("host-card-edit")
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(
-                "Open details for \(host.displayAliasName), \(connectionPresentation.accessibilityLabel)")
 
             // One row per named route: exact address and honest
             // in-use/alternate state; tap inspects THAT route.

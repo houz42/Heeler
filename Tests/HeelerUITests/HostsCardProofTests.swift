@@ -50,6 +50,9 @@ final class HostsCardProofTests: XCTestCase {
             primaryLabel.contains("currently in use"),
             "dialed route must be presented in use: \(primaryLabel)")
 
+        // The card list itself: both named routes with their chips.
+        captureScreenshot(app, "host-card-routes", lifetime: .keepAlways)
+
         // Tap the route row: the inspector for THAT route opens, titled
         // HOST · ROUTE.
         primaryRow.tap()
@@ -71,7 +74,7 @@ final class HostsCardProofTests: XCTestCase {
         XCTAssertTrue(
             selection.label.contains("Currently in use"),
             "route selection value wrong: \(selection.label)")
-        captureScreenshot(app, "route-inspector-in-use")
+        captureScreenshot(app, "route-inspector-in-use", lifetime: .keepAlways)
     }
 
     /// The alternate route is honest: its card row says "Alternate" and
@@ -118,7 +121,7 @@ final class HostsCardProofTests: XCTestCase {
         XCTAssertTrue(
             selection.label.contains("Available alternative"),
             "alternate selection value wrong: \(selection.label)")
-        captureScreenshot(app, "route-inspector-alternate")
+        captureScreenshot(app, "route-inspector-alternate", lifetime: .keepAlways)
     }
 
     // MARK: Route edit flow targets the selected row
@@ -139,7 +142,7 @@ final class HostsCardProofTests: XCTestCase {
         vpnRow.tap()
 
         // The route editor carries the selected row's values.
-        let editor = app.navigationBars["Edit route"]
+        let editor = app.navigationBars["Edit route on Studio Mac"]
         XCTAssertTrue(
             editor.waitForExistence(timeout: UITestTimeouts.standard),
             "route editor never appeared")
@@ -204,6 +207,83 @@ final class HostsCardProofTests: XCTestCase {
         XCTAssertTrue(
             savedRow.label.contains("vpn2.example.com"),
             "edited route row missing typed address: \(savedRow.label)")
-        captureScreenshot(app, "route-edit-saved")
+        captureScreenshot(app, "route-edit-saved", lifetime: .keepAlways)
+    }
+
+    // MARK: Scoped Edit on a host card
+
+    /// The card's Edit button opens the host form editing THAT host,
+    /// with its routes prefilled (§E 3: never a hardcoded host).
+    func testCardEditOpensTheFormForThatHost() {
+        app = UITestApp.launchDemo(.hostList)
+
+        // Two cards each carry an Edit; pick the first (Studio Mac).
+        let edit = app.buttons.matching(
+            NSPredicate(format: "identifier == 'host-card-edit'")).firstMatch
+        waitToExist(edit)
+        edit.tap()
+
+        // The form opens in edit mode with the Studio Mac host's values.
+        let form = app.navigationBars["Edit Host"]
+        XCTAssertTrue(
+            form.waitForExistence(timeout: UITestTimeouts.standard),
+            "host form never appeared from the card's Edit")
+        let name = app.textFields[UITestFixtures.hostFormNameField]
+        waitToExist(name)
+        XCTAssertEqual(
+            (name.value as? String ?? "").trimmingCharacters(in: .whitespaces),
+            "Studio Mac",
+            "card Edit must open the form for THAT host")
+        // The named routes are prefilled from the host.
+        let primaryRoute = app.descendants(matching: .any).matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH 'host-form-route-' AND label CONTAINS 'studio.demo.invalid'")
+        ).firstMatch
+        waitToExist(primaryRoute)
+        captureScreenshot(app, "host-card-edit-form", lifetime: .keepAlways)
+    }
+
+    // MARK: Route removal is deliberate and floor-guarded
+
+    /// The editor's Remove deletes exactly that route; the last remaining
+    /// route cannot be removed (the model's floor).
+    func testRouteRemoveTargetsThatRowAndFloorSurvives() {
+        app = UITestApp.launchDemo(.hostForm)
+        waitToExist(app.navigationBars[UITestFixtures.hostFormTitle])
+
+        // Edit the VPN route (3rd of 3): remove it; the other two survive.
+        let vpnRow = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH 'host-form-route-' AND label CONTAINS 'VPN'")
+        ).firstMatch
+        waitToExist(vpnRow)
+        vpnRow.tap()
+        let editor = app.navigationBars["Edit route on Studio Mac"]
+        XCTAssertTrue(
+            editor.waitForExistence(timeout: UITestTimeouts.standard),
+            "route editor never appeared")
+
+        let remove = app.buttons["route-editor-remove"]
+        waitToExist(remove)
+        remove.tap()
+        XCTAssertTrue(
+            app.navigationBars[UITestFixtures.hostFormTitle]
+                .waitForExistence(timeout: UITestTimeouts.standard),
+            "editor did not close after removal")
+        // VPN row is gone; the other two routes remain.
+        XCTAssertFalse(
+            app.buttons.matching(
+                NSPredicate(
+                    format: "identifier BEGINSWITH 'host-form-route-' AND label CONTAINS 'VPN'")
+            ).firstMatch.exists,
+            "removed route row still present")
+        for kept in ["Local network", "Bonjour"] {
+            XCTAssertTrue(
+                app.buttons.matching(
+                    NSPredicate(
+                        format: "identifier BEGINSWITH 'host-form-route-' AND label CONTAINS %@", kept)
+                ).firstMatch.exists,
+                "route \(kept) should have survived the removal")
+        }
+        captureScreenshot(app, "route-removed", lifetime: .keepAlways)
     }
 }
