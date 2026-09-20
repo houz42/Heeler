@@ -175,15 +175,38 @@ struct ChatPrefixKeysTests {
     }
 
     @MainActor
-    @Test func theFieldGrowsToTheFiveLineCapThenScrolls() {
+    @Test func theFieldGrowsToTheThreeLineCapThenScrolls() {
+        // Conversation redesign: focused-with-text grows bounded at
+        // three lines; past the cap the field scrolls.
         let textView = ChatInputUITextView()
         textView.applyChatInputConfiguration()
         let longLine = String(repeating: "word ", count: 40)
         textView.text = longLine
         let size = ChatInputTextView.measuredSize(for: textView, width: 300)
         let lineHeight = textView.font?.lineHeight ?? 20
-        #expect(size.height == lineHeight * 5)
+        #expect(size.height == lineHeight * 3)
         #expect(textView.isScrollEnabled)
+    }
+
+    @MainActor
+    @Test func theCollapsedFieldClaimsOneLineRegardlessOfContent() {
+        // Collapsed (empty draft or unfocused): a long draft still
+        // claims exactly one line — the content scrolls in place; the
+        // draft text itself is untouched (never cleared on blur).
+        let textView = ChatInputUITextView()
+        textView.applyChatInputConfiguration()
+        let longLine = String(repeating: "word ", count: 40)
+        textView.text = longLine
+        let size = ChatInputTextView.measuredSize(
+            for: textView, width: 300, collapsed: true)
+        let lineHeight = textView.font?.lineHeight ?? 20
+        // Collapsed = the one-line floor regardless of content: never
+        // grows to a second line; content beyond it scrolls in place.
+        // The draft text itself is untouched (never cleared on blur).
+        #expect(size.height == 36)
+        #expect(size.height < lineHeight * 2)
+        #expect(textView.isScrollEnabled)
+        #expect(textView.text == longLine)
     }
 }
 

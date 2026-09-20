@@ -513,8 +513,10 @@ struct ChatBubbleBody: View {
 struct ChatBubbleView: View {
     let bubble: ChatBubble
     let router: OpenRouterCore
-    var isFocused: Bool = false
-    var onLongPress: (() -> Void)? = nil
+    /// Short tap toggles the inline actions rail (final interaction
+    /// spec). Long press is NOT attached — it stays native text
+    /// selection.
+    var onToggleActions: (() -> Void)? = nil
 
     @State private var rowWidth: CGFloat = 320
     private var isUser: Bool { bubble.role == .user }
@@ -526,8 +528,7 @@ struct ChatBubbleView: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { _, w in
                 rowWidth = w
             }
-            .opacity(isFocused ? 0 : 1)
-            .onLongPressGesture { onLongPress?() }
+            .onTapGesture { onToggleActions?() }
     }
 }
 
@@ -803,8 +804,9 @@ struct ChatAssistantArticleView: View {
     let router: OpenRouterCore
     /// e.g. "Heeler · omp" — from the real runtime identity, never guessed.
     var authorLabel: String
-    var isFocused: Bool = false
-    var onLongPress: (() -> Void)? = nil
+    /// Short tap toggles the inline actions rail. Long press stays
+    /// native text selection.
+    var onToggleActions: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -816,8 +818,58 @@ struct ChatAssistantArticleView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.bottom, 12)
-        .opacity(isFocused ? 0 : 1)
-        .onLongPressGesture { onLongPress?() }
+        .onTapGesture { onToggleActions?() }
+    }
+}
+
+// MARK: - Message actions rail (final interaction spec)
+
+/// The inline Copy/Quote/Helpful rail toggled under a selected message
+/// by a SHORT TAP. One rail open at a time; outside tap dismisses; long
+/// press is reserved for native text selection. Copy/Quote carry the
+/// message's PLAIN text (no author lines, file labels, or other
+/// chrome); Helpful is an honest stub — no feedback contract exists yet,
+/// so it confirms locally and sends nothing.
+struct ChatMessageActionsRail: View {
+    var isAssistant: Bool
+    var copy: () -> Void
+    var quote: () -> Void
+    var helpful: () -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+            railButton("Copy", icon: "doc.on.doc", action: copy)
+            railButton("Quote", icon: "text.quote", action: quote)
+            if isAssistant {
+                railButton("Helpful", icon: "hand.thumbsup", action: helpful)
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(
+            Color(.secondarySystemBackground),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Actions for selected message")
+    }
+
+    private func railButton(
+        _ title: String, icon: String, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: icon).font(.caption2)
+                Text(title).font(.footnote.weight(.medium))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Color(uiColor: .label).opacity(0.8))
+        .accessibilityLabel(title)
     }
 }
 
@@ -893,28 +945,31 @@ struct AgentPendingQuestionCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
+        // Tightened card (refinement): compressed header, gaps, and
+        // question (body sizes unchanged; only chrome whitespace
+        // shrank). Options keep the 44 pt floor.
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 6) {
                 Text("Your input needed · \(step) of \(stepCount)")
-                    .font(.footnote.weight(.semibold))
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(accent)
                 Spacer(minLength: 0)
-                HStack(spacing: 5) {
+                HStack(spacing: 4) {
                     ForEach(0..<max(stepCount, 1), id: \.self) { index in
                         Circle()
                             .fill(index < step ? accent : Color.secondary.opacity(0.25))
-                            .frame(width: 5, height: 5)
+                            .frame(width: 4, height: 4)
                     }
                 }
             }
             Text(interaction.question)
-                .font(.headline)
+                .font(.subheadline.weight(.semibold))
                 .fixedSize(horizontal: false, vertical: true)
-            Text(isMultiSelect
-                ? "Select one or more options, then confirm."
-                : "Tap an option to answer and continue.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if isMultiSelect {
+                Text("Select one or more, then confirm.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
             optionsView
             if isMultiSelect, let confirmMultiSelect {
                 Button(action: confirmMultiSelect) {
@@ -929,7 +984,7 @@ struct AgentPendingQuestionCard: View {
                 .accessibilityLabel("Confirm answers")
             }
         }
-        .padding(16)
+        .padding(12)
         .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 15))
         .overlay(RoundedRectangle(cornerRadius: 15).strokeBorder(cardBorder, lineWidth: 1))
     }

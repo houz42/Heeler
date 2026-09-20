@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 
 // SPDX-License-Identifier: Apache-2.0
@@ -60,6 +61,9 @@ struct ChatScreen: View {
     /// The assistant article's author line, e.g. "Heeler · omp" —
     /// resolved from the real runtime identity by the surface owner.
     var authorLabel: String = ""
+    /// The chat input's attachment bundle (the + button/paste flow).
+    /// Nil keeps the frame exactly as before (previews, unwired hosts).
+    var attachments: ChatAttachments? = nil
 
     @State private var level: DetailLevel
     init(
@@ -76,7 +80,8 @@ struct ChatScreen: View {
         router: ComposerRouterStore? = nil,
         deliver: ((String) async throws -> Void)? = nil,
         pendingUnsupported: Bool = false,
-        authorLabel: String = ""
+        authorLabel: String = "",
+        attachments: ChatAttachments? = nil
     ) {
         self.paneID = paneID
         self.agentName = agentName
@@ -90,6 +95,7 @@ struct ChatScreen: View {
         self.deliver = deliver
         self.pendingUnsupported = pendingUnsupported
         self.authorLabel = authorLabel
+        self.attachments = attachments
         self._level = State(initialValue: initialLevel)
     }
 
@@ -194,10 +200,23 @@ struct ChatScreen: View {
                     router: openRouter,
                     fetch: fetch ?? { _ in throw CocoaError(.fileNoSuchFile) }))
         }
-        // The iMessage-style bubble focus presentation, above everything
-        // (transcript, composer, keyboard): blurred dim behind, lifted
-        // bubble with the Tapback pill and action menu.
-        .overlay { bubbleFocusOverlay }
+        // The helpful stub's toast (final spec: no feedback contract —
+        // honest local confirmation only, never a fake success).
+        .overlay(alignment: .bottom) {
+            if let helpfulToast {
+                Text(helpfulToast)
+                    .font(.footnote)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(.thinMaterial, in: Capsule())
+                    .padding(.bottom, 90)
+                    .task {
+                        try? await Task.sleep(for: .seconds(2.5))
+                        withAnimation { self.helpfulToast = nil }
+                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
         // The input affordance floats bottom-trailing and only while the
         // input frame is closed; the frame's own chevron closes it.
         .overlay {
@@ -296,19 +315,30 @@ struct ChatScreen: View {
             // ASSISTANT renders as the full-width article (author
             // line + reading-width text). Both keep the long-press
             // affordances via the same focus layer.
-            if bubble.role == .user {
-                ChatBubbleView(
-                    bubble: bubble,
-                    router: openRouter,
-                    isFocused: focusedBubble == bubble,
-                    onLongPress: { enterBubbleFocus(bubble) })
-            } else {
-                ChatAssistantArticleView(
-                    bubble: bubble,
-                    router: openRouter,
-                    authorLabel: authorLabel,
-                    isFocused: focusedBubble == bubble,
-                    onLongPress: { enterBubbleFocus(bubble) })
+            // Message actions (final interaction spec): a short tap
+            // toggles the inline Copy/Quote/Helpful rail under the
+            // message — one open at a time, outside tap dismisses.
+            // Long press is RESERVED for native text selection.
+            VStack(alignment: bubble.role == .user ? .trailing : .leading, spacing: 4) {
+                if bubble.role == .user {
+                    ChatBubbleView(
+                        bubble: bubble,
+                        router: openRouter,
+                        onToggleActions: { toggleActionsBubble(bubble) })
+                } else {
+                    ChatAssistantArticleView(
+                        bubble: bubble,
+                        router: openRouter,
+                        authorLabel: authorLabel,
+                        onToggleActions: { toggleActionsBubble(bubble) })
+                }
+                if selectedActionsBubble == bubble {
+                    ChatMessageActionsRail(
+                        isAssistant: bubble.role == .assistant,
+                        copy: { copyAffordance(bubble.text); dismissActions() },
+                        quote: { quoteAffordance(bubble.text); dismissActions() },
+                        helpful: { markHelpfulStub(); dismissActions() })
+                }
             }
         case .row(let row):
             if pendingUnsupported, case .pending(let interaction) = row {
@@ -324,13 +354,27 @@ struct ChatScreen: View {
         }
     }
 
-    /// The iMessage-style long-press focus: at most one bubble lifted at
-    /// a time, its id (the first row's) keying which in-place copy hides.
-    @State private var focusedBubble: ChatBubble?
+    /// The message-actions selection (final interaction spec): the one
+    /// message whose inline Copy/Quote/Helpful rail is open. A tap
+    /// toggles; tapping another message switches; outside tap dismisses.
+    @State private var selectedActionsBubble: ChatBubble?
 
-    private func enterBubbleFocus(_ bubble: ChatBubble) {
+    private func toggleActionsBubble(_ bubble: ChatBubble) {
         guard router != nil else { return }
-        withAnimation(.snappy) { focusedBubble = bubble }
+        withAnimation(.snappy) {
+            selectedActionsBubble = selectedActionsBubble == bubble ? nil : bubble
+        }
+    }
+
+    private func dismissActions() {
+        withAnimation(.snappy) { selectedActionsBubble = nil }
+    }
+
+    /// 'Helpful' on a message. NO real feedback contract exists yet —
+    /// honest stub: local toast only, nothing is sent or claimed saved.
+    @State private var helpfulToast: String?
+    private func markHelpfulStub() {
+        helpfulToast = "Marked helpful — feedback is preview-only for now"
     }
 
     /// Sends one quick reaction's composed message (emoji + block-quoted
@@ -361,28 +405,100 @@ struct ChatScreen: View {
     /// A one-shot caret placement for the composer's text view.
     @State private var caretRequest: ChatCaretRequest?
 
+    /// The + menu's attachment actions. The menu renders whenever the
+    /// surface is interactive (router + deliver wired), not whenever
+    /// the attachments bundle happens to be alive — a stranded bundle
+    /// (spurious disappear teardown) must never hide the button. With
+    /// no bundle the menu items honestly report unavailability.
+    private var attachmentActions: AgentComposerActions {
+        let canBegin = attachments?.staging.canBegin ?? false
+        return AgentComposerActions(
+            canBegin: canBegin,
+            attachLinkCount: 0,
+            addImage: { isSelectingPhoto = true },
+            addFile: { isSelectingFile = true },
+            showAttachLinks: {},
+            openTerminal: nil,
+            isOpeningTerminal: false,
+            startAgent: {},
+            manageSnippets: {},
+            showSkills: nil,
+            showWorktreeDetails: nil,
+            renameAgent: {},
+            renameWorkspace: {},
+            closeAgent: {})
+    }
+
+    /// The paste arbitration: an image-only pasteboard attaches the
+    /// image (upload via the same staging pipeline); text pastes stay
+    /// literal; both-present prefers text. Runs synchronously (the
+    /// paste action must decide now); the upload proceeds async inside.
+    private func handlePaste() -> Bool {
+        guard let attachments else { return false }
+        let intent = ChatPasteResolver.resolve()
+        guard intent.attachesImage, let data = intent.imageData else {
+            return false  // stock text paste
+        }
+        beginPasteImageAttachment(data)
+        return true
+    }
+
+    /// Uploads a pasted image's bytes and shows the pending tile once
+    /// the remote path lands. A failure surfaces in the frame's error
+    /// row, never a silent no-op.
+    private func beginPasteImageAttachment(_ data: Data) {
+        guard let attachments else { return }
+        isPasteImageAttachment = true
+        pendingImagePreviewData = data
+        attachmentErrorMessage = nil
+        attachments.draftStore.clearUploadFailure()
+        let canBegin = attachments.staging.begin(
+            .photo(DataImageSelection(data: data)))
+        if canBegin == nil {
+            attachments.draftStore.recordUploadFailure(
+                "An attachment is already uploading. Try again once it finishes.")
+            pendingImagePreviewData = nil
+            isPasteImageAttachment = false
+        }
+    }
+
+    /// The staging store's state machine, surfaced: completed
+    /// paste-image uploads hold for the Send flow (path removed from
+    /// the draft — the tile is the visible attachment); failures land
+    /// in the error row.
+    private func syncAttachmentUploadState(_ newState: ComposerStagingStore.State?) {
+        guard let attachments else { return }
+        switch newState {
+        case .idle, .preparing, .uploading:
+            attachments.draftStore.clearUploadFailure()
+        case .failed(let failure), .backgroundInterrupted(let failure):
+            attachments.draftStore.recordUploadFailure(failure.message)
+        case .completed(let outcome):
+            attachments.draftStore.clearUploadFailure()
+            if outcome.medium == .image, isPasteImageAttachment {
+                attachments.draftStore.holdPendingImage(path: outcome.path)
+                draft = attachments.draftStore.draft
+                pendingImagePreviewData = nil
+                isPasteImageAttachment = false
+            }
+        case nil:
+            break
+        }
+    }
+
+    /// Send needs draft text or a held pending image: a pasted image
+    /// with no message text still sends (the path reference IS the
+    /// message).
+    private var canSend: Bool {
+        if attachments?.draftStore.pendingImage != nil { return true }
+        return !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     /// Puts the bubble's plain text on the pasteboard.
     private func copyAffordance(_ text: String) {
         ChatBubbleCopy.perform(text)
     }
 
-    /// The full-screen focus presentation over everything: blurred,
-    /// dimmed transcript behind; the lifted bubble, Tapback pill above,
-    /// and action menu above the composer/keyboard.
-    @ViewBuilder
-    private var bubbleFocusOverlay: some View {
-        if let bubble = focusedBubble {
-            ChatBubbleFocusLayer(
-                bubble: bubble,
-                router: openRouter,
-                react: reactAffordance,
-                quote: quoteAffordance,
-                copy: copyAffordance,
-                dismiss: {
-                    withAnimation(.snappy) { focusedBubble = nil }
-                })
-        }
-    }
 
     // MARK: - Floating input
 
@@ -398,6 +514,24 @@ struct ChatScreen: View {
     /// on the next representable update so text and caret land together;
     /// cleared there so an ordinary edit cannot re-apply it.
     @State private var pendingAccept: (draft: String, caret: Int)?
+
+    // -- Attachment flow state (the + button's pickers and the image
+    // paste share the staging pipeline; the pending-image tile rides
+    // the draft tile rail above the field) --
+
+    @State private var isSelectingPhoto = false
+    @State private var selectedPhoto: PhotosPickerItem?
+    @State private var isSelectingFile = false
+    /// The pending image's preview bytes (the tile's thumbnail).
+    @State private var pendingImagePreviewData: Data?
+    /// True while the current upload began from the PASTE path (its
+    /// completed upload holds in draftStore.pendingImage with the path
+    /// removed from the draft); false = picker path (path stays in the
+    /// draft, inserted at the caret).
+    @State private var isPasteImageAttachment = false
+    /// A picker firing before the bundle exists: honest error, no silent
+    /// no-op.
+    @State private var attachmentErrorMessage: String?
 
     private var inputOverlay: some View {
         VStack {
@@ -418,6 +552,97 @@ struct ChatScreen: View {
                 .accessibilityLabel("Message the agent")
                 .padding()
             }
+        }
+    }
+
+    /// The composer's text field (the growing/collapsing input), split
+    /// out to keep each view expression within the type-checker's
+    /// budget. The closures are plain methods so the call expression
+    /// stays small.
+    @ViewBuilder
+    private var composerField: some View {
+        if let router {
+            ChatInputTextView(
+                text: draft,
+                // Composer collapse (conversation redesign): empty OR
+                // unfocused = single row; focused with text grows to
+                // the 3-line cap. The draft survives blur untouched.
+                collapsed: draft.isEmpty || !inputFocused,
+                placeholder: "Message — / # @ ! for commands",
+                onEdit: { [self] newText, _ in self.applyComposerEdit(newText) },
+                onReturnKey: { [self] in self.composerReturnKey(router) },
+                onPaste: { [self] in self.handlePaste() },
+                pendingAccept: $pendingAccept,
+                isFocused: $inputFocused,
+                caretRequest: caretRequest)
+        }
+    }
+
+    private func applyComposerEdit(_ newText: String) {
+        draft = newText
+    }
+
+    /// Return with the suggestion menu open accepts the highlighted
+    /// suggestion (no newline); with it closed the stock newline insert
+    /// keeps working, matching the Composer. The owner's draft updates
+    /// here in the action — the representable's update-pass report is
+    /// not enough (a @State write during view update is dropped).
+    private func composerReturnKey(_ router: ComposerRouterStore) -> Bool {
+        let result = router.handleReturnKey(into: draft)
+        if let accepted = result.accepted {
+            draft = accepted.draft
+            pendingAccept = accepted
+        }
+        return result.consumedKey
+    }
+
+    /// The composer row: close chevron, the + (add attachment) menu,
+    /// the growing/collapsing text field, and Send. Split out of
+    /// inputFrame so neither expression overloads the type-checker.
+    @ViewBuilder
+    private var composerRow: some View {
+        if let router {
+        HStack(spacing: 8) {
+            Button {
+                inputPresented = false
+                inputFocused = false
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("Close input")
+            if router != nil && deliver != nil {
+                Menu {
+                    AgentActionMenuContent(
+                        actions: attachmentActions,
+                        sections: AgentActionMenuPolicy.composerAddSections)
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 18, height: 18)
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.circle)
+                .tint(Color(uiColor: .label).opacity(0.72))
+                .frame(minWidth: 28, minHeight: 28)
+                .accessibilityLabel("Add")
+                .accessibilityHint("Adds an image or file to the draft")
+            }
+            composerField
+            Button {
+                sendDraft()
+            } label: {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.title2)
+            }
+            .disabled(!canSend || isSending)
+            .accessibilityLabel("Send")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
         }
     }
 
@@ -458,52 +683,33 @@ struct ChatScreen: View {
                         .padding(.horizontal, 12)
                         .padding(.top, 6)
                 }
-                HStack(spacing: 8) {
-                    Button {
-                        inputPresented = false
-                        inputFocused = false
-                    } label: {
-                        Image(systemName: "chevron.down")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 28, height: 28)
-                            .contentShape(Rectangle())
-                    }
-                    .accessibilityLabel("Close input")
-                    ChatInputTextView(
-                        text: draft,
-                        placeholder: "Message — / # @ ! for commands",
-                        onEdit: { newText, _ in
-                            draft = newText
-                        },
-                        onReturnKey: {
-                            // Return with the menu open accepts the
-                            // highlighted suggestion (no newline); with
-                            // it closed the stock newline insert keeps
-                            // working, matching the Composer. The owner's
-                            // draft updates here in the action — the
-                            // representable's update-pass report is not
-                            // enough (a @State write during view update
-                            // is dropped).
-                            let result = router.handleReturnKey(into: draft)
-                            if let accepted = result.accepted {
-                                draft = accepted.draft
-                                pendingAccept = accepted
-                            }
-                            return result.consumedKey
-                        },
-                        pendingAccept: $pendingAccept,
-                        isFocused: $inputFocused,
-                        caretRequest: caretRequest)
-                    Button {
-                        sendDraft()
-                    } label: {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.title2)
-                    }
-                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSending)
-                    .accessibilityLabel("Send")
+                if let attachmentError = attachmentErrorMessage
+                    ?? attachments?.draftStore.uploadFailureMessage
+                {
+                    Text(attachmentError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.top, 6)
                 }
+                // The draft tile rail (§D): the held paste-image as a
+                // small square tile above the field, corner-x removes.
+                // Preserved across blur (rail = draft state, not focus
+                // state). The multi-attachment/quote tiles arrive with
+                // the model extension.
+                if attachments?.draftStore.pendingImage != nil {
+                    ChatDraftTileRail(
+                        imagePreviewData: pendingImagePreviewData,
+                        quoteCount: 0,
+                        openImagePreview: {},
+                        removeImage: {
+                            attachments?.draftStore.clearPendingImage()
+                        })
+                        .padding(.horizontal, 12)
+                        .padding(.top, 6)
+                }
+                composerRow
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
             }
@@ -516,11 +722,48 @@ struct ChatScreen: View {
             .onChange(of: draft) { _, new in
                 router.updateSuggestions(forDraft: new)
             }
+            .onChange(of: selectedPhoto) { _, item in
+                guard let item else { return }
+                selectedPhoto = nil
+                guard let attachments else {
+                    attachmentErrorMessage =
+                        "Attachments are still loading. Try again."
+                    return
+                }
+                isPasteImageAttachment = false
+                attachmentErrorMessage = nil
+                attachments.draftStore.clearUploadFailure()
+                attachments.staging.begin(.photo(PhotosPickerImageSelection(item: item)))
+            }
+            .photosPicker(
+                isPresented: $isSelectingPhoto,
+                selection: $selectedPhoto,
+                matching: .images)
+            .fileImporter(
+                isPresented: $isSelectingFile,
+                allowedContentTypes: [.data]
+            ) { result in
+                guard case .success(let url) = result else { return }
+                guard let attachments else {
+                    attachmentErrorMessage =
+                        "Attachments are still loading. Try again."
+                    return
+                }
+                isPasteImageAttachment = false
+                attachmentErrorMessage = nil
+                attachments.draftStore.clearUploadFailure()
+                attachments.staging.begin(.file(url))
+            }
+            .onChange(of: attachments?.staging.state) { _, newState in
+                syncAttachmentUploadState(newState)
+            }
         }
     }
 
     private func sendDraft() {
-        let text = draft
+        // The held paste-image rides ahead of the text (the reference
+        // convention the agent already reads).
+        let text = attachments?.draftStore.messageText(forDraft: draft) ?? draft
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             !isSending, let router
         else { return }
@@ -531,12 +774,14 @@ struct ChatScreen: View {
             switch outcome {
             case .handled:
                 draft = ""
+                attachments?.draftStore.clearPendingImage()
             case .rejected:
                 break  // draft stays for editing; routingError explains
             case .passthrough:
                 do {
                     try await deliver?(text)
                     draft = ""
+                    attachments?.draftStore.clearPendingImage()
                 } catch {
                     // Delivery failed: keep the draft for retry.
                 }

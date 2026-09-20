@@ -190,15 +190,122 @@ final class ChatInputUITextView: UITextView {
     /// accept path and the delegate callback would fight over the caret
     /// within the same update cycle.
     var isApplyingExternalCaret = false
+    /// Paste arbitration for the attachment flow: consulted before the
+    /// pasteboard payload lands in the text. Returns true when the
+    /// paste was consumed — the pasteboard holds an image and the
+    /// attachment flow took it, so no text lands. Returning false keeps
+    /// the stock text paste. Nil keeps the stock paste entirely.
+    /// Consulted both from the system paste menu (`paste(_:)` below) and
+    /// from a hardware keyboard Cmd+V, which arrives through the
+    /// responder-chain `paste:` action too — one seam covers both.
+    var onPaste: (() -> Bool)?
+    /// True while the attachment flow can consume an image paste —
+    /// the owner (ChatScreen.handlePaste) sets this whenever
+    /// attachments are wired. The system edit menu consults
+    /// `canPerformAction` (via `pasteboard` eligibility) before it
+    /// offers Paste; a plain UITextView only declares text pasteability,
+    /// so an IMAGE-ONLY pasteboard shows no Paste item at all (the
+    /// device regression: "no where to paste"). Overriding the action's
+    /// availability adds the item back; the `paste(_:)` override then
+    /// routes the image into the attachment flow.
+    var canPasteImages = false
+    /// The pasteboard-change observer's token, kept so the view dies
+    /// with its observer. nonisolated(unsafe): only deinit (nonisolated)
+    /// touches it after init, and removeObserver is thread-safe.
+    private nonisolated(unsafe) var pasteboardObserver: NSObjectProtocol?
 
     override init(frame: CGRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
         installPrefixBar()
+        observePasteboardChanges()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         installPrefixBar()
+        observePasteboardChanges()
+    }
+
+    deinit {
+        if let pasteboardObserver {
+            NotificationCenter.default.removeObserver(pasteboardObserver)
+        }
+    }
+
+    /// Keeps ``imagePasteboardAvailable`` fresh without ever touching
+    /// the pasteboard inside canPerformAction (the device crash path).
+    private func observePasteboardChanges() {
+        pasteboardObserver = NotificationCenter.default.addObserver(
+            forName: UIPasteboard.changedNotification,
+            object: UIPasteboard.general,
+            queue: .main
+        ) { [weak self] _ in
+            self?.refreshImagePasteboardAvailability()
+        }
+    }
+
+    /// The system paste command (paste menu, Cmd+V): when the paste
+    /// arbitration consumes the payload (pasteboard image → attach), no
+    /// text lands; otherwise the stock UIKit paste runs.
+    override func paste(_ sender: Any?) {
+        if onPaste?() == true { return }
+        super.paste(sender)
+    }
+
+    /// Paste availability: stock text pasteability OR (the attachment
+    /// flow is armed AND the cached pasteboard image flag is set).
+    ///
+    /// NEVER touch `UIPasteboard` here: the device crash stack shows
+    /// UIKit resolving canPerformAction during responder-chain setup,
+    /// and `hasImages`' synchronous cache queue re-enters
+    /// canPerformAction from within the pasteboard getter — seven
+    /// recursions deep, then EXC_BAD_ACCESS. The menu resolution only
+    /// ever consults the cached flag (``imagePasteboardAvailable``),
+    /// refreshed out-of-band by ``refreshImagePasteboardAvailability()``
+    /// on pasteboard-change and focus events.
+    ///
+    /// The re-entrancy guard is defense-in-depth: if anything in the
+    /// responder chain re-enters canPerformAction mid-resolution, the
+    /// nested call short-circuits to super instead of recursing.
+    override func canPerformAction(
+        _ action: Selector, withSender sender: Any?
+    ) -> Bool {
+        guard !isResolvingPasteAvailability else {
+            return super.canPerformAction(action, withSender: sender)
+        }
+        if action == #selector(paste(_:)), canPasteImages,
+            imagePasteboardAvailable
+        {
+            isResolvingPasteAvailability = true
+            defer { isResolvingPasteAvailability = false }
+            return true
+        }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    /// Test seam for the re-entrancy guard: drives the flag a nested
+    /// canPerformAction call would observe inside the pasteboard path.
+    func setPasteAvailabilityResolving(_ resolving: Bool) {
+        isResolvingPasteAvailability = resolving
+    }
+
+    /// The cached answer to "does the pasteboard hold an image" —
+    /// updated out-of-band, never queried during menu resolution.
+    /// Default true so an un-refreshed view still offers Paste and the
+    /// paste arbitration itself (``paste(_:)`` → the resolver) decides
+    /// with the real pasteboard; the false case only comes from an
+    /// observed change or an explicit refresh.
+    var imagePasteboardAvailable = true
+    /// One gate for menu-resolution re-entrancy (see the crash note on
+    /// ``canPerformAction(_:withSender:)``).
+    private var isResolvingPasteAvailability = false
+
+    /// Refreshes the cached image-availability from the real
+    /// pasteboard — called from pasteboard-change/focus events, never
+    /// from canPerformAction. Reading `hasImages` here is safe: the
+    /// call is not inside UIKit's menu-resolution path.
+    func refreshImagePasteboardAvailability() {
+        imagePasteboardAvailable = UIPasteboard.general.hasImages
     }
 
     private func installPrefixBar() {
@@ -288,6 +395,12 @@ final class ChatInputUITextView: UITextView {
 struct ChatInputTextView: UIViewRepresentable {
     /// The current draft; edits flow out through `onEdit`.
     let text: String
+    /// The composer collapse state (conversation redesign): true while
+    /// the draft is empty or the field is unfocused — the field renders
+    /// a single row; focused-with-text grows it, bounded at three
+    /// lines. The draft itself NEVER clears on blur; only the frame
+    /// height collapses.
+    var collapsed: Bool = false
     /// The draft placeholder (the frame's hint line).
     let placeholder: String
     /// Reports every draft/selection change, including the prefix-key
@@ -300,6 +413,13 @@ struct ChatInputTextView: UIViewRepresentable {
     /// suggestion, or the menu is stale and must not leak a newline.
     /// Nil keeps the stock newline behavior.
     let onReturnKey: (() -> Bool)?
+    /// Paste arbitration for the attachment flow: consulted when the
+    /// user pastes (system paste menu or hardware Cmd+V, both the
+    /// `paste:` responder action). True consumes the paste — the
+    /// pasteboard holds an image and the attachment flow took it, no
+    /// text lands. False keeps the stock text paste. Nil keeps the
+    /// stock paste entirely (previews, unwired hosts).
+    var onPaste: (() -> Bool)? = nil
     /// An accepted suggestion waiting to apply: the new draft plus the
     /// caret the accept leaves (end of the insertion). Applied on the
     /// text view directly — text and caret together — instead of relying
@@ -337,6 +457,11 @@ struct ChatInputTextView: UIViewRepresentable {
         // current one.
         textView.onPrefixInsert = onEdit
         textView.onReturnKey = onReturnKey
+        textView.onPaste = onPaste
+        // The edit menu's Paste item needs the image arm whenever the
+        // paste arbitration is wired (an image-only pasteboard hides it
+        // otherwise).
+        textView.canPasteImages = onPaste != nil
         if let accept = pendingAccept {
             // The suggestion-accept path: text and caret land together,
             // so the caret follows the end of the insertion (after the
@@ -386,16 +511,19 @@ struct ChatInputTextView: UIViewRepresentable {
         context _: Context
     ) -> CGSize? {
         guard let width = proposal.width else { return nil }
-        return Self.measuredSize(for: uiView, width: width)
+        return Self.measuredSize(for: uiView, width: width, collapsed: collapsed)
     }
 
-    /// The frame height contract: hug the measured text, clamped to one
-    /// line minimum and five lines cap; past the cap the text view
-    /// scrolls instead of growing.
+    /// The frame height contract (conversation redesign): hug the
+    /// measured text with a one-line (36 pt) floor and a THREE-line cap
+    /// when focused-with-text; while collapsed (empty draft or unfocused)
+    /// the field claims exactly one line regardless of content. Past the
+    /// cap the text view scrolls instead of growing.
     /// UIKit-only inputs so the clamp is testable without a SwiftUI
     /// layout pass.
     static func measuredSize(
-        for textView: ChatInputUITextView, width: CGFloat
+        for textView: ChatInputUITextView, width: CGFloat,
+        collapsed: Bool = false
     ) -> CGSize {
         let wasScrollEnabled = textView.isScrollEnabled
         textView.isScrollEnabled = false
@@ -403,7 +531,12 @@ struct ChatInputTextView: UIViewRepresentable {
             CGSize(width: width, height: .greatestFiniteMagnitude))
         textView.isScrollEnabled = wasScrollEnabled
         let lineHeight = textView.font?.lineHeight ?? 20
-        let maximumHeight = lineHeight * 5
+        if collapsed {
+            let height = max(36, min(measured.height, lineHeight))
+            textView.isScrollEnabled = measured.height > lineHeight
+            return CGSize(width: width, height: height)
+        }
+        let maximumHeight = lineHeight * 3
         let height = min(max(36, measured.height), maximumHeight)
         textView.isScrollEnabled = measured.height > maximumHeight
         return CGSize(width: width, height: height)

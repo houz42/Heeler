@@ -35,6 +35,9 @@ struct AgentDetailView: View {
     /// The chat input's submit router (/ # @ ! routing). Built with the
     /// same per-agent task as the chat store.
     @State private var chatRouter: ComposerRouterStore?
+    /// The chat input's attachment bundle (+ button/paste flow). Built
+    /// beside the chat store; torn down with it.
+    @State private var chatAttachments: ChatAttachments?
     /// Which surface the detail shows. Set on first appearance from the
     /// agent's session shape; the picker is the only other writer.
     @State private var surface: AgentDetailSurface?
@@ -323,6 +326,18 @@ struct AgentDetailView: View {
             paneID: agent.agent.paneID,
             reader: .console(console, hostID: agent.hostID))
         chat = store
+        // The chat input's attachment bundle: the staging pipeline the
+        // + button's pickers and the image paste share, plus the draft
+        // seam its path inserts land in. Idempotent per agent identity.
+        if chatAttachments == nil {
+            let draftStore = ChatAttachmentDraftStore()
+            chatAttachments = ChatAttachments(
+                staging: ComposerStagingStore(
+                    stageImage: console.imageStager(for: agent.hostID),
+                    stageFile: console.fileStager(for: agent.hostID),
+                    composer: draftStore),
+                draftStore: draftStore)
+        }
         // The chat input's router: / # @ ! classification + plain delivery
         // through agent.prompt. The scratch-shell pane for ! is created
         // lazily on first use by the store.
@@ -413,7 +428,8 @@ struct AgentDetailView: View {
                         AgentPromptParams(target: agent.agent.paneID, text: text),
                         on: agent.hostID)
                 },
-                authorLabel: "Heeler · \(agent.agent.kind.lowercased())")
+                authorLabel: "Heeler · \(agent.agent.kind.lowercased())",
+                attachments: chatAttachments)
         } else {
             ChatUnavailablePlaceholder()
         }
@@ -443,7 +459,8 @@ struct AgentDetailView: View {
                     try await store.send(text)
                 },
                 pendingUnsupported: !store.askSupported,
-                authorLabel: "Heeler · \(agent.agent.kind.lowercased())")
+                authorLabel: "Heeler · \(agent.agent.kind.lowercased())",
+                attachments: chatAttachments)
                 .overlay(alignment: .bottom) {
                     if case .disconnected(let reason) = store.phase {
                         AgentChatStateBanner(
@@ -607,6 +624,7 @@ struct AgentDetailView: View {
             // The chat store's poll loop must not outlive the detail view.
             chat = nil
             chatRouter = nil
+            chatAttachments = nil
         }
         .onChange(of: console.hostConnectionGenerations[agent.hostID]) { _, generation in
             openTerminal.transportGenerationDidChange(generation)
