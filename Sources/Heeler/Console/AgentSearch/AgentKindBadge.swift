@@ -108,11 +108,11 @@ struct AgentKindBadgeIcon: View {
         } else {
             Image(systemName: model.systemImage)
                 .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(Color(AgentStatusPalette.kindTileAccent))
+                .foregroundStyle(Color(AgentKindTilePalette.accent))
                 .padding(4)
                 .frame(width: 30, height: 30)
                 .background(
-                    Color(AgentStatusPalette.kindTileWash),
+                    Color(AgentKindTilePalette.wash),
                     in: RoundedRectangle(cornerRadius: 8))
                 .accessibilityHidden(true)
         }

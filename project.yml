@@ -111,6 +111,13 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         # ActivityKit starts Live Activities from the app; HeelerWidgets renders them.
         INFOPLIST_KEY_NSSupportsLiveActivities: YES
+        # The design's accent pair (prototype --accent) as ONE adaptive
+        # asset: light #22644D, dark #9ACFB2. Drives every Color.accentColor
+        # use app-wide (links, tints, chips, author lines) — see
+        # Assets.xcassets/AccentColor. AccentWash (#EAF2ED / #2D4236) is the
+        # paired soft-fill token.
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:
       - package: Splash
       - package: HeelerSSH

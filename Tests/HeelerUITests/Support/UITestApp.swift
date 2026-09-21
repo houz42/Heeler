@@ -40,6 +40,9 @@ enum UITestApp {
         case hostDetailPick
         /// Console + Settings sheet presented on launch.
         case settings
+        /// The chat surface with a pending multi-select ask (v2 accent
+        /// proofs: Confirm + selected-option chip in both appearances).
+        case chatPendingAsk
 
         var launchArguments: [String] {
             switch self {
@@ -52,6 +55,8 @@ enum UITestApp {
                 return ["--demo-screenshots", "--demo-host-detail-pick"]
             case .settings:
                 return ["--demo-screenshots", "--demo-screenshots-settings"]
+            case .chatPendingAsk:
+                return ["--demo-screenshots", "--demo-chat-pending-ask"]
             }
         }
     }
