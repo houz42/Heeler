@@ -244,6 +244,6 @@ enum HeaderLayoutCopy {
     static let previewHostName = "Workstation"
     static let unreadableTitle = "Saved header layout can’t be read"
     static let unreadableBody =
-        "Heeler kept the saved data untouched. The header follows each Host's "
+        "Meadow kept the saved data untouched. The header follows each Host's "
         + "Agent list fields, and editing is paused until you reset."
 }

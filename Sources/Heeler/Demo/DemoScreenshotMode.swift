@@ -354,7 +354,7 @@
                             paneID: "mobile:p1", status: .working,
                             workspaceID: "mobile", kind: "codex",
                             name: "ios-polish", title: "Polish the Attach experience",
-                            cwd: "/workspace/heeler",
+                            cwd: "/workspace/meadow",
                             transcriptPath: chatTranscriptPath),
                         agent(
                             paneID: "docs:p2", status: .idle,
@@ -365,12 +365,12 @@
                             paneID: "mobile:p4", status: .done,
                             workspaceID: "mobile", kind: "gemini",
                             name: "accessibility", title: "Audit VoiceOver labels",
-                            cwd: "/workspace/heeler",
+                            cwd: "/workspace/meadow",
                             transcriptPath: chatTranscriptPath),
                     ],
                     workspaces: [
                         workspace(
-                            id: "mobile", label: "iOS App", repo: "heeler",
+                            id: "mobile", label: "iOS App", repo: "meadow",
                             isLinkedWorktree: true),
                         workspace(id: "docs", label: "Product Docs", repo: "docs-site"),
                     ]),

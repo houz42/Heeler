@@ -248,7 +248,7 @@ enum AgentRowSlot: Equatable, Sendable {
     var label: String {
         switch self {
         case .herdr: "herdr"
-        case .heeler: "Heeler"
+        case .heeler: "Meadow"
         }
     }
 

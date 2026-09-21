@@ -58,7 +58,7 @@ struct ChatScreen: View {
     /// unsupported state — the broker backend has no verified answering
     /// API in v1. False keeps the JSONL backend's interactive rows.
     var pendingUnsupported: Bool = false
-    /// The assistant article's author line, e.g. "Heeler · omp" —
+    /// The assistant article's author line, e.g. "Meadow · omp" —
     /// resolved from the real runtime identity by the surface owner.
     var authorLabel: String = ""
     /// The chat input's attachment bundle (the + button/paste flow).
@@ -390,7 +390,7 @@ struct ChatScreen: View {
                         quote: {
                             quoteAffordance(
                                 bubble.text,
-                                author: bubble.role == .user ? "You" : "Heeler")
+                                author: bubble.role == .user ? "You" : "Meadow")
                             dismissActions()
                         },
                         helpful: { toggleHelpful(bubble.id); dismissActions() })
@@ -639,7 +639,7 @@ struct ChatScreen: View {
     /// Quote adds a REMOVABLE draft item (the tile rail shows it with
     /// its author); the user's draft text is never replaced. Send
     /// composes each held quote as a block-quoted prefix.
-    private func quoteAffordance(_ text: String, author: String = "Heeler") {
+    private func quoteAffordance(_ text: String, author: String = "Meadow") {
         let id = "quote-" + String(text.hashValue)
         guard !draftItems.contains(where: { $0.id == id }) else {
             inputFocused = true

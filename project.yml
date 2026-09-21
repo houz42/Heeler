@@ -93,11 +93,11 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: dev.houz42.heeler
         # Home-screen name; the App Store listing is "Heeler for herdr".
-        INFOPLIST_KEY_CFBundleDisplayName: Heeler
+        INFOPLIST_KEY_CFBundleDisplayName: Meadow
         MARKETING_VERSION: "0.1.8"
         CURRENT_PROJECT_VERSION: "20"
         # Scan to Pair (#62) reads the Pairing Code QR from the computer screen.
-        INFOPLIST_KEY_NSCameraUsageDescription: "Heeler uses the camera to scan the Pairing Code shown on your computer, so you can add that machine without typing anything."
+        INFOPLIST_KEY_NSCameraUsageDescription: "Meadow uses the camera to scan the Pairing Code shown on your computer, so you can add that machine without typing anything."
         # Only exempt encryption is used (standard SSH algorithms via the
         # HeelerSSH package's libssh2/OpenSSL, OS-provided CryptoKit);
         # declaring it here keeps every TestFlight upload from stalling on the
@@ -153,7 +153,7 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         # App Store validation (code 90360) requires a display name on
         # every embedded appex; never user-visible for this extension.
-        CFBundleDisplayName: Heeler Notification Service
+        CFBundleDisplayName: Meadow Notification Service
         NSExtension:
           NSExtensionPointIdentifier: com.apple.usernotifications.service
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
@@ -202,7 +202,7 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         # App Store validation (code 90360) requires a display name on
         # every embedded appex. Also the counts-only lock-screen fallback.
-        CFBundleDisplayName: Heeler
+        CFBundleDisplayName: Meadow
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:

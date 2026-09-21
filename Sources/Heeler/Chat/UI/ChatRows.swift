@@ -715,7 +715,7 @@ private struct ChatRowsPreviewSurface: View {
 struct ChatAssistantArticleView: View {
     let bubble: ChatBubble
     let router: OpenRouterCore
-    /// e.g. "Heeler · omp" — from the real runtime identity, never guessed.
+    /// e.g. "Meadow · omp" — from the real runtime identity, never guessed.
     var authorLabel: String
     /// Short tap toggles the inline actions rail. Long press stays
     /// native text selection.

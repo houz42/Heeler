@@ -205,7 +205,7 @@ final class AgentListFieldsEditor {
         case .loaded(nil):
             drafts[hostID] = AgentRowLayout.heelerDefault.withHeelerRow(thirdRow)
             syncStates[hostID] = .filled(
-                "This Host has no plugin fields snapshot, so Heeler's fallback fields were used.")
+                "This Host has no plugin fields snapshot, so Meadow's fallback fields were used.")
         case .unavailable:
             syncStates[hostID] = .failed("Couldn't reach \(hostName). Rows unchanged.")
         case .loading, nil:

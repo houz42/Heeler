@@ -62,9 +62,9 @@ enum AgentLayoutTokensEditing {
     static func addFieldFooter(rowIndex: Int) -> String {
         switch AgentRowSlot.forRow(rowIndex) {
         case .herdr?:
-            "This row starts from herdr's sidebar fields; Sync from plugin refills it. Heeler fields are welcome here too."
+            "This row starts from herdr's sidebar fields; Sync from plugin refills it. Meadow fields are welcome here too."
         case .heeler?:
-            "This is Heeler's row. Sync from plugin fills it only when herdr defines a third row."
+            "This is Meadow's row. Sync from plugin fills it only when herdr defines a third row."
         case nil:
             ""
         }
@@ -77,7 +77,7 @@ enum AgentLayoutTokensEditing {
     static func description(for token: AgentRowToken) -> String {
         switch token {
         case .stateIcon:
-            "Status icon. Heeler's status column at the end of Row 1 always shows it; it is not offered as a field."
+            "Status icon. Meadow's status column at the end of Row 1 always shows it; it is not offered as a field."
         case .stateText:
             "Status text. Shown in the status column, not as a field in this row."
         case .workspace:
