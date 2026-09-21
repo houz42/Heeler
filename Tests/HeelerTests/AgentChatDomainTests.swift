@@ -724,21 +724,30 @@ struct AgentChatInteractionRaceTests {
 // MARK: - The ask-options app chain (v1 scope)
 
 struct AgentAskAppChainTests {
-    @Test func resolutionMessagesAreHonest() {
-        // The resolved card's WHY: answered-elsewhere / cancelled /
-        // expired — never silent.
-        let remote = AgentChatInteractionResolution(
-            requestId: "r1", outcome: "answered", source: "remote")
+    @Test func resolutionBodiesAreHonest() {
+        // The resolved block's WHY, per kind: never silent, never
+        // ambiguous about WHERE the answer came from.
+        let you = AgentChatInteractionResolution(
+            requestId: "r1", kind: .youAnswered, labels: ["Ship it"])
+        let youNoLabels = AgentChatInteractionResolution(
+            requestId: "r1b", kind: .youAnswered, labels: nil)
         let terminal = AgentChatInteractionResolution(
-            requestId: "r2", outcome: "answered", source: "terminal")
+            requestId: "r2", kind: .answeredInTerminal, labels: nil)
+        let other = AgentChatInteractionResolution(
+            requestId: "r2b", kind: .answeredFromAnotherDevice, labels: nil)
         let cancelled = AgentChatInteractionResolution(
-            requestId: "r3", outcome: "cancelled", source: "remote")
+            requestId: "r3", kind: .cancelled, labels: nil)
         let expired = AgentChatInteractionResolution(
-            requestId: "r4", outcome: "expired", source: "terminal")
-        #expect(remote.message == "Answered from this device.")
-        #expect(terminal.message == "Answered in the agent's terminal.")
-        #expect(cancelled.message == "The question was cancelled.")
-        #expect(expired.message == "The question expired before it was answered.")
+            requestId: "r4", kind: .expired, labels: nil)
+        let settled = AgentChatInteractionResolution(
+            requestId: "r5", kind: .settledElsewhere, labels: nil)
+        #expect(you.transcriptBody == "You answered: Ship it")
+        #expect(youNoLabels.transcriptBody == "You answered.")
+        #expect(terminal.transcriptBody == "Answered in the agent's terminal.")
+        #expect(other.transcriptBody == "Answered from another device.")
+        #expect(cancelled.transcriptBody == "The question was cancelled.")
+        #expect(expired.transcriptBody == "The question expired before it was answered.")
+        #expect(settled.transcriptBody == "This question was already answered or cancelled elsewhere.")
     }
 }
 
@@ -749,7 +758,7 @@ struct AgentAskStaleCardTests {
         // The on-card error is the WIRE MESSAGE, never a raw domain
         // dump ('AgentChatError error 0').
         let error = AgentChatError.wire(
-            code: "unknown_request",
+            code: "item_changed",
             message: "This question is no longer pending — it may have been answered or expired in the agent's terminal.",
             retryable: false)
         if case AgentChatError.wire(_, let message, _) = error {
@@ -769,7 +778,7 @@ struct AgentAskTranscriptTests {
             AgentChatInteraction.self, from: Data(json.utf8))
     }
 
-    @Test("this client's answer renders 'You answered' with the chosen LABEL, not the wire id")
+    @Test("this device's answer renders 'You answered' with the chosen LABEL, not the wire id")
     func answeredRendersLabel() {
         let resolution = AgentChatInteractionResolution(
             answered: interaction(),
@@ -781,8 +790,7 @@ struct AgentAskTranscriptTests {
         #expect(
             resolution.transcriptBody
                 == "You answered: Keep testing surfaces")
-        // The state note stays honest too.
-        #expect(resolution.message == "Answered from this device.")
+        #expect(resolution.kind == .youAnswered)
     }
 
     @Test("multi-select joins its labels; unknown option ids never render raw")
@@ -806,33 +814,61 @@ struct AgentAskTranscriptTests {
                 == "You answered: Frames + Video")
     }
 
-    @Test("terminal-answered / cancelled / expired keep their honest notes in the transcript")
-    func honestNotesInTranscript() {
+    @Test("a wire 'remote' resolved event THIS store did not record is ANOTHER device, not this one")
+    func remoteEventMapsToAnotherDevice() {
+        let other = AgentChatInteractionResolution(
+            requestId: "r1", wireOutcome: "answered", wireSource: "remote")
+        #expect(other.kind == .answeredFromAnotherDevice)
+        #expect(other.transcriptBody == "Answered from another device.")
+        // Terminal source is unambiguous.
         let terminal = AgentChatInteractionResolution(
-            requestId: "r3", outcome: "answered", source: "terminal")
+            requestId: "r2", wireOutcome: "answered", wireSource: "terminal")
+        #expect(terminal.kind == .answeredInTerminal)
+        // Cancelled/expired keep their honest notes regardless of source.
         let cancelled = AgentChatInteractionResolution(
-            requestId: "r4", outcome: "cancelled", source: "remote")
+            requestId: "r3", wireOutcome: "cancelled", wireSource: "remote")
+        #expect(cancelled.kind == .cancelled)
         let expired = AgentChatInteractionResolution(
-            requestId: "r5", outcome: "expired", source: "terminal")
+            requestId: "r4", wireOutcome: "expired", wireSource: "terminal")
+        #expect(expired.kind == .expired)
+        // An unknown outcome never fabricates a specific one.
+        let unknown = AgentChatInteractionResolution(
+            requestId: "r5", wireOutcome: "whatever", wireSource: "remote")
+        #expect(unknown.kind == .settledElsewhere)
+    }
+
+    @Test("the stale-answer self-heal maps the broker's REAL refusal codes to honest kinds")
+    func staleRefusalMapsRealCodes() {
+        // stale_generation: the ask's generation was invalidated — expired.
+        let gen = AgentChatInteractionResolution(
+            staleRequestId: "r1", generationInvalidated: true)
+        #expect(gen.kind == .expired)
+        // item_changed/item_not_found: settled, outcome unknown from here —
+        // never a fabricated 'expired'.
+        let settled = AgentChatInteractionResolution(
+            staleRequestId: "r2", generationInvalidated: false)
+        #expect(settled.kind == .settledElsewhere)
         #expect(
-            terminal.transcriptBody
-                == "Answered in the agent's terminal.")
-        #expect(
-            cancelled.transcriptBody == "The question was cancelled.")
-        #expect(
-            expired.transcriptBody
-                == "The question expired before it was answered.")
+            settled.transcriptBody
+                == "This question was already answered or cancelled elsewhere.")
+    }
+
+    @Test("a resolution is Equatable/Codable-safe for persistence")
+    func kindIsCodable() throws {
+        let resolution = AgentChatInteractionResolution(
+            requestId: "r1", kind: .youAnswered, labels: ["Ship it"])
+        let round = try JSONDecoder().decode(
+            AgentChatInteractionResolution.self,
+            from: JSONEncoder().encode(resolution))
+        #expect(round == resolution)
     }
 }
 
 // MARK: - Resolved-ask rows in the transcript flow (v2)
 
 struct ChatResolvedAskRowTests {
-    private func message(
-        _ text: String, role: ChatRole = .assistant,
-        at date: Date? = nil
-    ) -> ChatMessage {
-        ChatMessage(role: role, blocks: [.text(text)], timestamp: date)
+    private func message(_ text: String, role: ChatRole = .assistant) -> ChatMessage {
+        ChatMessage(role: role, blocks: [.text(text)])
     }
 
     @Test("the resolved block renders at every detail level")
@@ -849,48 +885,35 @@ struct ChatResolvedAskRowTests {
         }
     }
 
-    @Test("a timestamped ask interleaves before the first message that postdates it")
-    func timestampedAskInterleaves() {
-        let base = Date(timeIntervalSince1970: 1000)
-        let ask = ResolvedAsk(
-            id: "r1", body: "You answered: Ship it",
-            timestamp: base.addingTimeInterval(10))
-        let rows = ChatFiltering.visibleRows(
-            messages: [
-                message("Before the ask", at: base),
-                message("After the ask", at: base.addingTimeInterval(20)),
-            ],
-            toolResults: [], pending: [], resolvedAsks: [ask], level: .l0)
-        let order = rows.map { row -> String in
-            switch row {
-            case .text(_, _, _, let text): return "text:\(text)"
-            case .resolvedAsk(let ask): return "ask:\(ask.body)"
-            default: return "other"
-            }
-        }
-        #expect(order == [
-            "text:Before the ask",
-            "ask:You answered: Ship it",
-            "text:After the ask",
-        ])
-    }
-
-    @Test("an untimed ask parks after the transcript, before a pending card")
-    func untimedAskParksBeforePending() {
-        let ask = ResolvedAsk(id: "r1", body: "The question was cancelled.")
+    @Test("resolved blocks park AFTER the transcript, BEFORE any pending card — deterministic, no receipt-time interleave")
+    func parksAfterTranscriptBeforePending() {
+        let asks = [
+            ResolvedAsk(id: "r1", body: "You answered: Ship it"),
+            ResolvedAsk(id: "r2", body: "The question was cancelled."),
+        ]
         let pending = PendingInteraction(
             question: "Proceed?", options: ["yes"])
         let rows = ChatFiltering.visibleRows(
             messages: [message("Earlier turn")], toolResults: [],
-            pending: [pending], resolvedAsks: [ask], level: .l0)
-        guard case .resolvedAsk = rows[rows.count - 2] else {
-            Issue.record("resolved ask must be second-to-last (before the pending card)")
-            return
+            pending: [pending], resolvedAsks: asks, level: .l0)
+        let order = rows.map { row -> String in
+            switch row {
+            case .text(_, _, _, let text): return "text:\(text)"
+            case .resolvedAsk(let ask): return "ask:\(ask.body)"
+            case .pending: return "pending"
+            default: return "other"
+            }
         }
-        guard case .pending = rows.last else {
-            Issue.record("pending card must stay the live edge (last row)")
-            return
-        }
+        // Deterministic: transcript rows, then resolved blocks in
+        // first-record order, then the live edge. Local receipt time
+        // is NEVER used to interleave (arrival time proves nothing
+        // about conversation position).
+        #expect(order == [
+            "text:Earlier turn",
+            "ask:You answered: Ship it",
+            "ask:The question was cancelled.",
+            "pending",
+        ])
     }
 
     @Test("row id is stable and namespaced (level switching diffs cleanly)")
@@ -900,5 +923,54 @@ struct ChatResolvedAskRowTests {
             messages: [], toolResults: [], pending: [],
             resolvedAsks: [ask], level: .l0)
         #expect(rows.map(\.id) == ["resolved#r-uuid-1"])
+    }
+}
+
+// MARK: - Resolution persistence across reconnects (v2 review fix)
+
+/// Store-level persistence: the recorded resolutions are the
+/// conversation's rendered history — start() (the reconnect/reopen
+/// path every broker-channel loss and session resync takes) must
+/// NEVER clear them, and its tombstone re-arm must keep the card
+/// dead against a stale snapshot. The answer()/resolved-event paths
+/// that produce resolutions are pinned by the wire-level suites
+/// above; this pins the lifecycle contract directly through the same
+/// recordResolution the live paths call.
+@Suite("Resolved-ask persistence across reconnects")
+@MainActor
+struct AgentChatResolutionPersistenceTests {
+    @Test("start() keeps recorded resolutions and re-arms their tombstones")
+    func resolutionsPersistAcrossStartReset() async throws {
+        let store = AgentChatStore(
+            pipeFactory: AgentChatPipeFactory(
+                open: { _ in
+                    throw AgentChatError.connectionClosed
+                },
+                hostRecord: { nil }),
+            paneIdentity: { nil })
+
+        // The recorded history: this device's answer + a cancelled ask.
+        store.recordResolution(AgentChatInteractionResolution(
+            requestId: "r-1", kind: .youAnswered, labels: ["Ship it"]))
+        store.recordResolution(AgentChatInteractionResolution(
+            requestId: "r-2", kind: .cancelled, labels: nil))
+
+        // The lifecycle reset (start() clears content/interactions/
+        // cursor — everything EXCEPT the resolution history).
+        await store.start()
+        #expect(
+            store.interactionResolutions.map(\.transcriptBody)
+                == ["You answered: Ship it", "The question was cancelled."],
+            "resolutions must persist across reconnect/reopen")
+
+        // A re-recorded resolution for the same requestId REPLACES the
+        // earlier one (the recorded answer beats a late same-id event).
+        store.recordResolution(AgentChatInteractionResolution(
+            requestId: "r-1", kind: .settledElsewhere, labels: nil))
+        #expect(store.interactionResolutions.count == 2)
+        // One entry per requestId, the newest content wins.
+        #expect(
+            store.interactionResolutions.filter { $0.requestId == "r-1" }
+                .map(\.kind) == [.settledElsewhere])
     }
 }

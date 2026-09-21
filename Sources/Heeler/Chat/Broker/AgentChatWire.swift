@@ -203,6 +203,15 @@ enum AgentChatError: Error, Sendable, Equatable {
     case timedOut(method: String)
     case ambiguousSession
 
+    /// Whether this wire error is the broker's `stale_generation` (the
+    /// ask's generation was invalidated — an expiry, not a settle).
+    var isStaleGeneration: Bool {
+        if case .wire(let code, _, _) = self {
+            return code == "stale_generation"
+        }
+        return false
+    }
+
     static func from(_ wire: AgentChatWireError) -> AgentChatError {
         if wire.code == "ambiguous_session" {
             return .ambiguousSession

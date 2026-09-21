@@ -55,11 +55,12 @@ final class AgentChatStore {
     private(set) var capabilities: AgentChatCapabilities?
     /// Pending interactions (only when interactions:true).
     private(set) var interactions: [AgentChatInteraction] = []
-    /// Resolved asks in arrival order — the transcript row payload.
-    /// A resolution is the ASK's tombstone and rendered record in one:
-    /// it stays for the chat surface's life (the card is gone; the
-    /// answer block is the trace). No cap, no reset while live — the
-    /// store's own start() reset bounds the list per connection.
+    /// Resolved asks in first-record order — the transcript row
+    /// payload. A resolution is the ASK's tombstone and rendered
+    /// record in one: the card is gone; the answer block is the
+    /// trace. PERSISTENT across reconnects/reopen (conversation
+    /// history, not connection state): `start()` never clears it; the
+    /// tombstones re-arm below from the kept list.
     private(set) var interactionResolutions: [AgentChatInteractionResolution] = []
 
     var askSupported: Bool { capabilities?.interactions == true }
@@ -118,8 +119,12 @@ final class AgentChatStore {
         registration = nil
         capabilities = nil
         bufferedEvents = []
-        resolvedInteractionTombstones = []
-        interactionResolutions = []
+        // Resolutions PERSIST across reconnects/reopen (they are the
+        // conversation's rendered history, not connection state). The
+        // tombstones re-arm from the kept list so a snapshot racing a
+        // previously-recorded resolution can never resurrect its card.
+        resolvedInteractionTombstones = Set(
+            interactionResolutions.map(\.requestId))
         subscribed = false
         reconnectTask?.cancel()
         reconnectTask = nil
@@ -458,46 +463,59 @@ final class AgentChatStore {
                         instanceId: registration.instanceId,
                         generation: registration.generation),
                     params: params))
-            // The answer's trace: the resolved block renders in the
-            // transcript ('You answered: <labels>') even if the broker's
-            // interaction.resolved event never lands (event-queue
-            // pressure). The event, when it does arrive, replaces this
-            // with the same content (dedup by requestId below).
+            // Accepted: the ask is SETTLED broker-side from this
+            // submit. Clear the card and tombstone NOW (the resolved
+            // event may be lost under event-queue pressure) and
+            // record the transcript block with the resolved labels.
+            interactions.removeAll {
+                $0.requestId == interaction.requestId
+            }
+            resolvedInteractionTombstones.insert(interaction.requestId)
             recordResolution(
                 AgentChatInteractionResolution(
                     answered: interaction, answers: answers))
         } catch let error as AgentChatError {
-            if isStaleInteractionError(error) {
-                // The broker says this requestId is no longer pending
-                // (answered/expired elsewhere while the card was up —
-                // the resolved event can be missed under event-queue
-                // pressure). Self-heal: the card is DEAD, drop it,
-                // show the honest note, re-list for the truth.
+            if staleAnswerKind(error) != nil {
+                // The broker refused the answer: the ask is no longer
+                // pending (answered/cancelled/expired elsewhere while
+                // the card was up). Self-heal: the card is DEAD,
+                // drop it, record the honest note the refusal's real
+                // code implies, re-list for the truth.
                 interactions.removeAll {
                     $0.requestId == interaction.requestId
                 }
                 resolvedInteractionTombstones.insert(interaction.requestId)
                 recordResolution(AgentChatInteractionResolution(
-                    requestId: interaction.requestId,
-                    outcome: "expired",
-                    source: "remote"))
+                    staleRequestId: interaction.requestId,
+                    generationInvalidated: error.isStaleGeneration))
                 try? await refreshInteractions()
             }
             throw error
         }
     }
 
-    /// Whether a failed answer/cancel means the request no longer
-    /// exists broker-side (vs a transport blip).
-    private func isStaleInteractionError(_ error: AgentChatError) -> Bool {
-        if case .wire(let code, _, _) = error {
-            return [
-                "unknown_request", "unknown_request_id", "not_found",
-                "stale_interaction", "settled", "invalid_request",
-                "unsupported_request",
-            ].contains(code)
+    /// The honest kind for a refused answer, from the broker's REAL
+    /// ask-adapter codes (ask.ts claimEntry + ERROR_CODES): 
+    /// `stale_generation` — the ask's generation was invalidated:
+    /// expired. `item_changed` — the ask already settled (answered or
+    /// cancelled): settled, outcome unknown from here. 
+    /// `item_not_found` — no such pending ask: settled elsewhere.
+    /// Nil = not stale (transport blip or a validation error — the
+    /// card stays, the error renders on it).
+    private func staleAnswerKind(_ error: AgentChatError) -> AgentChatInteractionResolution.Kind? {
+        guard case .wire(let code, _, _) = error else { return nil }
+        switch code {
+        case "stale_generation": return .expired
+        case "item_changed", "item_not_found": return .settledElsewhere
+        default: return nil
         }
-        return false
+    }
+
+    /// Whether a failed answer/cancel means the request no longer
+    /// exists broker-side (vs a transport blip or a validation error
+    /// the user must see).
+    private func isStaleInteractionError(_ error: AgentChatError) -> Bool {
+        staleAnswerKind(error) != nil
     }
 
     func cancelInteraction(requestId: String) async throws {
@@ -516,10 +534,20 @@ final class AgentChatStore {
                         instanceId: registration.instanceId,
                         generation: registration.generation),
                         params: .object(["requestId": .string(requestId)])))
+            // Accepted: the ask is cancelled broker-side. Clear the
+            // card and record the honest block (the resolved event
+            // may be lost under event-queue pressure).
+            interactions.removeAll { $0.requestId == requestId }
+            resolvedInteractionTombstones.insert(requestId)
+            recordResolution(AgentChatInteractionResolution(
+                requestId: requestId, kind: .cancelled, labels: nil))
         } catch let error as AgentChatError {
-            if isStaleInteractionError(error) {
+            if staleAnswerKind(error) != nil {
                 interactions.removeAll { $0.requestId == requestId }
                 resolvedInteractionTombstones.insert(requestId)
+                recordResolution(AgentChatInteractionResolution(
+                    staleRequestId: requestId,
+                    generationInvalidated: error.isStaleGeneration))
             }
             throw error
         }
@@ -594,14 +622,16 @@ final class AgentChatStore {
             // The resolved ask renders as a transcript row. When this
             // client already recorded the answer (the answer() path),
             // the event is the same resolution — the recorded one
-            // keeps its labels and stays in place.
+            // keeps its labels and stays in place. A wire 'remote'
+            // resolution this store did NOT record was answered by
+            // ANOTHER device.
             if interactionResolutions.contains(where: {
                 $0.requestId == requestId
             }) {
                 return
             }
             recordResolution(AgentChatInteractionResolution(
-                requestId: requestId, outcome: outcome, source: source))
+                requestId: requestId, wireOutcome: outcome, wireSource: source))
         }
     }
 
@@ -609,7 +639,7 @@ final class AgentChatStore {
     /// for the same requestId (the recorded answer beats a later
     /// same-id event only via explicit re-record, which never happens)
     /// and appends in arrival order.
-    private func recordResolution(_ resolution: AgentChatInteractionResolution) {
+    func recordResolution(_ resolution: AgentChatInteractionResolution) {
         interactionResolutions.removeAll {
             $0.requestId == resolution.requestId
         }

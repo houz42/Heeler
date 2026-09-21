@@ -66,20 +66,22 @@ internal struct PendingInteraction: Sendable, Equatable, Identifiable {
 }
 
 /// One resolved ask, rendered as a quiet block in the transcript flow:
-/// 'You answered: <labels>' when this client answered, the honest
-/// outcome note otherwise (answered in terminal / cancelled / expired).
-/// `timestamp` places the block at its true point in the conversation
-/// (before the first message that postdates it); nil parks it at the
-/// bottom of the transcript, before any pending card.
+/// 'You answered: <labels>' when this device answered, the honest
+/// outcome note otherwise (answered in terminal / from another
+/// device / cancelled / expired). Conversation history, not chrome —
+/// visible at every detail level. The block renders AFTER the
+/// transcript's rows and BEFORE any pending card: the client cannot
+/// order it against the agent's streamed turns by local receipt
+/// time (arrival time proves nothing about conversation position),
+/// and the broker carries no position for a resolution — parking at
+/// the live edge is the honest deterministic placement.
 internal struct ResolvedAsk: Sendable, Equatable, Identifiable {
     let id: String
     let body: String
-    var timestamp: Date?
 
-    init(id: String, body: String, timestamp: Date? = nil) {
+    init(id: String, body: String) {
         self.id = id
         self.body = body
-        self.timestamp = timestamp
     }
 }
 
@@ -230,9 +232,9 @@ internal enum ChatFiltering {
     /// interactions render at every level, after all transcript rows — they
     /// are the conversation's live edge, not chrome to be filtered.
     /// Resolved asks render at every level too — they are conversation
-    /// history: a timestamped ask interleaves before the first message
-    /// that postdates it; a timestamp-less one (no reliable ordering
-    /// signal) parks after the transcript, before any pending card.
+    /// history: after the transcript's rows, before any pending card
+    /// (deterministic placement; see ResolvedAsk for why the client
+    /// never interleaves by receipt time).
     static func visibleRows(
         messages: [ChatMessage],
         toolResults: [ToolResult],
@@ -256,25 +258,8 @@ internal enum ChatFiltering {
             }
         }
 
-        // The resolved asks that carry a timestamp, keyed by time for the
-        // interleave below. Those without park at the transcript's end.
-        var timedAsks = resolvedAsks.filter { $0.timestamp != nil }
-        let untimedAsks = resolvedAsks.filter { $0.timestamp == nil }
-
         var rows: [ChatRow] = []
         for message in messages {
-            // A resolved ask renders before the first message that
-            // postdates it — the block sits at its true point in the
-            // conversation, so older pages (prepended above) and newer
-            // turns both keep their positions around it.
-            while let next = timedAsks.first,
-                let askTime = next.timestamp,
-                let messageTime = message.timestamp,
-                askTime <= messageTime
-            {
-                rows.append(.resolvedAsk(next))
-                timedAsks.removeFirst()
-            }
             switch message.role {
             case .user:
                 // User turns are conversation, not chrome: their text is
@@ -326,10 +311,9 @@ internal enum ChatFiltering {
                 }
             }
         }
-        // Any timestamped asks not consumed by the interleave (their time
-        // postdates every visible message) render at the transcript's end.
-        rows.append(contentsOf: timedAsks.map(ChatRow.resolvedAsk))
-        rows.append(contentsOf: untimedAsks.map(ChatRow.resolvedAsk))
+        // Resolved asks: after the transcript's rows, before the pending
+        // cards (deterministic placement — see ResolvedAsk).
+        rows.append(contentsOf: resolvedAsks.map(ChatRow.resolvedAsk))
 
         // Window-boundary orphans: results whose call is not among the
         // visible messages, after the transcript so they never interleave

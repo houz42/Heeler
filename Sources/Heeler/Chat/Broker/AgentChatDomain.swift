@@ -412,85 +412,117 @@ struct AgentChatInteractionsResult: Decodable, Sendable, Equatable {
 }
 
 /// One resolved ask (honest state): the card is gone but the WHY
-/// renders — answered (with where: the agent's terminal vs this
-/// client), cancelled, or expired. When THIS client answered, the
-/// chosen option LABELS ride along (resolved against the interaction
-/// at capture time — the wire's option ids are `idx:<n>`, never
-/// user-facing) so the transcript row can render
-/// 'You answered: <label>'.
-struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable {
+/// renders — as a quiet block in the conversation flow. The KIND is
+/// what the app actually knows, never the ambiguous wire `source`
+/// ('remote' means any remote client — this device or another).
+struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codable {
+    /// What happened, from the app's point of view. The wire's
+    /// outcome/source pair maps here at capture time; a resolution
+    /// this device recorded itself is `youAnswered` (with labels).
+    enum Kind: String, Sendable, Equatable, Codable {
+        /// THIS device answered; `labels` carries the chosen option
+        /// LABELS (resolved against the interaction's questions at
+        /// submit time — the wire's `idx:<n>` ids are never
+        /// user-facing).
+        case youAnswered
+        /// Answered at the agent's own terminal.
+        case answeredInTerminal
+        /// Answered by a remote client that is NOT this device
+        /// (wire says source 'remote' but this store never recorded
+        /// the answer).
+        case answeredFromAnotherDevice
+        /// Cancelled (terminal or a remote client).
+        case cancelled
+        /// Expired before it was answered (generation churn or
+        /// timeout).
+        case expired
+        /// The broker says the ask is no longer pending but the
+        /// outcome is UNKNOWN (item_changed/item_not_found on a
+        /// stale-answer self-heal — settled somewhere, proof of no
+        /// particular outcome).
+        case settledElsewhere
+    }
+
     let requestId: String
-    /// The wire outcome: answered / cancelled / expired.
-    let outcome: String
-    /// The wire source: remote (this client) / terminal.
-    let source: String
-    /// The chosen option labels, one line per answered question, when
-    /// THIS client answered (nil for terminal-side resolutions — only
-    /// the outcome is known, honestly).
-    var answeredLabels: [String]?
-    /// When this client observed the resolution (the answer submit,
-    /// the resolved event's arrival, or the stale-card self-heal) —
-    /// the transcript block's ordering point: it renders after every
-    /// message that predates it and before the agent's response that
-    /// follows. Nil only in hand-built fixtures.
-    var resolvedAt: Date?
+    let kind: Kind
+    /// The chosen option labels, one line per answered question
+    /// (`youAnswered` only).
+    var labels: [String]?
 
     var id: String { requestId }
-    /// The user-facing note (the composer-adjacent state note).
-    var message: String {
-        switch outcome {
-        case "answered":
-            source == "remote"
-                ? "Answered from this device."
-                : "Answered in the agent's terminal."
-        case "cancelled":
-            "The question was cancelled."
-        case "expired":
-            "The question expired before it was answered."
-        default:
-            "The question was resolved."
-        }
-    }
 
-    /// The transcript row's body: the quiet resolved block in the
-    /// conversation flow. 'You answered: <labels>' when this client
-    /// answered and the labels are known; the honest outcome note
-    /// otherwise (answered in terminal / cancelled / expired).
+    /// The transcript block's body: the quiet resolved record in the
+    /// conversation flow.
     var transcriptBody: String {
-        if let labels = answeredLabels, !labels.isEmpty {
-            return "You answered: " + labels.joined(separator: " + ")
+        switch kind {
+        case .youAnswered:
+            if let labels, !labels.isEmpty {
+                return "You answered: " + labels.joined(separator: " + ")
+            }
+            return "You answered."
+        case .answeredInTerminal:
+            return "Answered in the agent's terminal."
+        case .answeredFromAnotherDevice:
+            return "Answered from another device."
+        case .cancelled:
+            return "The question was cancelled."
+        case .expired:
+            return "The question expired before it was answered."
+        case .settledElsewhere:
+            return "This question was already answered or cancelled elsewhere."
         }
-        return message
     }
 
-    /// Builds the resolution for an answer submitted by THIS client,
+    /// Builds the resolution for an answer submitted by THIS device,
     /// resolving option ids to their user-facing labels against the
     /// interaction's questions. An id with no matching option is
     /// dropped, never rendered raw.
     init(
         answered interaction: AgentChatInteraction,
-        answers: [AgentChatAnswer],
-        resolvedAt: Date = Date()
+        answers: [AgentChatAnswer]
     ) {
         self.init(
             requestId: interaction.requestId,
-            outcome: "answered",
-            source: "remote",
-            answeredLabels: Self.answeredLabels(
-                interaction: interaction, answers: answers),
-            resolvedAt: resolvedAt)
+            kind: .youAnswered,
+            labels: Self.answeredLabels(
+                interaction: interaction, answers: answers))
     }
 
-    init(
-        requestId: String, outcome: String, source: String,
-        answeredLabels: [String]? = nil,
-        resolvedAt: Date = Date()
-    ) {
+    /// Maps a broker `interaction.resolved` event THIS device did not
+    /// record itself. source 'remote' here means a remote client —
+    /// this store knows it was not this one (a locally-answered ask
+    /// never reaches this init; the store dedups by requestId first),
+    /// so it reads as ANOTHER device, honestly.
+    init(requestId: String, wireOutcome: String, wireSource: String) {
+        let kind: Kind
+        switch wireOutcome {
+        case "answered":
+            kind = wireSource == "remote"
+                ? .answeredFromAnotherDevice : .answeredInTerminal
+        case "cancelled":
+            kind = .cancelled
+        case "expired":
+            kind = .expired
+        default:
+            kind = .settledElsewhere
+        }
+        self.init(requestId: requestId, kind: kind, labels: nil)
+    }
+
+    /// The stale-answer self-heal: the broker refused the answer
+    /// because the ask is no longer pending. The refusal's code says
+    /// WHICH honest note applies — never a blanket 'expired'.
+    init(staleRequestId: String, generationInvalidated: Bool) {
+        self.init(
+            requestId: staleRequestId,
+            kind: generationInvalidated ? .expired : .settledElsewhere,
+            labels: nil)
+    }
+
+    init(requestId: String, kind: Kind, labels: [String]?) {
         self.requestId = requestId
-        self.outcome = outcome
-        self.source = source
-        self.answeredLabels = answeredLabels
-        self.resolvedAt = resolvedAt
+        self.kind = kind
+        self.labels = labels
     }
 
     private static func answeredLabels(

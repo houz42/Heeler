@@ -431,10 +431,10 @@ struct AgentDetailView: View {
                     else {
                         // The card is stale (resolved elsewhere): the
                         // store's self-heal already dropped it and the
-                        // resolved note renders.
+                        // resolved block renders in the transcript.
                         throw AgentChatError.wire(
-                            code: "stale_interaction",
-                            message: "This question is no longer pending — it may have been answered or expired in the agent's terminal.",
+                            code: "item_changed",
+                            message: "This question is no longer pending — it may have been answered or cancelled elsewhere.",
                             retryable: false)
                     }
                     do {
@@ -447,14 +447,17 @@ struct AgentDetailView: View {
                                     customText: nil, note: nil)
                             })
                     } catch let error as AgentChatError {
+                        // The broker's real stale codes (ask.ts
+                        // claimEntry): the ask settled, expired with
+                        // its generation, or never existed.
                         if case .wire(let code, _, _) = error,
-                            code == "stale_interaction"
-                                || code == "unknown_request"
-                                || code == "settled"
+                            code == "item_changed"
+                                || code == "item_not_found"
+                                || code == "stale_generation"
                         {
                             throw AgentChatError.wire(
                                 code: code,
-                                message: "This question is no longer pending — it may have been answered or expired in the agent's terminal.",
+                                message: "This question is no longer pending — it may have been answered or cancelled elsewhere.",
                                 retryable: false)
                         }
                         throw error
@@ -463,7 +466,7 @@ struct AgentDetailView: View {
                 onAskCancel: { interaction in
                     guard let store = brokerChat else {
                         throw AgentChatError.wire(
-                            code: "stale_interaction",
+                            code: "item_changed",
                             message: "This ask is no longer pending.",
                             retryable: false)
                     }
@@ -539,15 +542,16 @@ struct AgentDetailView: View {
         } ?? []
         // Resolved asks render as quiet blocks in the transcript flow:
         // 'You answered: <labels>' (this device's answers) or the
-        // honest outcome note (answered in terminal / cancelled /
-        // expired). Timestamped at the client's observation time so
-        // the block sits before the agent's response that follows.
+        // honest outcome note (answered in terminal / from another
+        // device / cancelled / expired / settled elsewhere). They
+        // persist across reconnects and reopen (the store keeps them
+        // for the agent's chat life) and park deterministically after
+        // the transcript's rows, before any pending card.
         content.resolvedAsks = brokerChat?.interactionResolutions.map {
             resolution in
             ResolvedAsk(
                 id: resolution.requestId,
-                body: resolution.transcriptBody,
-                timestamp: resolution.resolvedAt)
+                body: resolution.transcriptBody)
         } ?? []
         return content
     }
