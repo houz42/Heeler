@@ -225,62 +225,85 @@ struct ChatCodeBlock: View {
 struct ChatTableBlock<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
+    @State private var naturalWidth: CGFloat?
+
     var body: some View {
-        // Hidden measuring pass: the SAME table content at unlimited
-        // width with the wide-mode cell style (natural single-line
-        // cells) reports the table's natural width. One number drives
-        // the whole switch — no layout feedback loop (the hidden pass
-        // never renders).
-        content()
-            .environment(\.chatWideTableMode, true)
-            .fixedSize(horizontal: true, vertical: false)
-            .hidden()
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { _, w in
-                naturalWidth = w
+        // The visible table IS the layout: wrapped cells when it fits
+        // (v1 behaviour), or one horizontal ScrollView with natural-
+        // width cells when the measured natural width exceeds the chat
+        // width. The switch needs the CHAT width only — proposed via
+        // onGeometryChange on the visible content itself, so the row
+        // keeps its intrinsic height (no GeometryReader row body: in a
+        // LazyVStack that collapses the row to zero height and rows
+        // draw over each other).
+        ChatTableAdaptiveTable(content: content, naturalWidth: $naturalWidth)
+    }
+
+    private struct ChatTableAdaptiveTable<Inner: View>: View {
+        @ViewBuilder let content: () -> Inner
+        @Binding var naturalWidth: CGFloat?
+
+        @State private var chatWidth: CGFloat?
+
+        private var isWide: Bool {
+            guard let natural = naturalWidth, let chat = chatWidth else {
+                return false
             }
-            // The visible pass: the real table, framed by the theme's
-            // zebra + separators. Fits → wrapped cells (v1 behaviour);
-            // wider → one horizontal ScrollView, wide mode set so the
-            // cell style stops wrapping and columns keep whole.
-            .background {
-                GeometryReader { proxy in
-                    let proposed = proxy.size.width
-                    let natural = naturalWidth ?? proposed
-                    if natural > proposed + 1 {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            tableContent
-                                .environment(\.chatWideTableMode, true)
-                                .fixedSize(horizontal: true, vertical: false)
-                        }
-                        .frame(width: proposed, alignment: .leading)
-                    } else {
-                        tableContent
+            return natural > chat + 1
+        }
+
+        var body: some View {
+            Group {
+                if isWide {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        framed
+                            .environment(\.chatWideTableMode, true)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
-                    Color.clear
+                } else {
+                    framed
                 }
             }
-    }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { _, w in
+                if w > 0 { chatWidth = w }
+            }
+            .background {
+                // Hidden measuring pass, present ONLY until it reports:
+                // the copy carries MarkdownUI's cell anchor preferences,
+                // and a standing duplicate would corrupt the visible
+                // table's decoration bounds (TableCellBoundsPreference
+                // merges last-writer-wins). Once the natural width
+                // lands, the copy leaves the tree entirely.
+                if naturalWidth == nil {
+                    content()
+                        .environment(\.chatWideTableMode, true)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .hidden()
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { _, w in
+                            if w > 0 { naturalWidth = w }
+                        }
+                }
+            }
+        }
 
-    /// The table as the theme styles it: zebra striping and thin row
-    /// separators, in the chat's own bottom margin rhythm.
-    private var tableContent: some View {
-        content()
-            .markdownTableBackgroundStyle(
-                .alternatingRows(
-                    Color.primary.opacity(0.045),
-                    Color.clear,
-                    header: Color.primary.opacity(0.10))
-            )
-            .markdownTableBorderStyle(
-                TableBorderStyle(
-                    .insideHorizontalBorders,
-                    color: Color.primary.opacity(0.10),
-                    width: 0.5))
-            .padding(.bottom, 8)
+        private var framed: some View {
+            content()
+                .markdownTableBackgroundStyle(
+                    .alternatingRows(
+                        Color.primary.opacity(0.045),
+                        Color.clear,
+                        header: Color.primary.opacity(0.10))
+                )
+                .markdownTableBorderStyle(
+                    TableBorderStyle(
+                        .insideHorizontalBorders,
+                        color: Color.primary.opacity(0.10),
+                        width: 0.5))
+                .padding(.bottom, 8)
+        }
     }
-
-    @State private var naturalWidth: CGFloat?
 }
+
 
 /// Whether the chat table theme's cell style renders cells at natural
 /// (single-line) width — set inside a wide table's horizontal scroll

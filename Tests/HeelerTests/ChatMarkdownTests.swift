@@ -438,6 +438,96 @@ struct ChatTableStylingTests {
         // The stripe must be weaker than the header.
         #expect(shades[1] > shades[0] + 0.005)
     }
+
+    /// The decoration must cover EVERY table row: the v2 wide-table
+    /// adaptor's hidden measuring copy once stayed mounted, and its
+    /// cell anchor preferences (last-writer-wins merge) pulled the
+    /// visible table's border/stripe bounds short — the last body row
+    /// rendered outside the decorated box. Pin: the sample column's
+    /// colored bands (header + stripes) extend CONTIGUOUSLY over every
+    /// tinted band, and after the last tinted band the rest of the
+    /// column is pure page white — no table content below the
+    /// decoration's extent.
+    @Test func decorationCoversEveryTableRow() throws {
+        let view = ChatMarkdownView(markdown: table)
+            .frame(width: 380)
+            .background(Color.white)
+        let controller = UIHostingController(rootView: view)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        window.overrideUserInterfaceStyle = .light
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        // Two runloop turns: the measuring pass reports after the
+        // first layout; the adaptor re-renders on the second.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        controller.view.layoutIfNeeded()
+
+        let raster = UIGraphicsImageRenderer(
+            size: controller.view.bounds.size
+        ).image { _ in
+            controller.view.drawHierarchy(
+                in: controller.view.bounds, afterScreenUpdates: true)
+        }
+        let bands = try #require(
+            raster.rowBackgroundBands(), "rasterization diagnostics: \(raster.diagnostics())")
+        let tinted = bands.filter { $0.shade < 0.99 }
+        #expect(tinted.count >= 2, "header + stripe bands, saw \(bands.map(\.shade))")
+        // No TINTED band may appear after a plain gap below the
+        // decoration's extent: the bands sequence must be
+        // [plain-page?, header, stripe/plain...] with nothing colored
+        // after the last tinted band's run.
+        if let lastTinted = bands.lastIndex(where: { $0.shade < 0.99 }) {
+            let after = bands[(lastTinted + 1)...]
+            #expect(
+                after.allSatisfy { $0.shade >= 0.99 },
+                "table content after the decoration's last band — a row rendered outside the decorated table: \(bands)")
+        }
+    }
+
+    /// The on-sim context: the table renders inside the chat's
+    /// ScrollView + LazyVStack row. The decoration must cover every
+    /// row in THAT context too (captures showed the last body row
+    /// outside the decorated box — this test pins the real layout
+    /// pipeline, not the free window).
+    @Test func decorationCoversEveryTableRowInLazyScrollContext() throws {
+        let view = ScrollView {
+            LazyVStack(alignment: .leading, spacing: 12) {
+                ChatMarkdownView(markdown: table)
+                    .padding(.horizontal, 12)
+            }
+            .padding(.vertical, 10)
+        }
+        .frame(width: 390, height: 700)
+        .background(Color.white)
+        let controller = UIHostingController(rootView: view)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 700))
+        window.overrideUserInterfaceStyle = .light
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        controller.view.layoutIfNeeded()
+
+        let raster = UIGraphicsImageRenderer(
+            size: controller.view.bounds.size
+        ).image { _ in
+            controller.view.drawHierarchy(
+                in: controller.view.bounds, afterScreenUpdates: true)
+        }
+        let bands = try #require(
+            raster.rowBackgroundBands(), "rasterization diagnostics: \(raster.diagnostics())")
+        let tinted = bands.filter { $0.shade < 0.99 }
+        #expect(
+            tinted.count >= 2,
+            "header + stripe bands in the lazy-scroll context, saw \(bands.map(\.shade))")
+        if let lastTinted = bands.lastIndex(where: { $0.shade < 0.99 }) {
+            let after = bands[(lastTinted + 1)...]
+            #expect(
+                after.allSatisfy { $0.shade >= 0.99 },
+                "content below the decoration's extent in the lazy-scroll context: \(bands)")
+        }
+    }
 }
 
 /// Horizontal shade bands discovered in a rasterized table image: every
