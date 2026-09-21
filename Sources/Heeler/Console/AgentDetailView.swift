@@ -346,16 +346,13 @@ struct AgentDetailView: View {
             await agentChatStore.start()
         }
 
-        // JSONL transcript lane: deprecated direction (superseded by the
-        // broker API), but it is the ONLY working chat path for hosts with
-        // no broker — keeping it as the fallback until the broker is
-        // provisioned. The load-side fix (no whole-file readWhole) is the
-        // conversation slice's current round.
-        let store = ChatStore(
-            hostID: agent.hostID,
-            paneID: agent.agent.paneID,
-            reader: .console(console, hostID: agent.hostID))
-        chat = store
+        // JSONL transcript lane: DEPRECATED (user direction — superseded by
+        // the broker API). Never built: its ChatStore.start does a blocking
+        // whole-transcript SFTP read (readWhole) that hangs on long sessions.
+        // The broker lane is the only chat path; hosts without a broker show
+        // ChatUnavailablePlaceholder. The conversation slice's fix round
+        // removes the lane's code entirely.
+        chat = nil
         // The chat input's attachment bundle: the staging pipeline the
         // + button's pickers and the image paste share, plus the draft
         // seam its path inserts land in. Idempotent per agent identity.
@@ -392,9 +389,7 @@ struct AgentDetailView: View {
                     }),
                 commandFileIO: AgentCommandFileIO.console(
                     console, hostID: agent.hostID)))
-        await store.start(
-            agentSession: agent.agent.agentSession,
-            statusUpdates: console.agentStatusUpdates(for: agent.id))
+        // No JSONL ChatStore.start: the lane is deprecated (see above).
     }
 
     #if DEBUG
