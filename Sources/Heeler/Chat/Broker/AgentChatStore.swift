@@ -525,16 +525,27 @@ final class AgentChatStore {
                 // existed — this submission is definitively NOT the
                 // winner. Clear the stash (it must not survive into a
                 // later foreign resolution for the same id), self-heal:
-                // the card is DEAD, record the honest note the
-                // refusal's real code implies, re-list for the truth.
+                // the card is DEAD, re-list for the truth.
                 submittedAnswers[interaction.requestId] = nil
                 interactions.removeAll {
                     $0.requestId == interaction.requestId
                 }
                 resolvedInteractionTombstones.insert(interaction.requestId)
-                recordResolution(AgentChatInteractionResolution(
-                    staleRequestId: interaction.requestId,
-                    generationInvalidated: error.isStaleGeneration))
+                // PRECEDENCE: an event-recorded resolution (the
+                // authoritative outcome — 'The question was
+                // cancelled.', 'Answered in the agent's terminal.',
+                // expired, or our neutral/acknowledged answer) WINS;
+                // the stale-error fallback ('settled elsewhere')
+                // is weaker and only records when NOTHING stronger
+                // exists. A losing ack must never overwrite what the
+                // broadcast event already told us.
+                if !interactionResolutions.contains(where: {
+                    $0.requestId == interaction.requestId
+                }) {
+                    recordResolution(AgentChatInteractionResolution(
+                        staleRequestId: interaction.requestId,
+                        generationInvalidated: error.isStaleGeneration))
+                }
                 try? await refreshInteractions()
             } else {
                 // A transport error (lost connection, timeout) is
@@ -605,9 +616,17 @@ final class AgentChatStore {
             if staleAnswerKind(error) != nil {
                 interactions.removeAll { $0.requestId == requestId }
                 resolvedInteractionTombstones.insert(requestId)
-                recordResolution(AgentChatInteractionResolution(
-                    staleRequestId: requestId,
-                    generationInvalidated: error.isStaleGeneration))
+                // PRECEDENCE: the event-recorded authoritative outcome
+                // WINS over the stale-error fallback — same rule as
+                // the answer path. A losing cancel ack must never
+                // overwrite what the broadcast event already said.
+                if !interactionResolutions.contains(where: {
+                    $0.requestId == requestId
+                }) {
+                    recordResolution(AgentChatInteractionResolution(
+                        staleRequestId: requestId,
+                        generationInvalidated: error.isStaleGeneration))
+                }
             }
             throw error
         }

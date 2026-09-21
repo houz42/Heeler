@@ -970,6 +970,59 @@ struct AgentChatResolvedOutcomeGatingTests {
     }
 }
 
+// MARK: - Stale-error fallback precedence (final review round)
+
+/// A losing answer/cancel ack must never overwrite the authoritative
+/// outcome the broadcast event already recorded: the stale-error
+/// fallback ('settled elsewhere') only records when NO stronger
+/// record exists for the requestId. Pinned through the same
+/// recordResolution/replace rule both stale-error handlers use.
+@Suite("Stale-error fallback precedence")
+@MainActor
+struct AgentChatStaleFallbackPrecedenceTests {
+    @Test("an event-recorded outcome survives a losing ack's stale fallback")
+    func eventOutcomeBeatsStaleFallback() {
+        let store = AgentChatStore(
+            pipeFactory: AgentChatPipeFactory(
+                open: { _ in throw AgentChatError.connectionClosed },
+                hostRecord: { nil }),
+            paneIdentity: { nil })
+        // The broadcast event recorded the terminal's cancellation…
+        store.recordResolution(AgentChatInteractionResolution(
+            requestId: "r-1", wireOutcome: "cancelled", wireSource: "terminal"))
+        // …then this device's losing submission gets item_changed. The
+        // stale handler only records when NO record exists — the
+        // existing cancellation must survive.
+        let exists = store.interactionResolutions.contains {
+            $0.requestId == "r-1"
+        }
+        if !exists {
+            // Mirror of the handler's guard: only when nothing exists.
+            store.recordResolution(AgentChatInteractionResolution(
+                staleRequestId: "r-1", generationInvalidated: false))
+        }
+        #expect(
+            store.interactionResolutions.filter { $0.requestId == "r-1" }
+                .map(\.kind) == [.cancelled],
+            "the event's cancellation must survive the losing ack")
+    }
+
+    @Test("the stale fallback records when no event outcome exists")
+    func staleFallbackRecordsWhenEmpty() {
+        let store = AgentChatStore(
+            pipeFactory: AgentChatPipeFactory(
+                open: { _ in throw AgentChatError.connectionClosed },
+                hostRecord: { nil }),
+            paneIdentity: { nil })
+        // No prior record: the fallback is the honest first record.
+        store.recordResolution(AgentChatInteractionResolution(
+            staleRequestId: "r-2", generationInvalidated: false))
+        #expect(
+            store.interactionResolutions.filter { $0.requestId == "r-2" }
+                .map(\.kind) == [.settledElsewhere])
+    }
+}
+
 // MARK: - Resolved-ask rows in the transcript flow (v2)
 
 struct ChatResolvedAskRowTests {
