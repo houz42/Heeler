@@ -96,6 +96,12 @@ final class AgentsRedesignProofTests: XCTestCase {
 
     func testRowsShowTwoLinesKindIconAndFullIdentity() {
         resetViewMenu()
+        // v2: the quick-state chips render in the HEADER row (trailing
+        // side of the title row, before New Agent) and the view-menu
+        // summary renders in the accent color — capture as evidence.
+        XCTAssertTrue(app.buttons["All filter"].firstMatch.waitForExistence(timeout: 5),
+                      "the quick-state chips must ride the header row")
+        captureScreenshot(app, "agents-header-chips-accent-summary", lifetime: .keepAlways)
         // The row's identity (AX value): all four location values present —
         // host, session, workspace, tab — no field labels, one line.
         waitToExist(row(containing: "Polish"))
