@@ -464,36 +464,42 @@ struct ChatMarkdownText: Hashable {
     /// opening and closing fence lines). Fence-line matching is line-
     /// oriented, mirroring cmark: a line whose (after up to three spaces
     /// of indentation) first non-space characters are three or more
-    /// backticks opens a fence; the closing fence repeats them.
+    /// BACKTICKS or TILDES opens a fence; the closing fence repeats the
+    /// SAME character with at least the opening run's count (cmark never
+    /// lets a backtick fence close a tilde fence or vice versa).
     private static func fencedCodeRanges(in text: String) -> [NSRange] {
         let ns = text as NSString
         var ranges: [NSRange] = []
         var searchRange = NSRange(location: 0, length: ns.length)
         while true {
             // Opening fence: after up to three spaces of indentation,
-            // three or more backticks (cmark's fence rule).
+            // three or more backticks or tildes (cmark's fence rule).
             let open = ns.range(
-                of: #"(?m)^ {0,3}(`{3,})[^\n]*\n"#,
+                of: #"(?m)^ {0,3}([`~]{3,})[^\n]*\n"#,
                 options: .regularExpression,
                 range: searchRange)
             guard open.location != NSNotFound else { break }
-            // The closing fence must repeat at least the opening run's
-            // backtick count (cmark rule — a shorter run is content).
+            // The closing fence must repeat the SAME fence character
+            // at least the opening run's count (cmark rules — a shorter
+            // run is content, and the other character never closes).
             let fence = ns.substring(with: open).drop(while: { $0 == " " })
-            let ticks = fence.prefix(while: { $0 == "`" }).count
-            // The closing fence: a line of at least `ticks` backticks
-            // (optionally spaced) — NSRegularExpression lacks backref
-            // quantifiers, so enumerate candidate closers explicitly.
+            let fenceChar = fence.first ?? "`"
+            let fenceCount = fence.prefix(while: { $0 == fenceChar }).count
+            // The closing fence: a line of at least `fenceCount` of
+            // the SAME character (optionally spaced) — NSRegularExpression
+            // lacks backref quantifiers, so enumerate candidate closers
+            // explicitly.
             let afterOpen = NSRange(
                 location: open.location + open.length,
                 length: searchRange.location + searchRange.length
                     - open.location - open.length)
-            let closePattern = #"(?m)^ {0,3}(`{3,})[ \t]*(\n|$)"#
+            let escaped = fenceChar == "`" ? "`" : "~"
+            let closePattern = #"(?m)^ {0,3}(\#(escaped){3,})[ \t]*(\n|$)"#
             let closeRegex = try! NSRegularExpression(pattern: closePattern)
             var close = NSRange(location: NSNotFound, length: 0)
             for match in closeRegex.matches(in: text, range: afterOpen) {
                 let run = match.range(at: 1)
-                if ns.substring(with: run).count >= ticks {
+                if ns.substring(with: run).count >= fenceCount {
                     close = match.range
                     break
                 }
@@ -518,11 +524,17 @@ struct ChatMarkdownText: Hashable {
         return ranges
     }
 
-    /// Fences IRC-format sections as code. A SECTION is a maximal run
-    /// of consecutive non-blank lines (paragraph scope) where EVERY
-    /// line matches one of the IRC log patterns and the run is at
-    /// least two lines (a single matching line stays prose — one
-    /// `Nick: hi` line is ordinary chat text, not a log).
+    /// Fences IRC-format sections as code. A SECTION is a WHOLE
+    /// PARAGRAPH — a maximal run of consecutive non-blank lines —
+    /// where EVERY line matches one of the IRC log patterns and the
+    /// run is at least two lines (a single matching line stays prose —
+    /// one `Nick: hi` line is ordinary chat text, not a log). Sections
+    /// are classified COMPLETE before any rewriting: a paragraph that
+    /// does not qualify passes through UNCHANGED (the review's data-
+    /// loss case — a lone `Note: keep this` matched `Nick: ...` and the
+    /// flush dropped it). A fence is emitted only over the complete
+    /// qualifying paragraph, never over a matching subsequence inside
+    /// mixed prose.
     ///
     /// Patterns (line-oriented, prefix-anchored):
     /// - `[HH:MM(:SS)?]`-stamped lines (classic channel log);
@@ -531,59 +543,93 @@ struct ChatMarkdownText: Hashable {
     /// - `Nick: message` (agent-relay format) — a word-ish nick
     ///   followed by `: ` at the line head.
     ///
-    /// Already-fenced code is skipped (its lines are data), and a
-    /// detected section never overlaps one: fence ranges are computed
-    /// first and section runs are clipped around them.
+    /// Already-fenced code (backtick OR tilde fences) is protected
+    /// verbatim: any paragraph overlapping a protected range passes
+    /// through untouched, so a log pasted inside a fence never
+    /// double-fences and prose inside a fence is never reclassified.
     static func fenceIRCSections(_ text: String) -> String {
         let protected = fencedCodeRanges(in: text)
         let lines = text.components(separatedBy: "\n")
 
         // Line-parallel fence map: which line indices sit inside an
-        // existing fence (their content must never be re-fenced).
+        // existing fence (their content is data, never re-fenced).
         var lineStarts: [Int] = []
         var offset = 0
         for line in lines {
             lineStarts.append(offset)
             offset += line.utf16.count + 1
         }
-        func insideFence(_ lineIndex: Int) -> Bool {
-            guard lineIndex < lineStarts.count else { return false }
-            let start = lineStarts[lineIndex]
-            let length = (lines[lineIndex] as NSString).length
-            let range = NSRange(location: start, length: length)
-            return protected.contains { overlaps($0, range) }
+        func lineRange(_ index: Int) -> NSRange {
+            NSRange(
+                location: lineStarts[index],
+                length: (lines[index] as NSString).length)
         }
-
-        var result: [String] = []
-        var run: [String] = []
-
-        func flushIRC() {
-            defer {
-                run.removeAll()
+        func paragraphOverlapsFence(_ indices: [Int]) -> Bool {
+            indices.contains { index in
+                protected.contains { overlaps($0, lineRange(index)) }
             }
-            // At least TWO consecutive matching lines, none inside an
-            // existing fence — fence it as code.
-            guard run.count >= 2 else { return }
-            result.append("```irc")
-            result.append(contentsOf: run)
-            result.append("```")
         }
 
+        // Pass 1: split into paragraphs (maximal non-blank runs). A
+        // paragraph is FENCEABLE when it is >= 2 lines, EVERY line
+        // matches, and it overlaps no protected fence range.
+        struct Paragraph {
+            let lineIndices: [Int]
+            let fenceable: Bool
+        }
+        var paragraphs: [Paragraph] = []
+        var current: [Int] = []
+        func classify() {
+            guard !current.isEmpty else { return }
+            let qualifies =
+                current.count >= 2
+                && !paragraphOverlapsFence(current)
+                && current.allSatisfy {
+                    isIRCLine(lines[$0].trimmingCharacters(in: .whitespaces))
+                }
+            paragraphs.append(Paragraph(lineIndices: current, fenceable: qualifies))
+            current = []
+        }
         for (index, line) in lines.enumerated() {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.isEmpty {
-                flushIRC()
-                result.append(line)
-                continue
+            if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                classify()
+            } else {
+                current.append(index)
             }
-            if insideFence(index) || !isIRCLine(trimmed) {
-                flushIRC()
-                result.append(line)
-                continue
-            }
-            run.append(line)
         }
-        flushIRC()
+        classify()
+
+        // Pass 2: emit. Fenceable paragraphs get one fence around their
+        // COMPLETE line run; everything else passes through in order,
+        // line for line — blank separators included, no line ever
+        // dropped or merged.
+        var fencedIndices = Set<Int>()
+        for paragraph in paragraphs where paragraph.fenceable {
+            paragraph.lineIndices.forEach { fencedIndices.insert($0) }
+        }
+        var result: [String] = []
+        var index = 0
+        while index < lines.count {
+            if fencedIndices.contains(index) {
+                // The paragraph's COMPLETE run, one fence around it.
+                guard let paragraph = paragraphs.first(where: {
+                    $0.fenceable && $0.lineIndices.contains(index)
+                }) else {
+                    result.append(lines[index])
+                    index += 1
+                    continue
+                }
+                result.append("```irc")
+                for i in paragraph.lineIndices {
+                    result.append(lines[i])
+                }
+                result.append("```")
+                index = paragraph.lineIndices.last! + 1
+            } else {
+                result.append(lines[index])
+                index += 1
+            }
+        }
         return result.joined(separator: "\n")
     }
 

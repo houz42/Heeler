@@ -41,6 +41,50 @@ enum ChatDraftItem: Identifiable, Equatable {
     }
 }
 
+
+extension ChatDraftItem {
+    /// Item 18 persistence: the Codable form. Preview image BYTES are
+    /// deliberately dropped (never persisted) — a restored image tile
+    /// shows its remote-path glyph and reloads nothing fake.
+    init(_ saved: ChatPaneDraft.Item) {
+        switch saved.kind {
+        case .image:
+            self = .image(
+                id: saved.id,
+                remotePath: saved.remotePath ?? "",
+                previewData: nil)
+        case .file:
+            self = .file(
+                id: saved.id,
+                name: saved.name ?? "File",
+                remotePath: saved.remotePath ?? "")
+        case .quote:
+            self = .quote(
+                id: saved.id,
+                text: saved.text ?? "",
+                author: saved.author ?? "Heeler")
+        }
+    }
+
+    /// The Codable form of this draft item.
+    var paneDraftItem: ChatPaneDraft.Item {
+        switch self {
+        case .image(let id, let remotePath, _):
+            return ChatPaneDraft.Item(
+                kind: .image, id: id, remotePath: remotePath,
+                name: nil, text: nil, author: nil)
+        case .file(let id, let name, let remotePath):
+            return ChatPaneDraft.Item(
+                kind: .file, id: id, remotePath: remotePath,
+                name: name, text: nil, author: nil)
+        case .quote(let id, let text, let author):
+            return ChatPaneDraft.Item(
+                kind: .quote, id: id, remotePath: nil,
+                name: nil, text: text, author: author)
+        }
+    }
+}
+
 /// Pure Send composition for the draft items + prose: every item rides
 /// EXACTLY ONCE and the prose is preserved VERBATIM (attachment paths
 /// never live in the prose — they are removed at tile-creation time,

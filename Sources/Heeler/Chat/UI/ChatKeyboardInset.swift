@@ -36,34 +36,62 @@ final class ChatKeyboardInset {
     @ObservationIgnored private weak var window: UIWindow?
     @ObservationIgnored private var coalesceTask: Task<Void, Never>?
     @ObservationIgnored private let notificationCenter: NotificationCenter
+    /// Test seam: replaces the window-bottom-edge measurement with a
+    /// direct height (tests inject geometry; production passes nil and
+    /// the real window is measured).
+    @ObservationIgnored private let measureOverride: (@MainActor (CGRect) -> CGFloat?)?
+    /// The block-based observer tokens — RETAINED: NotificationCenter
+    /// holds block registrations until explicitly removed (weak self
+    /// silences delivery after dealloc but never unregisters), so the
+    /// tokens must live as long as the inset and be removed in deinit.
+    /// nonisolated(unsafe): only deinit (nonisolated) touches it after
+    /// init, and removeObserver is thread-safe.
+    @ObservationIgnored nonisolated(unsafe) private var observerTokens: [NSObjectProtocol] = []
     /// Long enough to fold a presentation's follow-up frame into the
     /// first, short enough to stay inside the keyboard's animation.
     private static let coalesceDelay = Duration.milliseconds(60)
 
-    init(notificationCenter: NotificationCenter = .default) {
+    init(
+        notificationCenter: NotificationCenter = .default,
+        measure: (@MainActor (CGRect) -> CGFloat?)? = nil
+    ) {
         self.notificationCenter = notificationCenter
+        self.measureOverride = measure
         for name: Notification.Name in [
             UIResponder.keyboardWillShowNotification,
             UIResponder.keyboardWillChangeFrameNotification,
         ] {
+            observerTokens.append(
+                notificationCenter.addObserver(
+                    forName: name, object: nil, queue: .main
+                ) { [weak self] notification in
+                    // Notification is not Sendable; the frame it carries is.
+                    let endFrame = notification.userInfo?[
+                        UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+                    MainActor.assumeIsolated {
+                        self?.keyboardWillPresent(endFrame: endFrame)
+                    }
+                })
+        }
+        observerTokens.append(
             notificationCenter.addObserver(
-                forName: name, object: nil, queue: .main
-            ) { [weak self] notification in
-                // Notification is not Sendable; the frame it carries is.
-                let endFrame = notification.userInfo?[
-                    UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+                forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main
+            ) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    self?.keyboardWillPresent(endFrame: endFrame)
+                    self?.keyboardWillDismiss()
                 }
-            }
+            })
+    }
+
+    /// Removes every block registration and cancels pending coalescing
+    /// work. NotificationCenter keeps block observers registered across
+    /// the observer's dealloc (the review's leak); tokens make the
+    /// teardown explicit and complete.
+    deinit {
+        for token in observerTokens {
+            notificationCenter.removeObserver(token)
         }
-        notificationCenter.addObserver(
-            forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.keyboardWillDismiss()
-            }
-        }
+        coalesceTask?.cancel()
     }
 
     /// Measures against the window the chat surface is mounted in.
@@ -74,7 +102,26 @@ final class ChatKeyboardInset {
     }
 
     private func keyboardWillPresent(endFrame: CGRect?) {
-        guard let endFrame, let window else { return }
+        guard let endFrame else { return }
+        // The measurement seam (tests inject geometry; production reads
+        // the chat's own window).
+        if let measureOverride {
+            guard let height = measureOverride(endFrame) else { return }
+            if height > 0 {
+                coalesceTask?.cancel()
+                coalesceTask = Task { [weak self] in
+                    try? await Task.sleep(for: Self.coalesceDelay)
+                    guard !Task.isCancelled else { return }
+                    self?.apply(height)
+                }
+            } else {
+                coalesceTask?.cancel()
+                coalesceTask = nil
+                apply(0)
+            }
+            return
+        }
+        guard let window else { return }
         // The keyboard's END frame includes the accessory: UIKit
         // publishes it in the notification's userInfo even when the
         // accessory mounts a beat after the keyboard itself. Only the
@@ -85,10 +132,37 @@ final class ChatKeyboardInset {
                 isSceneKeyWindow: scene.keyWindow === window,
                 activationState: scene.activationState)
         else { return }
-        let covered = window.bounds.intersection(
-            window.convert(endFrame, from: window.screen.coordinateSpace)).height
+        // BOTTOM-EDGE obstruction only (the review's floating-keyboard
+        // case): the inset is how far the keyboard covers the window's
+        // bottom edge — a docked keyboard reaches to (or near) the
+        // window's bottom; a FLOATING keyboard (iPad) hovers mid-window
+        // and covers none of the edge, so it must measure ZERO however
+        // large its rect is. Requiring the frame to reach the bottom
+        // edge (1pt tolerance) is what separates the two.
+        let frameInWindow = window.convert(
+            endFrame, from: window.screen.coordinateSpace)
+        let reachesBottomEdge = abs(
+            frameInWindow.maxY - window.bounds.maxY) <= 1
+        guard reachesBottomEdge else {
+            // Zero coverage: the keyboard left the bottom edge
+            // (docked→floating, or slid off-window). CLEAR the previous
+            // inset — the earlier code discarded the update and a stale
+            // height stayed pinned under a floating keyboard.
+            coalesceTask?.cancel()
+            coalesceTask = nil
+            apply(0)
+            return
+        }
+        let covered = window.bounds.intersection(frameInWindow).height
         let height = max(0, covered - window.safeAreaInsets.bottom)
-        guard height > 0 else { return }
+        guard height > 0 else {
+            // Zero-height coverage also clears (the dismissal path
+            // publishes a shrinking end frame before the hide lands).
+            coalesceTask?.cancel()
+            coalesceTask = nil
+            apply(0)
+            return
+        }
         coalesceTask?.cancel()
         coalesceTask = Task { [weak self] in
             try? await Task.sleep(for: Self.coalesceDelay)

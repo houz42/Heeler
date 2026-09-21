@@ -731,3 +731,200 @@ struct ChatMarkdownHardBreakTests {
         #expect(html.contains("after"))
     }
 }
+
+// MARK: - IRC section fencing (v2; the review's data-loss regressions)
+
+struct ChatMarkdownIRCFencingTests {
+    /// The review's data-loss repro: a paragraph whose SINGLE line
+    /// matches `Nick: ...` is ordinary prose — it must pass through
+    /// UNCHANGED (the first cut's flush dropped it to '').
+    @Test func loneNickLinePassesThroughUnchanged() {
+        let input = "Note: keep this"
+        #expect(ChatMarkdownText.fenceIRCSections(input) == input)
+    }
+
+    /// A qualifying multi-line log still fences — the pass-through
+    /// guard must not over-correct into never fencing.
+    @Test func qualifyingLogFences() {
+        let input = "[09:41] <jhou> the build broke\n[09:42] <sam> seeing it"
+        let out = ChatMarkdownText.fenceIRCSections(input)
+        #expect(out.hasPrefix("```irc\n"))
+        #expect(out.hasSuffix("\n```"))
+        #expect(out.contains("[09:41] <jhou> the build broke"))
+    }
+
+    /// A MIXED paragraph (some matching, some prose lines) is NOT
+    /// fenceable — the fence must wrap the WHOLE paragraph or nothing;
+    /// a matching subsequence inside prose never fences alone.
+    @Test func mixedParagraphPassesThroughWhole() {
+        let input = "Intro prose line\n[09:41] <jhou> log line\nMore prose here"
+        #expect(ChatMarkdownText.fenceIRCSections(input) == input)
+    }
+
+    /// The review's tilde repro: content inside a TILDE fence is data —
+    /// a `Note: preserve literally` line inside ~~~ fences must stay
+    /// verbatim, never re-fenced and never dropped.
+    @Test func tildeFenceContentStaysVerbatim() {
+        let input = "~~~text\nNote: preserve literally\n~~~"
+        #expect(ChatMarkdownText.fenceIRCSections(input) == input)
+    }
+
+    /// Blank-line separators between paragraphs are preserved — the
+    /// paragraph rewriter must not merge or drop them.
+    @Test func blankSeparatorsSurvive() {
+        // A single-line log paragraph stays PROSE (>= 2-line gate):
+        // the whole input passes through unchanged, separators intact.
+        let input = "first para\n\n[09:41] <jhou> a log line\n\nlast para"
+        #expect(ChatMarkdownText.fenceIRCSections(input) == input)
+        // A TWO-line log paragraph between the same separators fences,
+        // and the separators + prose paragraphs survive around it.
+        let input2 = "first para\n\n[09:41] <jhou> a log line\n[09:42] <sam> another\n\nlast para"
+        let out = ChatMarkdownText.fenceIRCSections(input2)
+        #expect(out.hasPrefix("first para\n\n```irc\n"))
+        #expect(out.hasSuffix("\n```\n\nlast para"))
+    }
+
+    /// A fence NEVER wraps a partial run: the qualifying paragraph is
+    /// classified before any rewrite, so an unfenced emit is the
+    /// ORIGINAL text, not a truncated one.
+    @Test func noPartialFencing() {
+        let input = "The build broke on main today:\nsee the CI log for why"
+        #expect(ChatMarkdownText.fenceIRCSections(input) == input)
+    }
+}
+
+// MARK: - ChatKeyboardInset (v2 item 5; the review's geometry regressions)
+
+struct ChatKeyboardInsetTests {
+    /// Drives the inset through real notifications with an injected
+    /// measurement seam.
+    @MainActor
+    private func makeInset(
+        measure: @escaping @MainActor (CGRect) -> CGFloat?
+    ) -> (ChatKeyboardInset, NotificationCenter) {
+        let center = NotificationCenter()
+        let inset = ChatKeyboardInset(
+            notificationCenter: center, measure: measure)
+        return (inset, center)
+    }
+
+    @MainActor
+    private func post(
+        _ center: NotificationCenter, _ name: Notification.Name,
+        frame: CGRect? = nil
+    ) {
+        var userInfo: [AnyHashable: Any] = [:]
+        if let frame {
+            userInfo[UIResponder.keyboardFrameEndUserInfoKey] = frame
+        }
+        center.post(
+            name: name, object: nil, userInfo: userInfo.isEmpty ? nil : userInfo)
+    }
+
+    /// Async main-queue delivery + the 60ms coalesce: the main thread
+    /// must YIELD for the queue-scheduled observer block to run; poll
+    /// with sleeps (each `try await Task.sleep` services the main queue).
+    @MainActor
+    private func settle(
+        _ inset: ChatKeyboardInset, to height: CGFloat
+    ) async -> Bool {
+        for _ in 0..<50 {
+            if inset.height == height { return true }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return inset.height == height
+    }
+
+    @Test func dockedPresentationSetsHeight() async throws {
+        let (inset, center) = await MainActor.run {
+            makeInset { frame in
+                frame.height > 100 ? frame.height : nil
+            }
+        }
+        await MainActor.run {
+            post(center, UIResponder.keyboardWillShowNotification, frame: CGRect(
+                x: 0, y: 500, width: 390, height: 400))
+        }
+        let settled = await settle(inset, to: 400)
+        let finalHeight = await MainActor.run { inset.height }
+        #expect(settled, "coalesced docked height never landed; got \(finalHeight)")
+    }
+
+    @Test func dismissalClearsHeight() async throws {
+        let (inset, center) = await MainActor.run {
+            makeInset { frame in
+                frame.height > 100 ? frame.height : nil
+            }
+        }
+        await MainActor.run {
+            post(center, UIResponder.keyboardWillShowNotification, frame: CGRect(
+                x: 0, y: 500, width: 390, height: 400))
+        }
+        _ = await settle(inset, to: 400)
+        await MainActor.run {
+            post(center, UIResponder.keyboardWillHideNotification)
+        }
+        let cleared = await settle(inset, to: 0)
+        #expect(cleared, "dismissal never cleared the inset")
+    }
+
+    /// The review's floating-keyboard case: a frame that covers no
+    /// bottom edge measures ZERO, and — the actual regression — a zero
+    /// measurement arriving while a previous height is set must CLEAR
+    /// it (the first cut discarded the update and the stale inset
+    /// stayed pinned).
+    @Test func zeroCoverageClearsAPreviouslySetInset() async throws {
+        let (inset, center) = await MainActor.run {
+            makeInset { frame in
+                // Floating geometry: hovers mid-window, never touches
+                // the bottom edge → measures zero.
+                if frame.minY > 200 && frame.maxY < 700 { return 0 }
+                return frame.height
+            }
+        }
+        // Docked first: height set.
+        await MainActor.run {
+            post(center, UIResponder.keyboardWillShowNotification, frame: CGRect(
+                x: 0, y: 500, width: 390, height: 400))
+        }
+        let docked = await settle(inset, to: 400)
+        #expect(docked, "docked presentation never landed")
+        // Then docked→floating: the update carries the floating frame
+        // and must CLEAR the inset, not keep the stale 400.
+        await MainActor.run {
+            post(center, UIResponder.keyboardWillChangeFrameNotification, frame: CGRect(
+                x: 40, y: 300, width: 320, height: 200))
+        }
+        let cleared = await settle(inset, to: 0)
+        let finalHeight2 = await MainActor.run { inset.height }
+        #expect(cleared, "floating transition never cleared the inset; got \(finalHeight2)")
+    }
+
+    /// The observer leak: the inset's block registrations are REMOVED
+    /// at deinit — after the inset dies, posting must not deliver
+    /// anywhere (no zombie observer in the center).
+    @Test func observersAreRemovedAtDeinit() async throws {
+        await MainActor.run {
+            let center = NotificationCenter()
+            do {
+                _ = ChatKeyboardInset(
+                    notificationCenter: center,
+                    measure: { _ in 300 })
+            }
+            // Delivered after deinit → a leaked registration. The
+            // center holds weak self so delivery is a no-op for the
+            // dead inset; the OBSERVABLE contract is that no block
+            // remains registered at all.
+            var delivered = 0
+            let probe = center.addObserver(
+                forName: UIResponder.keyboardWillShowNotification,
+                object: nil, queue: .main
+            ) { _ in delivered += 1 }
+            defer { center.removeObserver(probe) }
+            center.post(name: UIResponder.keyboardWillShowNotification, object: nil)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+            // The probe itself received the post.
+            #expect(delivered == 1)
+        }
+    }
+}

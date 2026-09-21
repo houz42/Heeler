@@ -137,6 +137,10 @@ struct ChatScreen: View {
     /// this height instead of SwiftUI's two-stage keyboard avoidance.
     @State private var keyboardInset = ChatKeyboardInset()
     @State private var topSentinelVisible = false
+
+    /// Item 18: per-pane draft persistence (load on appear, save per
+    /// edit, clear on successful send).
+    private let draftStore = ChatDraftPersistenceStore.shared
     /// The bottom sentinel's visibility drives the jump control's
     /// newest-end button.
     @State private var bottomSentinelVisible = false
@@ -242,6 +246,13 @@ struct ChatScreen: View {
         .padding(.bottom, keyboardInset.height)
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .chatKeyboardInsetWindow(keyboardInset)
+        // Item 18: the pane's draft loads once per pane identity (a
+        // half-typed message survives surface switches), and every
+        // draft/item change persists immediately.
+        .onAppear { loadPersistedDraft() }
+        .onChange(of: paneID, initial: false) { _, _ in loadPersistedDraft() }
+        .onChange(of: draft) { _, _ in persistDraft() }
+        .onChange(of: draftItems) { _, _ in persistDraft() }
 
         // The +N collection sheet: every draft item, removable there.
         .sheet(isPresented: $showsDraftCollection) {
@@ -877,9 +888,10 @@ struct ChatScreen: View {
                 // Composer collapse (conversation redesign): empty OR
                 // unfocused = single row; focused with text grows to
                 // the 3-line cap. The draft survives blur untouched.
-                collapsed: draft.isEmpty || !inputFocused,
                 placeholder: "Message — / # @ ! for commands",
-                onEdit: { [self] newText, _ in self.applyComposerEdit(newText) },
+                onEdit: { [self] newText, caret in
+                    self.applyComposerEdit(newText, caret: caret)
+                },
                 onReturnKey: { [self] in self.composerReturnKey(router) },
                 onPaste: { [self] in self.handlePaste() },
                 pendingAccept: $pendingAccept,
@@ -888,8 +900,15 @@ struct ChatScreen: View {
         }
     }
 
-    private func applyComposerEdit(_ newText: String) {
+    /// The draft's live caret (UTF-16), tracked so a persisted draft can
+    /// restore it (item 18). The representable reports it with every
+    /// edit; the suggestion-accept path lands its own caret through
+    /// pendingAccept, and the next edit tracks the settled result.
+    @State private var draftCaret = 0
+
+    private func applyComposerEdit(_ newText: String, caret: Int = 0) {
         draft = newText
+        draftCaret = caret
     }
 
     /// Return with the suggestion menu open accepts the highlighted
@@ -1089,9 +1108,38 @@ struct ChatScreen: View {
         ChatDraftComposer.messageText(items: draftItems, draft: draft)
     }
 
+    /// A successful Send clears the composer AND its persisted draft
+    /// (item 18: the next message starts clean; a cleared composer stays
+    /// cleared across surfaces).
     private func clearDraftAfterSend() {
         draft = ""
         draftItems = []
+        draftStore.clear(paneID: paneID)
+    }
+
+    /// The pane's persisted draft (item 18): loaded on appear so a
+    /// half-typed message survives leaving and returning to the chat
+    /// (surface switches, agent switches, background/foreground). The
+    /// caret rides the draft via a one-shot placement so the restore
+    /// never fights an in-progress selection.
+    private func loadPersistedDraft() {
+        guard let saved = draftStore.draft(paneID: paneID) else { return }
+        draft = saved.text
+        draftItems = saved.items.map(ChatDraftItem.init)
+        draftCaret = saved.caretLocation
+        caretRequest = ChatCaretRequest(location: saved.caretLocation)
+    }
+
+    /// Persists the live draft per edit (item 18). An EMPTY draft clears
+    /// the entry — cheap enough to run on every keystroke (the encode is
+    /// a small Codable; image preview BYTES never persist by design).
+    private func persistDraft() {
+        draftStore.save(
+            ChatPaneDraft(
+                text: draft,
+                caretLocation: draftCaret,
+                items: draftItems.map(\.paneDraftItem)),
+            paneID: paneID)
     }
 
     private func removeDraftItem(_ id: String) {
