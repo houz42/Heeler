@@ -44,11 +44,59 @@ struct ChatRowView: View {
             }
         case .pending(let interaction):
             ChatPendingRow(interaction: interaction, choose: { _ in })
+        case .notice(_, _, let text, let level):
+            // Item 19: the quiet system row — never dropped; the wash
+            // strengthens with the level.
+            ChatNoticeRow(text: text, level: level)
         case .image:
             // Handled by the screen (fetch seam + reader); the plain
             // row renderer never sees it.
             EmptyView()
         }
+    }
+}
+
+/// A system/structural notice rendered as a distinct quiet row (item
+/// 19): secondary text, small caps label, level-tinted wash — never
+/// raw markup, never dropped.
+private struct ChatNoticeRow: View {
+    let text: String
+    let level: String
+
+    private var label: String {
+        switch level {
+        case "error": "Error"
+        case "warning": "Warning"
+        default: "Notice"
+        }
+    }
+
+    private var tint: Color {
+        switch level {
+        case "error": .red
+        case "warning": .orange
+        default: .secondary
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "info.circle")
+                .font(.caption2)
+                .foregroundStyle(tint)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(tint)
+                ChatBlockText(text, style: .output)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(label): \(text)")
     }
 }
 

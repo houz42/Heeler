@@ -39,6 +39,63 @@ struct AgentChatStreamTail: Sendable, Equatable {
     var text: String
 }
 
+/// One just-sent user message's local echo (items 1 + 11): the bubble
+/// the user sees IMMEDIATELY, plus its honest delivery state. The
+/// requestKey is the broker's dedup key — a retry reuses it, so an
+/// ambiguous first attempt can never double-deliver. Reconciliation:
+/// when an authoritative history page contains the message, the echo
+/// drops (the committed record renders in its own position — order is
+/// never reordered by the echo, item 15).
+struct AgentChatOutgoingMessage: Sendable, Equatable, Identifiable {
+    enum DeliveryState: Sendable, Equatable {
+        case sending
+        case sent
+        case failed
+    }
+
+    let id: UUID
+    let requestKey: String
+    let text: String
+    /// Images riding the structured send (item 3): the agent receives
+    /// them as real image content blocks, not '@path' text.
+    let images: [AgentChatOutgoingImage]
+    /// The send's wall-clock moment: the echo's chronological anchor.
+    let sentAt: Date
+    var state: DeliveryState = .sending
+    /// The honest failure copy when state == .failed (retryable).
+    var failureMessage: String?
+
+    init(
+        id: UUID = UUID(), requestKey: String, text: String,
+        images: [AgentChatOutgoingImage] = []
+    ) {
+        self.id = id
+        self.requestKey = requestKey
+        self.text = text
+        self.images = images
+        self.sentAt = Date()
+    }
+}
+
+/// One image on a structured prompt.send (wire contract, live on the
+/// adapter): `ref` is the img: blob-store id the broker resolves
+/// server-side; `data` is inline base64. Exactly one of the two.
+struct AgentChatOutgoingImage: Sendable, Equatable {
+    var ref: String?
+    var data: Data?
+    var mimeType: String
+    var byteLength: Int?
+
+    init(ref: String? = nil, data: Data? = nil, mimeType: String, byteLength: Int? = nil) {
+        precondition((ref == nil) != (data == nil),
+            "exactly one of ref or data must carry the image")
+        self.ref = ref
+        self.data = data
+        self.mimeType = mimeType
+        self.byteLength = byteLength
+    }
+}
+
 @MainActor
 @Observable
 final class AgentChatStore {
@@ -60,6 +117,17 @@ final class AgentChatStore {
     /// this closes). Capped; the newest resolution wins.
     private(set) var interactionResolutions: [AgentChatInteractionResolution] = []
 
+    /// The optimistic local echo of one just-sent message (item 11):
+    /// visible IMMEDIATELY on send, before any transcript round-trip,
+    /// carrying the honest delivery state (item 1). Reconciled away
+    /// when the authoritative history page contains the confirmed
+    /// record — the echo's bubble is replaced by the real one in its
+    /// natural chronological position, never duplicated (item 15).
+    private(set) var outgoing: [AgentChatOutgoingMessage] = []
+
+    /// Retryable failure text for the most recent failed send, visible
+    /// on the echo bubble (never silent; the escalation's contract).
+    private(set) var lastSendFailure: String?
     var askSupported: Bool { capabilities?.interactions == true }
 
     // MARK: Wiring
@@ -108,7 +176,17 @@ final class AgentChatStore {
             self.channel = nil
             Task { await old.close() }
         }
-        content = ChatContent()
+        // Content-preserving reconnect (item 6 + seamless refresh, 13):
+        // a re-match after session.unavailable / a lock-unlock cycle
+        // keeps the last committed page RENDERED while the new channel
+        // connects (the phase stays renderable for the old content; a
+        // blank/failed-content placeholder mid-reconnect was the
+        // unlock '!' bug). Only the volatile, channel-bound state
+        // resets; the committed page and outgoing echoes survive
+        // until the fresh page lands.
+        let wasRenderable = phase.isRenderable
+        let heldContent = wasRenderable ? content : nil
+        let heldOutgoing = outgoing
         streamTails = []
         interactions = []
         hasOlder = false
@@ -127,14 +205,23 @@ final class AgentChatStore {
         guard let pane = paneIdentity() else {
             phase = .unavailable(
                 "This agent has no session identity to match against the chat broker.")
+            if heldContent != nil { content = heldContent ?? ChatContent() }
+            outgoing = heldOutgoing
             return
         }
         guard case .available(let socketPath) = await pipeFactory.availability()
         else {
             phase = .unavailable("No chat broker is configured for this Host.")
+            if heldContent != nil { content = heldContent ?? ChatContent() }
+            outgoing = heldOutgoing
             return
         }
-        phase = .connecting
+        // Keep the old content visible while connecting (the honest
+        // "reconnecting" banner rides in the view; content never blanks).
+        phase = heldContent != nil ? .disconnected(
+            reason: "Reconnecting to the chat broker…") : .connecting
+        content = heldContent ?? ChatContent()
+        outgoing = heldOutgoing
         lifecycleTask = Task { [weak self] in
             await self?.run(
                 socketPath: socketPath, pane: pane, storeGeneration: myGeneration)
@@ -359,9 +446,57 @@ final class AgentChatStore {
 
     // MARK: Prompt
 
-    /// Delivers one user message. The requestKey dedups retries within
-    /// this store's life; a new user action mints a new key.
-    func send(_ text: String) async throws {
+    /// Delivers one user message with the honest delivery lifecycle:
+    /// the optimistic echo renders IMMEDIATELY as sending (item 11);
+    /// the prompt.send round-trip then confirms or fails it (item 1).
+    /// A failure keeps the echo as failed+retryable — NEVER silent
+    /// (the real silent-loss escalation: prompt.send throwing into a
+    /// swallowed catch, a dead channel, or a broker-offline path all
+    /// land here visibly). The requestKey dedups retries within this
+    /// store's life; a retry reuses the SAME key so the broker cannot
+    /// double-deliver.
+    @discardableResult
+    func send(
+        _ text: String, images: [AgentChatOutgoingImage] = []
+    ) async throws -> AgentChatOutgoingMessage {
+        let echo = AgentChatOutgoingMessage(
+            id: UUID(), requestKey: UUID().uuidString, text: text, images: images)
+        outgoing.append(echo)
+        do {
+            try await sendOnWire(echo)
+            markOutgoing(id: echo.id, state: .sent)
+            return echo
+        } catch {
+            markOutgoing(
+                id: echo.id,
+                state: .failed,
+                message: Self.sendFailureText(error))
+            throw error
+        }
+    }
+
+    /// Retries a failed echo through the SAME requestKey: the broker's
+    /// dedup makes a retry-after-ambiguous-failure safe (it either
+    /// redelivers nothing or delivers once). The echo returns to
+    /// sending, then lands sent or failed again — never silently.
+    func retry(_ message: AgentChatOutgoingMessage) async throws {
+        guard let echo = outgoing.first(where: { $0.id == message.id }),
+            echo.state == .failed
+        else { return }
+        markOutgoing(id: echo.id, state: .sending, message: nil)
+        do {
+            try await sendOnWire(echo)
+            markOutgoing(id: echo.id, state: .sent)
+        } catch {
+            markOutgoing(
+                id: echo.id,
+                state: .failed,
+                message: Self.sendFailureText(error))
+            throw error
+        }
+    }
+
+    private func sendOnWire(_ echo: AgentChatOutgoingMessage) async throws {
         guard let channel, let registration, registration.capabilities.prompt
         else {
             throw AgentChatError.wire(
@@ -369,19 +504,79 @@ final class AgentChatStore {
                 message: "This agent cannot receive messages.",
                 retryable: false)
         }
-        let requestKey = UUID().uuidString
-        promptRequestKeys.insert(requestKey)
+        // Structured image send (item 3): with attachments-capable
+        // brokers, images ride their own array (the agent receives real
+        // image content blocks). Without the capability the send
+        // fails honestly rather than degrading to '@path' text the user
+        // never chose.
+        if !echo.images.isEmpty,
+            registration.capabilities.attachments != true
+        {
+            throw AgentChatError.wire(
+                code: "unsupported_capability",
+                message: "This agent cannot receive images.",
+                retryable: false)
+        }
+        var params: [String: JSONValue] = [
+            "text": .string(echo.text),
+            "requestKey": .string(echo.requestKey),
+        ]
+        if !echo.images.isEmpty {
+            params["images"] = .array(echo.images.map { image in
+                var object: [String: JSONValue] = [
+                    "mimeType": .string(image.mimeType),
+                ]
+                if let ref = image.ref { object["ref"] = .string(ref) }
+                if let data = image.data {
+                    object["data"] = .string(data.base64EncodedString())
+                }
+                if let byteLength = image.byteLength {
+                    object["byteLength"] = .number(Double(byteLength))
+                }
+                return .object(object)
+            })
+        }
+        promptRequestKeys.insert(echo.requestKey)
         _ = try await channel.request(
             AgentChatRequest(
                 id: "", method: "prompt.send",
                 target: AgentChatTarget(
                     instanceId: registration.instanceId,
                     generation: registration.generation),
-                params: .object([
-                    "text": .string(text),
-                    "requestKey": .string(requestKey),
-                ])))
+                params: .object(params)))
     }
+
+
+    private func markOutgoing(
+        id: UUID, state: AgentChatOutgoingMessage.DeliveryState, message: String? = nil
+    ) {
+        if state == .failed {
+            lastSendFailure = message
+        } else if state == .sent {
+            // A later success supersedes the stale failure banner.
+            if outgoing.allSatisfy({ $0.state != .failed }) {
+                lastSendFailure = nil
+            }
+        }
+    }
+
+    private static func sendFailureText(_ error: any Error) -> String {
+        if case AgentChatError.wire(_, let message, _) = error {
+            return message
+        }
+        if let error = error as? AgentChatError {
+            switch error {
+            case .connectionClosed:
+                return "The connection to the agent was lost — your message was not delivered. Retry when ready."
+            case .timedOut:
+                return "The agent did not answer in time — your message may not have been delivered. Retry when ready."
+            default:
+                return "Send failed — your message was not delivered. Retry when ready."
+            }
+        }
+        return "Send failed — your message was not delivered. Retry when ready."
+    }
+
 
     // MARK: Interrupt (capability-wired, no v1 button)
 
@@ -680,6 +875,35 @@ final class AgentChatStore {
         } else {
             content.messages.append(contentsOf: messages)
             content.toolResults.append(contentsOf: results)
+        }
+        if replaceRecent {
+            reconcileOutgoing(against: messages)
+        }
+    }
+
+    /// Echo → committed reconciliation (items 1/11/15): an echo whose
+    /// text now appears as a committed USER message in the
+    /// authoritative page is confirmed — the echo drops and the real
+    /// record renders in its natural position (never beside its own
+    /// duplicate, never out of order). Text match is the only stable
+    /// correlation v1 offers (the wire carries no client echo id on
+    /// the committed record).
+    private func reconcileOutgoing(against messages: [ChatMessage]) {
+        let committedUserTexts = Set(
+            messages
+                .filter { $0.role == .user }
+                .map { message in
+                    message.blocks.compactMap {
+                        if case .text(let text) = $0 { return text }
+                        return nil
+                    }.joined(separator: "\n")
+                })
+        guard !committedUserTexts.isEmpty else { return }
+        outgoing.removeAll { echo in
+            echo.state != .failed && committedUserTexts.contains(echo.text)
+        }
+        if outgoing.allSatisfy({ $0.state != .failed }) {
+            lastSendFailure = nil
         }
     }
 
