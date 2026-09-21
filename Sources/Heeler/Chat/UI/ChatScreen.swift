@@ -714,7 +714,7 @@ struct ChatScreen: View {
         attachmentErrorMessage = nil
         attachments.draftStore.clearUploadFailure()
         let canBegin = attachments.staging.begin(
-            .photo(DataImageSelection(data: data)))
+            .photo(DataImageSelection(data: data)), insertPathIntoComposer: false)
         if canBegin == nil {
             attachments.draftStore.recordUploadFailure(
                 "An attachment is already uploading. Try again once it finishes.")
@@ -723,10 +723,11 @@ struct ChatScreen: View {
         }
     }
 
-    /// The staging store's state machine, surfaced: completed
-    /// paste-image uploads hold for the Send flow (path removed from
-    /// the draft — the tile is the visible attachment); failures land
-    /// in the error row.
+    /// The staging store's state machine, surfaced: completed uploads
+    /// hold as ONE draft item (the tile is the visible attachment; the
+    /// path never touches the prose — the staging store is begun with
+    /// insertPathIntoComposer:false, so nothing needs stripping here);
+    /// failures land in the error row.
     private func syncAttachmentUploadState(_ newState: ComposerStagingStore.State?) {
         guard let attachments else { return }
         switch newState {
@@ -737,13 +738,8 @@ struct ChatScreen: View {
         case .completed(let outcome):
             attachments.draftStore.clearUploadFailure()
             if isPasteImageAttachment {
-                // Paste image: the path the staging store inserted into
-                // the draft mirror comes OUT of the draft (the tile is
-                // the visible attachment) and lands as ONE draft item.
-                draft = attachments.draftStore.draft
-                if let range = draft.range(of: outcome.path) {
-                    draft.removeSubrange(range)
-                }
+                // Paste image: the tile carries the attachment; the
+                // path rides the Send composition exactly once.
                 draftItems.append(.image(
                     id: UUID().uuidString,
                     remotePath: outcome.path,
@@ -751,15 +747,7 @@ struct ChatScreen: View {
                 pendingImagePreviewData = nil
                 isPasteImageAttachment = false
             } else {
-                // Picker completion: exactly one draft item; the
-                // staging store's inserted path comes OUT of the prose
-                // AT INSERT TIME (the tile is the visible attachment),
-                // so the prose stays ONLY the user's own text — never
-                // stripped again at Send.
-                draft = attachments.draftStore.draft
-                if let range = draft.range(of: outcome.path) {
-                    draft.removeSubrange(range)
-                }
+                // Picker completion: exactly one draft item by medium.
                 switch outcome.medium {
                 case .image:
                     draftItems.append(.image(
@@ -1036,7 +1024,9 @@ struct ChatScreen: View {
                     pendingPickerImageData =
                         try? await item.loadTransferable(type: Data.self) ?? nil
                 }
-                attachments.staging.begin(.photo(PhotosPickerImageSelection(item: item)))
+                attachments.staging.begin(
+                    .photo(PhotosPickerImageSelection(item: item)),
+                    insertPathIntoComposer: false)
             }
             .photosPicker(
                 isPresented: $isSelectingPhoto,
@@ -1056,7 +1046,7 @@ struct ChatScreen: View {
                 attachmentErrorMessage = nil
                 attachments.draftStore.clearUploadFailure()
                 pendingFileURL = url
-                attachments.staging.begin(.file(url))
+                attachments.staging.begin(.file(url), insertPathIntoComposer: false)
             }
             .onChange(of: attachments?.staging.state) { _, newState in
                 syncAttachmentUploadState(newState)
