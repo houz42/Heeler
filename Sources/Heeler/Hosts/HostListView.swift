@@ -554,7 +554,7 @@ private struct HostCardSection: View {
                             Image(systemName: "circle.fill")
                                 .font(.system(size: 7))
                                 .foregroundStyle(
-                                    route.usage == .inUse ? Color.green : Color.secondary)
+                                    route.usage == .inUse ? Color.accentColor : Color.secondary)
                                 .accessibilityHidden(true)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(route.name)

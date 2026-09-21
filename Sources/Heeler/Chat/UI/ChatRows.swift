@@ -725,8 +725,7 @@ struct ChatAssistantArticleView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(authorLabel)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color(
-                    red: 0x22 / 255.0, green: 0x64 / 255.0, blue: 0x4D / 255.0))
+                .foregroundStyle(Color.accentColor)
             ChatLinkText(bubble.text, style: .assistant, router: router)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -914,7 +913,7 @@ struct AgentPendingQuestionCard: View {
     }
 
     private var accent: Color {
-        Color(red: 0x22 / 255.0, green: 0x64 / 255.0, blue: 0x4D / 255.0)
+        Color.accentColor
     }
     private var cardBorder: Color {
         Color(red: 0xC4 / 255.0, green: 0xD5 / 255.0, blue: 0xCB / 255.0)

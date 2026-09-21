@@ -1,5 +1,5 @@
 import Testing
-import UIKit
+import SwiftUI
 
 @testable import Heeler
 
@@ -125,24 +125,56 @@ struct AgentStatusPaletteTests {
         return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
     }
     @Test func kindTilePairIsAdaptiveAndMatchesThePrototypeHues() throws {
-        // The approved tile pair (prototype: wash #eaf2ed, glyph #22644d).
-        // DynamicUIColor: resolve both trait pairs and confirm the light
-        // matches the prototype and dark differs (adaptive).
+        // The kind tile consumes the SAME assets as every other accent
+        // surface (one source of truth): AccentColor and AccentWash in
+        // Assets.xcassets. Resolve both trait pairs and confirm the light
+        // matches the prototype (#22644D glyph on #EAF2ED wash) and dark
+        // flips to the dark pair (#9ACFB2 on #2D4236).
         let light = UITraitCollection(userInterfaceStyle: .light)
         let dark = UITraitCollection(userInterfaceStyle: .dark)
-        let washLight = AgentStatusPalette.kindTileWash.resolvedColor(with: light)
-        let washDark = AgentStatusPalette.kindTileWash.resolvedColor(with: dark)
-        var r: CGFloat = 0; var g: CGFloat = 0; var b: CGFloat = 0; var a: CGFloat = 0
-        washLight.getRed(&r, green: &g, blue: &b, alpha: &a)
-        #expect(Int(r * 255) == 0xEA && Int(g * 255) == 0xF2 && Int(b * 255) == 0xED,
-            "light wash must be the prototype's #EAF2ED")
-        let accentLight = AgentStatusPalette.kindTileAccent.resolvedColor(with: light)
-        accentLight.getRed(&r, green: &g, blue: &b, alpha: &a)
-        #expect(Int(r * 255) == 0x22 && Int(g * 255) == 0x64 && Int(b * 255) == 0x4D,
+
+        let accent = try #require(UIColor(named: "AccentColor"))
+        let wash = try #require(UIColor(named: "AccentWash"))
+
+        func rgb(_ color: UIColor, _ style: UITraitCollection) -> [Int] {
+            var r: CGFloat = 0; var g: CGFloat = 0; var b: CGFloat = 0; var a: CGFloat = 0
+            color.resolvedColor(with: style).getRed(&r, green: &g, blue: &b, alpha: &a)
+            return [Int((r * 255).rounded()), Int((g * 255).rounded()), Int((b * 255).rounded())]
+        }
+
+        #expect(rgb(accent, light) == [0x22, 0x64, 0x4D],
             "light accent must be the prototype's #22644D")
-        #expect(washDark != washLight, "the wash must adapt to dark mode")
-        #expect(AgentStatusPalette.kindTileAccent.resolvedColor(with: dark) != accentLight,
-            "the accent must adapt to dark mode")
+        #expect(rgb(accent, dark) == [0x9A, 0xCF, 0xB2],
+            "dark accent must be the prototype's #9ACFB2")
+        #expect(rgb(wash, light) == [0xEA, 0xF2, 0xED],
+            "light wash must be the prototype's #EAF2ED")
+        #expect(rgb(wash, dark) == [0x2D, 0x42, 0x36],
+            "dark wash must be the prototype's #2D4236")
+
+        // The tile tokens themselves must be the same colours the asset
+        // declares — the single-source contract (no re-hardcoded hexes).
+        #expect(rgb(AgentKindTilePalette.accent, light) == rgb(accent, light),
+            "tile accent == AccentColor (light)")
+        #expect(rgb(AgentKindTilePalette.accent, dark) == rgb(accent, dark),
+            "tile accent == AccentColor (dark)")
+        #expect(rgb(AgentKindTilePalette.wash, light) == rgb(wash, light),
+            "tile wash == AccentWash (light)")
+        #expect(rgb(AgentKindTilePalette.wash, dark) == rgb(wash, dark),
+            "tile wash == AccentWash (dark)")
+    }
+
+    /// The app-wide accent itself: `Color.accentColor` must resolve to the
+    /// same asset pair (the tint every control inherits), not system blue.
+    @Test func appAccentColorMatchesTheDesignPair() throws {
+        let ui = UIColor(Color.accentColor).resolvedColor(
+            with: UITraitCollection(userInterfaceStyle: .light))
+        var r: CGFloat = 0; var g: CGFloat = 0; var b: CGFloat = 0; var a: CGFloat = 0
+        ui.getRed(&r, green: &g, blue: &b, alpha: &a)
+        #expect(
+            Int((r * 255).rounded()) == 0x22
+                && Int((g * 255).rounded()) == 0x64
+                && Int((b * 255).rounded()) == 0x4D,
+            "Color.accentColor must resolve to #22644D in light mode")
     }
 
 }
