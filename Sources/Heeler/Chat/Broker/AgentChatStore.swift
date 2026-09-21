@@ -42,6 +42,11 @@ struct AgentChatStreamTail: Sendable, Equatable {
 @MainActor
 @Observable
 final class AgentChatStore {
+    /// Posted (object = the store) whenever a page install changes the
+    /// collected compaction events — the agent-details inspector mirrors
+    /// the history without a second wire subscription.
+    static let compactionUpdate = Notification.Name("AgentChatStore.compactionUpdate")
+
     // MARK: Observable state
 
     private(set) var phase: AgentChatPhase = .idle
@@ -55,6 +60,9 @@ final class AgentChatStore {
     private(set) var capabilities: AgentChatCapabilities?
     /// Pending interactions (only when interactions:true).
     private(set) var interactions: [AgentChatInteraction] = []
+    /// Compaction boundaries seen in pages (oldest→newest within a page;
+    /// the agent-details inspector owns the presentation).
+    private(set) var compactionEvents: [AgentCompactionEvent] = []
 
     var askSupported: Bool { capabilities?.interactions == true }
 
@@ -107,6 +115,7 @@ final class AgentChatStore {
         content = ChatContent()
         streamTails = []
         interactions = []
+        compactionEvents = []
         hasOlder = false
         olderCursor = nil
         registration = nil
@@ -271,6 +280,28 @@ final class AgentChatStore {
         } catch {
             // Transient: the next top-sentinel arrival retries.
         }
+    }
+
+    // MARK: Raw agent-scoped requests (v2 agent-details surfaces)
+
+    /// One capability-uniformed request against the matched registration.
+    /// The CALLER checks the capability bit first (the broker still
+    /// enforces it server-side and answers unsupported_capability).
+    /// Throws AgentChatError on wire errors — the caller renders honest
+    /// states, never guesses.
+    func rawRequest(
+        method: String, params: JSONValue?
+    ) async throws -> JSONValue {
+        guard let channel, let registration else {
+            throw AgentChatError.connectionClosed
+        }
+        return try await channel.request(
+            AgentChatRequest(
+                id: "", method: method,
+                target: AgentChatTarget(
+                    instanceId: registration.instanceId,
+                    generation: registration.generation),
+                params: params))
     }
 
     // MARK: Item detail
@@ -615,8 +646,17 @@ final class AgentChatStore {
             }
         }
         let results = AgentChatToolResultCollector.collect(from: page.items)
+        // Compaction boundaries ride through to the agent-details
+        // inspector (v2 slice 1); the chat rows themselves still skip
+        // boundaries exactly as before.
+        let compacted = AgentChatCompactionCollector.collect(from: page.items)
         if replaceRecent {
+            compactionEvents = compacted
+            NotificationCenter.default.post(name: Self.compactionUpdate, object: self)
             content = ChatContent(messages: messages, toolResults: results)
+            // Older pages arrived after the recent one; their compaction
+            // events are chronologically OLDER — insert at the front.
+            compactionEvents.insert(contentsOf: compacted, at: 0)
         } else {
             content.messages.append(contentsOf: messages)
             content.toolResults.append(contentsOf: results)

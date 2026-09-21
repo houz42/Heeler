@@ -41,6 +41,11 @@ struct AgentDetailView: View {
     /// Which surface the detail shows. Set on first appearance from the
     /// agent's session shape; the picker is the only other writer.
     @State private var surface: AgentDetailSurface?
+    /// The agent-details inspector's store (v2 slice 1): broker-backed
+    /// telemetry, the model catalog + explicit change flow, and the
+    /// compaction history. Built with the broker chat store.
+    @State private var details: AgentDetailsStore?
+    @State private var showsAgentDetails = false
     /// The chat pane's rendered rows' detail level persistence.
     @State private var chatLevels = ChatDetailLevelStore.shared
     /// The in-Agent header's layout mode + custom layout persistence.
@@ -257,16 +262,73 @@ struct AgentDetailView: View {
     /// on the terminal surface it switches back to chat. The icon names the
     /// destination, not the current surface.
     private var surfacePicker: some View {
-        Button {
-            surface = (surface == .chat) ? .terminal : .chat
-        } label: {
-            Image(
-                systemName: surface == .chat
-                    ? "terminal" : "bubble.left.and.bubble.right")
+        HStack(spacing: 2) {
+            Button {
+                surface = (surface == .chat) ? .terminal : .chat
+            } label: {
+                Image(
+                    systemName: surface == .chat
+                        ? "terminal" : "bubble.left.and.bubble.right")
+            }
+            .labelStyle(.iconOnly)
+            .hoverEffect(.highlight)
+            .accessibilityLabel(surface == .chat ? "Show Terminal" : "Show Chat")
+            // The shared three-dot entry (v2): the Agent details inspector
+            // from BOTH surfaces — the design's one entry point.
+            Menu {
+                AgentDetailsMenuEntry(title: "Agent details") {
+                    openAgentDetails()
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .labelStyle(.iconOnly)
+            }
+            .accessibilityLabel("Agent options")
+            .accessibilityHint("Opens the agent details menu: context, model, working directory.")
         }
-        .labelStyle(.iconOnly)
-        .hoverEffect(.highlight)
-        .accessibilityLabel(surface == .chat ? "Show Terminal" : "Show Chat")
+    }
+
+    private func openAgentDetails() {
+        showsAgentDetails = true
+    }
+
+    /// The details inspector's live inputs: the console's honest launch
+    /// cwd (the agent's own telemetry report wins when it arrives) and
+    /// the host connection state for the offline gate.
+    private var detailsConsoleCwd: String? {
+        let live = console.agents.first { $0.id == agent.id } ?? agent
+        return live.agent.cwd.isEmpty ? nil : live.agent.cwd
+    }
+
+    private var detailsIsOffline: Bool {
+        console.hostStatuses[agent.hostID] != .connected
+    }
+
+    private var detailsIsWorking: Bool {
+        (console.agents.first { $0.id == agent.id }?.agent.status
+            ?? agent.agent.status) == .working
+    }
+
+    /// Builds (once per agent identity) the agent-details store over the
+    /// broker chat store's wire seam.
+    @MainActor
+    private func buildDetailsIfPossible() {
+        guard details == nil, let brokerChat else { return }
+        let store = AgentDetailsStore(
+            wire: .init(
+                request: { [weak brokerChat] method, params in
+                    guard let brokerChat else {
+                        throw AgentChatError.connectionClosed
+                    }
+                    return try await brokerChat.rawRequest(
+                        method: method, params: params)
+                },
+                readItem: nil),
+            telemetrySupported: brokerChat.capabilities?.telemetry == true,
+            isAgentWorking: { [detailsIsWorking] in detailsIsWorking },
+            isOffline: { [detailsIsOffline] in detailsIsOffline })
+        store.setCompactions(brokerChat.compactionEvents)
+        details = store
     }
 
     /// The detail header's title as the agent switcher (#A): tapping the
@@ -724,6 +786,7 @@ struct AgentDetailView: View {
         }
         .task(id: agent.id) {
             await buildChatIfPossible()
+            buildDetailsIfPossible()
         }
         // A session path that arrives after first render (agents started
         // before the integration registered) must still build the store;
@@ -749,6 +812,7 @@ struct AgentDetailView: View {
             chat = nil
             chatRouter = nil
             chatAttachments = nil
+            details = nil
         }
         .onChange(of: console.hostConnectionGenerations[agent.hostID]) { _, generation in
             openTerminal.transportGenerationDidChange(generation)
@@ -788,6 +852,26 @@ struct AgentDetailView: View {
             Button("OK", role: .cancel) { openTerminal.dismissCloseFailure() }
         } message: {
             Text(openTerminal.closeFailureMessage ?? "")
+        }
+        .sheet(isPresented: $showsAgentDetails) {
+            if let details {
+                AgentDetailsRootView(
+                    store: details,
+                    agentName: agent.tabLabel ?? agent.agent.displayName,
+                    hostLabel: "\(agent.agent.kind) · \(agent.hostName)",
+                    consoleCwd: detailsConsoleCwd,
+                    isOffline: detailsIsOffline)
+                .presentationDetents([.large, .medium])
+            }
+        }
+        .onChange(of: brokerChat?.compactionEvents) { _, events in
+            // The inspector mirrors the broker store's collected history.
+            if let details, let events {
+                details.setCompactions(events)
+            }
+        }
+        .onChange(of: brokerChat?.capabilities?.telemetry) { _, supported in
+            details?.setTelemetrySupported(supported ?? false)
         }
         .modifier(ConsoleDetailPresentationRegistration(
             agentID: agent.id,

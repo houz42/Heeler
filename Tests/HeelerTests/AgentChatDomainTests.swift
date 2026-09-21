@@ -168,7 +168,7 @@ struct AgentChatDomainDecodeTests {
         let decoded = try JSONDecoder().decode(
             [AgentChatItem].self, from: JSONEncoder().encode(items))
         #expect(decoded.count == 4)
-        guard case .boundary(_, let boundary, _, let olderAvailable) = decoded[0] else {
+        guard case .boundary(_, let boundary, _, let olderAvailable, _, _, _, _) = decoded[0] else {
             Issue.record("expected boundary")
             return
         }

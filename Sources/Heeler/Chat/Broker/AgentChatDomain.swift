@@ -21,11 +21,15 @@ struct AgentChatCapabilities: Decodable, Sendable, Equatable {
     var commands: Bool
     var attachments: Bool
     var branches: Bool
+    /// v2 agent-details (slice 1): live context/model telemetry + explicit
+    /// model changes. Absent on old registrations — decodeIfPresent keeps
+    /// the honest false default.
+    var telemetry: Bool
 
     init(
         history: Bool = false, streaming: Bool = false, prompt: Bool = false,
         interrupt: Bool = false, interactions: Bool = false, commands: Bool = false,
-        attachments: Bool = false, branches: Bool = false
+        attachments: Bool = false, branches: Bool = false, telemetry: Bool = false
     ) {
         self.history = history
         self.streaming = streaming
@@ -35,6 +39,7 @@ struct AgentChatCapabilities: Decodable, Sendable, Equatable {
         self.commands = commands
         self.attachments = attachments
         self.branches = branches
+        self.telemetry = telemetry
     }
 
     init(from decoder: any Decoder) throws {
@@ -48,11 +53,12 @@ struct AgentChatCapabilities: Decodable, Sendable, Equatable {
         commands = try container.decodeIfPresent(Bool.self, forKey: .commands) ?? false
         attachments = try container.decodeIfPresent(Bool.self, forKey: .attachments) ?? false
         branches = try container.decodeIfPresent(Bool.self, forKey: .branches) ?? false
+        telemetry = try container.decodeIfPresent(Bool.self, forKey: .telemetry) ?? false
     }
 
     private enum CodingKeys: String, CodingKey {
         case history, streaming, prompt, interrupt, interactions, commands
-        case attachments, branches
+        case attachments, branches, telemetry
     }
 }
 
@@ -213,7 +219,10 @@ enum AgentChatItem: Decodable, Sendable, Equatable {
     }
 
     case message(id: String, author: Author, createdAt: String?, blocks: [AgentChatBlock])
-    case boundary(id: String, boundary: String, summary: String?, olderAvailable: Bool)
+    case boundary(
+        id: String, boundary: String, summary: String?, olderAvailable: Bool,
+        occurredAt: String?, trigger: String?,
+        tokensBefore: Int?, tokensAfter: Int?)
     case notice(id: String, text: String, level: String)
     case unsupported(id: String, sourceType: String, label: String)
     case reference(id: String, itemKind: String, byteLength: Int)
@@ -221,6 +230,7 @@ enum AgentChatItem: Decodable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case id, kind, author, createdAt, blocks, status
         case boundary, summary, olderAvailable
+        case occurredAt, trigger, tokensBefore, tokensAfter
         case text, level, sourceType, label, itemKind, byteLength
     }
 
@@ -239,7 +249,13 @@ enum AgentChatItem: Decodable, Sendable, Equatable {
                 id: id,
                 boundary: try container.decode(String.self, forKey: .boundary),
                 summary: try container.decodeIfPresent(String.self, forKey: .summary),
-                olderAvailable: try container.decode(Bool.self, forKey: .olderAvailable))
+                olderAvailable: try container.decode(Bool.self, forKey: .olderAvailable),
+                // v2 agent-details measurement fields: absent on plain v1
+                // boundaries; decodeIfPresent keeps old brokers honest.
+                occurredAt: try container.decodeIfPresent(String.self, forKey: .occurredAt),
+                trigger: try container.decodeIfPresent(String.self, forKey: .trigger),
+                tokensBefore: try container.decodeIfPresent(Int.self, forKey: .tokensBefore),
+                tokensAfter: try container.decodeIfPresent(Int.self, forKey: .tokensAfter))
         case "notice":
             self = .notice(
                 id: id,
@@ -264,7 +280,7 @@ enum AgentChatItem: Decodable, Sendable, Equatable {
 
     var id: String {
         switch self {
-        case .message(let id, _, _, _), .boundary(let id, _, _, _),
+        case .message(let id, _, _, _), .boundary(let id, _, _, _, _, _, _, _),
             .notice(let id, _, _), .unsupported(let id, _, _), .reference(let id, _, _):
             return id
         }
