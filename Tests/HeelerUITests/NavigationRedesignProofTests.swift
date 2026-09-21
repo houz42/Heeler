@@ -48,7 +48,7 @@ final class NavigationRedesignProofTests: XCTestCase {
         // The fixture's agent rows are mounted on the Console page. The
         // fixture overflows the phone viewport (11 agents + issues), so
         // scroll displacement is real, not cosmetic.
-        let firstRow = app.staticTexts[UITestFixtures.agentRows[0]]
+        let firstRow = UITestFixtures.agentRowText(UITestFixtures.agentRows[0], in: app)
         waitToExist(firstRow)
         let topBeforeScroll = firstRow.frame.minY
 
@@ -114,7 +114,7 @@ final class NavigationRedesignProofTests: XCTestCase {
     /// switching from Agents lands on Hosts with the selector relabeled
     /// and the page's own toolbar actions intact.
     func testHostsPageCarriesTheDestinationSelector() {
-        let firstRow = app.staticTexts[UITestFixtures.agentRows[0]]
+        let firstRow = UITestFixtures.agentRowText(UITestFixtures.agentRows[0], in: app)
         waitToExist(firstRow)
         let menu = app.buttons[UITestFixtures.destinationSelector].firstMatch
         waitToExist(menu)

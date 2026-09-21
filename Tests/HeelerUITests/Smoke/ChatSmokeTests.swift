@@ -22,7 +22,9 @@ final class ChatSmokeTests: XCTestCase {
         // Tap through the row's enclosing cell (the NavigationLink's hit
         // target).
         let cell = app.cells.containing(
-            NSPredicate(format: "label CONTAINS %@", "ios-polish")
+            NSPredicate(
+                format: "label CONTAINS %@ OR label CONTAINS %@",
+                "ios-polish", "Polish the Attach experience")
         ).firstMatch
         waitToExist(cell)
         cell.tap()
@@ -33,7 +35,8 @@ final class ChatSmokeTests: XCTestCase {
             app.staticTexts.matching(
                 NSPredicate(format: "label CONTAINS %@", "All 18 tests pass")
             ).firstMatch)
-        // The composer's entry button is present (opens the input frame;
+        // The persistent composer is mounted (the conversation
+        // redesign: the field is always present on interactive chats;
         // typing proofs extend from here).
         waitToExist(app.chatComposerButton)
         captureScreenshot(app, "chat-demo")
