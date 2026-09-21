@@ -710,6 +710,7 @@ struct AgentCompactionHistoryView: View {
                             AgentCompactionEventView(event: event)
                         } label: {
                             AgentCompactionRow(event: event)
+                                .accessibilityIdentifier("compaction-row")
                         }
                     }
                 } footer: {

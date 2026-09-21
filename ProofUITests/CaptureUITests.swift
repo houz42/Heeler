@@ -889,10 +889,22 @@ extension CaptureUITests {
                             // The card may be the fit-refusal variant (usage
                             // exceeds the target window) or the confirm
                             // variant; scroll and match whichever exists.
-                            let confirmR = app.buttons["Confirm change"].firstMatch
-                            if !confirmR.exists {
+                            // Scroll the card fully to its bottom so the
+                            // action button enters the frame, then match.
+                            let confirmR = app.buttons.matching(
+                                NSPredicate(format: "label BEGINSWITH 'Confirm model change'")).firstMatch
+                            let chooseAnother = app.buttons["Choose another model"].firstMatch
+                            var swipes = 0
+                            while !confirmR.exists && !chooseAnother.exists && swipes < 5 {
                                 app.swipeUp()
+                                swipes += 1
                                 Thread.sleep(forTimeInterval: 1)
+                                screenshot("live-confirm-card-scroll\(swipes)")
+                            }
+                            if !confirmR.exists && !chooseAnother.exists {
+                                try? app.debugDescription.write(
+                                    to: URL(fileURLWithPath: "/tmp/v2-confirm-a11y-dump.txt"),
+                                    atomically: true, encoding: .utf8)
                             }
                             if confirmR.waitForExistence(timeout: 6) {
                                 confirmR.tap()
@@ -900,12 +912,43 @@ extension CaptureUITests {
                                 screenshot("live-model-pending")
                                 Thread.sleep(forTimeInterval: 10)
                                 screenshot("live-model-outcome")
-                            } else {
-                                // The fit refusal: nothing will be trimmed.
-                                let chooseAnother = app.buttons["Choose another model"].firstMatch
-                                if chooseAnother.waitForExistence(timeout: 4) {
-                                    screenshot("live-model-context-fit-refusal")
+                                // The fit-refusal variant: go back and pick a
+                                // small-window model (context exceeds it).
+                                let backFit = app.navigationBars.buttons.firstMatch
+                                if backFit.waitForExistence(timeout: 4) { backFit.tap() }
+                                Thread.sleep(forTimeInterval: 1)
+                                let searchFit = (app.searchFields.firstMatch.exists
+                                    ? app.searchFields.firstMatch
+                                    : app.textFields.firstMatch)
+                                if searchFit.waitForExistence(timeout: 5) {
+                                    searchFit.tap()
+                                    searchFit.typeText(String(
+                                        repeating: XCUIKeyboardKey.delete.rawValue,
+                                        count: 24))
+                                    searchFit.typeText("cosmos")
+                                    Thread.sleep(forTimeInterval: 3)
+                                    let smallR = app.buttons.matching(
+                                        NSPredicate(format: "label CONTAINS 'cosmos3'")).firstMatch
+                                    if smallR.waitForExistence(timeout: 8) {
+                                        smallR.tap()
+                                        Thread.sleep(forTimeInterval: 4)
+                                        let chooseFit = app.buttons["Choose another model"].firstMatch
+                                        var fitSwipes = 0
+                                        while !chooseFit.exists && fitSwipes < 5 {
+                                            app.swipeUp()
+                                            fitSwipes += 1
+                                            Thread.sleep(forTimeInterval: 1)
+                                        }
+                                        if chooseFit.waitForExistence(timeout: 4) {
+                                            screenshot("live-model-context-fit-refusal")
+                                        } else {
+                                            screenshot("live-model-small-pick-card")
+                                        }
+                                    }
                                 }
+                            } else if chooseAnother.waitForExistence(timeout: 4) {
+                                // The fit refusal: nothing will be trimmed.
+                                screenshot("live-model-context-fit-refusal")
                             }
                         }
                     }
@@ -927,8 +970,13 @@ extension CaptureUITests {
                         compactionsR.tap()
                         Thread.sleep(forTimeInterval: 4)
                         screenshot("live-compaction-history")
+                        // The record row carries a stable identifier.
                         var recordR = app.buttons.matching(
-                            NSPredicate(format: "label CONTAINS 'tokens' OR label CONTAINS 'snapcompact' OR label CONTAINS 'unavailable'")).firstMatch
+                            NSPredicate(format: "identifier == 'compaction-row'")).firstMatch
+                        if !recordR.waitForExistence(timeout: 6) {
+                            recordR = app.buttons.matching(
+                                NSPredicate(format: "label CONTAINS 'tokens' OR label CONTAINS 'snapcompact' OR label CONTAINS 'unavailable'")).firstMatch
+                        }
                         if !recordR.waitForExistence(timeout: 6) {
                             recordR = app.buttons.allElementsBoundByIndex
                                 .first(where: { $0.isHittable && $0.label.count > 8 })
@@ -1113,7 +1161,8 @@ extension CaptureUITests {
                         kimi.tap()
                         Thread.sleep(forTimeInterval: 3)
                         screenshot("live-model-confirm-card")
-                        let confirm = app.buttons["Confirm change"].firstMatch
+                        let confirm = app.buttons.matching(
+                                NSPredicate(format: "label BEGINSWITH 'Confirm model change'")).firstMatch
                         if confirm.waitForExistence(timeout: 5) {
                             confirm.tap()
                             Thread.sleep(forTimeInterval: 3)
