@@ -272,6 +272,7 @@
 		81F92E9FF8783F2B473DAE5A /* HostTelemetryPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2FDB99BA76C2379B0590B3B /* HostTelemetryPresentationTests.swift */; };
 		8254C70BCD2334725D5F3ED2 /* AgentNotificationIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 401F5B396F9F00568A4FFF88 /* AgentNotificationIdentity.swift */; };
 		82600FB64A99ADAD1C60D451 /* PairingCodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D419158B027AF5F38B73AD8B /* PairingCodeTests.swift */; };
+		828AC0993856BCB7020F8355 /* HostRouteEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44A21DCE170AA8EF34CF3D27 /* HostRouteEditor.swift */; };
 		8309FB223FE2967C9EF7B49F /* ReadingSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 595460BE0376FE7703A15BFB /* ReadingSettingsTests.swift */; };
 		836C6CE781A0FE57FBA87727 /* JSONValueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F261A0911D08819AFC013F1E /* JSONValueTests.swift */; };
 		83A5CACF8A302E149975E284 /* ConsoleAgentSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 443200EE85ADB91172DCFA90 /* ConsoleAgentSearchTests.swift */; };
@@ -714,6 +715,7 @@
 		442A5127B47FF6FF8840B0B9 /* WorktreeDetailStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeDetailStoreTests.swift; sourceTree = "<group>"; };
 		443200EE85ADB91172DCFA90 /* ConsoleAgentSearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsoleAgentSearchTests.swift; sourceTree = "<group>"; };
 		444F11A4450A3CA904B26658 /* SkillsPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillsPickerView.swift; sourceTree = "<group>"; };
+		44A21DCE170AA8EF34CF3D27 /* HostRouteEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostRouteEditor.swift; sourceTree = "<group>"; };
 		4582B5EA42CFA9C8878E6207 /* HeelerSSH */ = {isa = PBXFileReference; lastKnownFileType = folder; name = HeelerSSH; path = Packages/HeelerSSH; sourceTree = SOURCE_ROOT; };
 		45B914D05097A0B0C277102E /* RemoteDirectoryListingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDirectoryListingTests.swift; sourceTree = "<group>"; };
 		45DB60007029322902FD1AFF /* PairingScanStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingScanStore.swift; sourceTree = "<group>"; };
@@ -1892,6 +1894,7 @@
 			isa = PBXGroup;
 			children = (
 				70BE24B30FB226284ACD33DA /* HostRoute.swift */,
+				44A21DCE170AA8EF34CF3D27 /* HostRouteEditor.swift */,
 				A467ED393D0ABBC2E255283D /* HostRouteMonitor.swift */,
 				39693CBC92441DACD345CE18 /* HostRoutePolicy.swift */,
 				AD3DC90C6AE31BDA5FD3AA86 /* HostRouteStatusView.swift */,
@@ -2394,6 +2397,7 @@
 				B71854386F1CF79B863F15FE /* HostOnboardingStore.swift in Sources */,
 				D868123FC703E505D48AFD85 /* HostOnboardingView.swift in Sources */,
 				E55227537899FD4827FF58DF /* HostRoute.swift in Sources */,
+				828AC0993856BCB7020F8355 /* HostRouteEditor.swift in Sources */,
 				FE95A69859D256B0C40D9FF6 /* HostRouteInspectorView.swift in Sources */,
 				86995AB9288688DC382EE20F /* HostRouteMonitor.swift in Sources */,
 				DB54BBF7BB5FA7014B50D51D /* HostRoutePolicy.swift in Sources */,

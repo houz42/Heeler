@@ -15,7 +15,10 @@ final class HostRouteStatusStore {
     private(set) var probes: [String: HostRouteProbeResult] = [:]
     private(set) var network: HostRouteNetworkState
     private(set) var isProbing = false
-    private(set) var lastFailure: TransportError?
+    /// Actionable explanation when a check could not even start
+    /// (credential failures are about the Host, not the path). nil while
+    /// checks ran. The user's press must never appear to do nothing.
+    private(set) var checkFailedExplanation: String?
 
     @ObservationIgnored private let prober: HostRouteProber
     @ObservationIgnored private let monitor: HostRouteMonitor?
@@ -42,11 +45,48 @@ final class HostRouteStatusStore {
         self.probes = seededProbes
     }
 
+    /// Syncs the store's network state from the shared monitor — the
+    /// route surface's rows and result line always read the CURRENT
+    /// hint, never a stale `.offline`.
+    func syncNetworkFromMonitor() {
+        guard monitor == nil else { return }
+        network = HostRouteNetworkSnapshot.current
+    }
+
     /// The design contract's "Check routes": one bounded sweep of the
-    /// configured routes in priority order.
+    /// configured routes in priority order. The busy state is owned HERE
+    /// (overlapping presses are refused rather than serialized), and
+    /// results land per-route as the sweep goes — the caller observing
+    /// `probes` sees each route's verdict the moment it concludes, never
+    /// an all-or-nothing snapshot at the end.
     func checkRoutes() async {
-        await prober.probe(addresses: host.candidateAddresses, host: host)
-        probes = prober.results
+        guard !isProbing else { return }
+        isProbing = true
+        checkFailedExplanation = nil
+        do {
+            try await prober.probe(addresses: host.candidateAddresses, host: host) {
+                [weak self] address, result in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    // A result for an address this Host no longer
+                    // carries (edited mid-sweep) is dropped, never
+                    // resurrected.
+                    guard self.host.candidateAddresses.contains(address) else { return }
+                    self.probes[address] = result
+                }
+            }
+        } catch HostCredentialsError.passwordNotSet {
+            checkFailedExplanation =
+                "The check could not run: no password is saved for \(host.displayAliasName)."
+        } catch DeviceKeyStoreError.storedKeyCorrupt {
+            checkFailedExplanation =
+                "The check could not run: the Device Key could not be loaded. "
+                + "Open Edit and replace it if it is corrupt."
+        } catch {
+            checkFailedExplanation =
+                "The check could not run: \(host.displayAliasName)'s credentials "
+                + "could not be loaded."
+        }
         isProbing = false
     }
 
@@ -77,12 +117,21 @@ final class HostRouteStatusStore {
         await retryConnection?()
     }
 
-    /// The foreground/reconnect recheck: one sweep while the surface is
-    /// visible. No continuous background promises — the sweep runs
-    /// because the user is looking at the surface or came back to it.
-    func recheckOnForeground() async {
+    /// The foreground/reconnect recheck: refresh the network hint, run
+    /// one bounded sweep, and — when the Host is NOT connected and the
+    /// sweep found a route reachable — redial through the policy's dial
+    /// plan (the retry runs through the same `SSHTransportSettings`
+    /// every dial uses, so eligibility and the pin are honored). No
+    /// continuous background promises: this fires because the user came
+    /// back. A connected Host is never re-dialed — stickiness.
+    func recheckOnForeground(isConnected: Bool) async {
         guard !isProbing else { return }
+        syncNetworkFromMonitor()
         await checkRoutes()
+        guard !isConnected,
+            probes.values.contains(where: { $0.outcome.provesPathCarriesSSH }),
+            let retryConnection
+        else { return }
+        await retryConnection()
     }
-
 }

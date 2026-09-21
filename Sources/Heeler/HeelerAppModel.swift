@@ -121,6 +121,13 @@ final class HeelerAppModel {
         guard !isStarted else { return }
         isStarted = true
 
+        // v2 route selection: the shared network monitor feeds both the
+        // route surfaces and every dial (the snapshot read by
+        // `SSHTransportSettings(host:)`), so it starts BEFORE the first
+        // connect can run. No continuous background promises — the
+        // monitor is passive; consumers recheck on foreground.
+        HostRouteMonitor.shared.start()
+
         // The banner store diffs the Agent list for foreground Blocked/Done
         // transitions (#77); both it and the Live Activities take the
         // current list as their baseline before the Hosts connect.

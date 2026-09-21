@@ -68,10 +68,15 @@ struct HostOnboardingView: View {
                     value: store.host.authMethod == .deviceKey ? "Device Key" : "Password")
             }
 
-            // Every way this Host can be reached — one line per address:
-            // status icon, the address, and an inline Use control on the
-            // reachable rows while a pick is pending. No separate pick
-            // card: picking happens on the rows themselves.
+            // Every way this Host can be reached — one line per address
+            // with its probe state. When the Host has v2 route settings,
+            // the Routes section below owns SELECTION and the inline Use
+            // control here exists only for the probe sweep's own
+            // question (several paths answered — which one to connect
+            // through now), never as a second standing selector. A Host
+            // saved before route settings existed keeps its v1
+            // selector here, migration-honest: one selection source
+            // per Host, chosen by what that Host actually carries.
             Section {
                 ForEach(store.orderedCandidates, id: \.self) { address in
                     candidateRow(address)
@@ -88,6 +93,7 @@ struct HostOnboardingView: View {
             } footer: {
                 Text(addressSectionFooter)
             }
+
             // The design contract's failure offer: on a connect failure
             // with more than one saved route, offer Try another route /
             // Return to automatic. A pinned Host offers both (the pin
@@ -123,11 +129,26 @@ struct HostOnboardingView: View {
                 }
             }
 
-            // MARK: Routes (v2 automatic route selection). Sits right
-            // under Addresses/failure offer: per the design contract the
-            // route selection is a first-class per-Host setting, not a
-            // footnote after the preflight checklist.
-            routesSection
+            // MARK: Routes (v2 automatic route selection): the ONE
+            // selection surface, shown when the Host carries v2 route
+            // settings (eligibility gates or a pin). Route-less Hosts
+            // keep the v1 selector above; the editor row below is how
+            // they adopt the v2 surface.
+            if hostHasV2RouteSettings {
+                routesSection
+            } else {
+                Section {
+                    NavigationLink {
+                        HostRouteEditorView(host: store.host, catalog: catalog)
+                    } label: {
+                        Label("Route priority & eligibility", systemImage: "list.number")
+                    }
+                } footer: {
+                    Text(
+                        "Routes are dialed in saved order until one answers. "
+                            + "Set priority or eligibility to choose routes automatically.")
+                }
+            }
 
             if retryConnection != nil {
                 Section {
@@ -289,7 +310,8 @@ struct HostOnboardingView: View {
             guard previous != .active, phase == .active, let routeStore,
                 !routeStore.isProbing
             else { return }
-            Task { await routeStore.recheckOnForeground() }
+            let isConnected = connectionStatus == .connected
+            Task { await routeStore.recheckOnForeground(isConnected: isConnected) }
         })
     }
 
@@ -320,20 +342,25 @@ struct HostOnboardingView: View {
         return "default"
     }
 
-    /// One line per address: status icon, the address (with an inline,
-    /// subtle Preferred mark), and a Use button on every reachable row
-    /// that is not the live connection — picking is not a one-shot state,
-    /// the user can switch paths anytime a probe proved them reachable.
-    /// The connected row shows the bolt instead; unreachable rows show no
-    /// control (using them cannot succeed until they answer again).
+    /// One line per address with its probe state. When the Host has v2
+    /// route settings, the Routes section owns SELECTION and the Use
+    /// control here exists only for the probe sweep's own question
+    /// (several paths answered — which one to connect through now).
+    /// A Host saved before route settings existed (route-less) keeps
+    /// its v1 standing selector here: one selection source per Host,
+    /// chosen by what that Host actually carries.
     private func candidateRow(_ address: String) -> some View {
         let state = store.candidateStates[address] ?? .unknown
-        let isPreferred = store.orderedCandidates.first == address
+        let v1OwnsSelection = !hostHasV2RouteSettings
+        let pendingPick = store.pendingAddressChoice?.contains(address) ?? false
         let isInUse = connectedAddress == address
         let isReachable =
             state == .reachable
-            || store.pendingAddressChoice?.contains(address) ?? false
-        let pickable = isReachable && !isInUse
+            || pendingPick
+        let showStandingPicker = v1OwnsSelection && isReachable && !isInUse
+        let pickable = pendingPick && !isInUse
+        let isPreferred = store.orderedCandidates.first == address
+            && (v1OwnsSelection || pendingPick)
         return HStack(spacing: 10) {
             if isInUse {
                 Image(systemName: "bolt.fill")
@@ -355,13 +382,13 @@ struct HostOnboardingView: View {
                 }
             }
             Text(address)
-            if isPreferred, !isInUse {
+            if isPreferred {
                 Text("Preferred")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if pickable {
+            if showStandingPicker || pickable {
                 Button("Use") {
                     Task { await store.chooseAddress(address) }
                 }
@@ -392,28 +419,71 @@ struct HostOnboardingView: View {
     @ViewBuilder
     private var routesSection: some View {
         Section {
-            LabeledContent("Route selection", value: routeSelectionTitle)
+            // The explicit selection control: Automatic, or the pinned
+            // route with a visible way back to Automatic. A pin is a
+            // first-class state the user can see and change — never a
+            // hidden swipe.
+            if store.host.isManuallyRouted {
+                Button {
+                    returnToAutomatic()
+                } label: {
+                    Label(
+                        "Return to automatic (using \(routeSelectionTitle))",
+                        systemImage: "arrow.triangle.2.circlepath")
+                }
+            } else {
+                LabeledContent("Route selection", value: "Automatic")
+            }
             Text(routeResultLine)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             ForEach(routeAddresses, id: \.self) { address in
                 routeRow(address)
             }
+
             Button {
                 Task { await checkRoutes() }
             } label: {
-                Label("Check routes", systemImage: "antenna.radiowaves.left.and.right")
+                HStack {
+                    Label("Check routes", systemImage: "antenna.radiowaves.left.and.right")
+                    if isRouteCheckInFlight {
+                        Spacer()
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
             }
             .disabled(isRouteCheckInFlight)
+            if let checkFailedExplanation {
+                // A sweep that could not even start (credential failure
+                // is about the Host, not the path) surfaces visibly —
+                // the user's press must never appear to do nothing.
+                Label(checkFailedExplanation, systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+            }
+            NavigationLink {
+                HostRouteEditorView(host: store.host, catalog: catalog)
+            } label: {
+                Label("Edit priority & eligibility", systemImage: "list.number")
+            }
         } header: {
             Text("Routes")
         } footer: {
             Text(
                 "Routes are dialed top to bottom until one answers. "
                     + "Names describe saved endpoints; the app cannot see "
-                    + "which VPN client is active. Priority follows the "
-                    + "saved address order (edit it on the Host form).")
+                    + "which VPN client is active. Use a route to pin it; "
+                    + "edit names and addresses on the Host form.")
         }
+    }
+
+    /// Whether this Host carries v2 route settings (eligibility gates or
+    /// a manual pin) — the gate that decides which selection surface
+    /// owns the page. Hosts saved before route settings existed keep
+    /// the v1 selector, migration-honest.
+    private var hostHasV2RouteSettings: Bool {
+        !store.host.routeEligibility.isEmpty || store.host.isManuallyRouted
     }
 
     /// The saved routes in priority order: the Host's candidate addresses,
@@ -455,6 +525,11 @@ struct HostOnboardingView: View {
         guard standingFailure.isReachFailure else { return false }
         let routeCount = routeAddresses.count
         return routeCount > 1 || (routeCount == 1 && store.host.isManuallyRouted)
+    }
+
+    /// The store's explanation when a check could not even start.
+    private var checkFailedExplanation: String? {
+        routeStore?.checkFailedExplanation
     }
 
     /// The routes "Try another" may switch to: everything except the
@@ -502,12 +577,26 @@ struct HostOnboardingView: View {
             Text(routeStatus(for: address))
                 .font(.caption)
                 .foregroundStyle(.secondary)
-        }
-        .swipeActions {
-            Button("Use") {
-                pinRoute(address)
+            // The visible selection control (not swipe-only): Use pins
+            // this route; the pinned row offers Use elsewhere / back to
+            // Automatic instead of a dead Use on itself.
+            if store.host.pinnedRouteAddress == address {
+                Menu {
+                    Button("Return to automatic") {
+                        returnToAutomatic()
+                    }
+                } label: {
+                    Image(systemName: "pin.fill")
+                        .foregroundStyle(.blue)
+                }
+                .accessibilityLabel("Pinned to \(store.host.routeName(for: address))")
+            } else {
+                Button("Use") {
+                    pinRoute(address)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
-            .tint(.blue)
         }
     }
 
@@ -560,15 +649,19 @@ struct HostOnboardingView: View {
 
     private func ensureRouteStore() -> HostRouteStatusStore {
         // A scripted store (demo screenshots) arrives through the init;
-        // production builds the real store here on first use.
+        // production builds the real store here on first use, seeded
+        // with the CURRENT network hint from the shared monitor — never
+        // a stale .offline.
         if let routeStore { return routeStore }
-        let store = HostRouteStatusStore(
+        let built = HostRouteStatusStore(
             host: store.host,
+            network: HostRouteNetworkSnapshot.current,
             prober: HostRouteProber(),
+            monitor: HostRouteMonitor.shared,
             catalog: catalog,
             retryConnection: { [retryConnection] in await retryConnection?() })
-        routeStore = store
-        return store
+        routeStore = built
+        return built
     }
 
     /// "Choose manually": pins a route — the pin is never silently

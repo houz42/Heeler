@@ -163,23 +163,39 @@ extension SSHTransportSettings {
 extension SSHTransportSettings {
     /// Transport settings for a catalog Host, given resolved credentials and
     /// the TOFU policy the UI wires up. The Host's port applies to every
-    /// candidate address: they name the same sshd on the same machine. A
-    /// user-preferred address (see `PreferredAddressStore`) dials first; the
-    /// rest keep their configured order behind it.
+    /// candidate address: they name the same sshd on the same machine.
     ///
-    /// v2 route selection: a manual pin narrows the dial to exactly the
-    /// pinned address — the pin is honored VERBATIM, never silently
-    /// overridden, and its failure surfaces as the pinned route's failure
-    /// (Try another route / Return to automatic), not a failover. Under
-    /// Automatic the v1 preferred order stands.
+    /// v2 route selection — THE dial plan, applied to every real dial:
+    /// a manual pin narrows the dial to exactly the pinned address
+    /// (honored VERBATIM, never silently overridden; its failure is the
+    /// pinned route's failure, surfaced as Try another route / Return to
+    /// automatic, never a failover); under Automatic the dialing order is
+    /// the saved priority (the v1 preferred pick still leads it) with
+    /// eligibility gates applied against the CURRENT network hint — a
+    /// Wi-Fi-only route is skipped while the path does not classify as
+    /// Wi-Fi. The hint is a gate, not a proof; the dial remains the real
+    /// proof.
     init(host: Host, credentials: SSHCredentials, hostKeyPolicy: HostKeyPolicy) {
         let preferred = PreferredAddressStore(hostID: host.id)
-        let preferredOrder = preferred.preferredOrder(
-            forCandidates: host.candidateAddresses,
-            pinnedAddress: host.pinnedRouteAddress)
+        let network = HostRouteNetworkSnapshot.current
+        // Automatic's order: the v1 preferred pick leads the saved
+        // priority; eligibility prunes. A pin replaces the whole list.
+        let automaticOrder = preferred
+            .preferredOrder(
+                forCandidates: host.candidateAddresses, pinnedAddress: nil)
+            .filter { address in
+                HostRoutePolicy.isEligible(
+                    host.routeEligibility(for: address), network: network)
+            }
+        let order =
+            if let pinned = host.pinnedRouteAddress {
+                [pinned]
+            } else {
+                automaticOrder
+            }
         self.init(
-            host: preferredOrder.first ?? host.address,
-            candidateAddresses: Array(preferredOrder.dropFirst()),
+            host: order.first ?? host.address,
+            candidateAddresses: Array(order.dropFirst()),
             port: host.port,
             username: host.username,
             credentials: credentials,

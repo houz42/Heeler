@@ -83,12 +83,15 @@ struct HostRouteSelectionTests {
         #expect(plan.first == "lan.example")
     }
 
-    @Test func anUnsatisfiedPathGatesEveryRoute() {
-        let host = makeHost()
+    @Test func anUnsatisfiedPathGatesOnlyWiFiOnlyRoutes() {
+        // Any-network routes dial regardless of the path hint — the
+        // dial itself is the honest proof (a truly pathless dial fails
+        // fast as a reach failure). The Wi-Fi-only route is gated.
+        let host = makeHost(eligibility: ["lan.example": .wifiOnly])
 
         let plan = HostRoutePolicy.dialPlan(host: host, network: .offline)
 
-        #expect(plan.isEmpty)
+        #expect(plan == ["tailnet.example", "vpn.example"])
     }
 
     @Test func ineligibleRoutesDisplayTheirHonestSkip() {
@@ -407,6 +410,94 @@ struct HostRouteSelectionTests {
         #expect(saved.routeEligibility == ["lan.example": .wifiOnly])
         #expect(saved.routeLabels == host.routeLabels)
         #expect(saved.candidateAddresses == host.candidateAddresses)
+    }
+
+    // MARK: Integration — the real dial path
+
+    /// The `TransportConnector` recording the addresses the REAL dial
+    /// path (`SSHTransportSettings(host:)` → `dialCandidates` →
+    /// `dialFirstReachable`) actually dialed, in order.
+    private actor DialRecordingConnector: TransportConnector {
+        let reachable: Set<String>
+        private(set) var dialed: [String] = []
+
+        init(reachable: Set<String>) {
+            self.reachable = reachable
+        }
+
+        func connect(settings: SSHTransportSettings) async throws -> any Transport {
+            dialed.append(settings.host)
+            guard reachable.contains(settings.host) else {
+                throw TransportError.sshUnreachable(detail: "no route to host")
+            }
+            return ScriptedTransport()
+        }
+    }
+
+    @Test func theRealDialPathIsEligibilityGatedAndPriorityOrdered() async throws {
+        // Through the actual production dial seam (the same
+        // `SSHTransportSettings(host:)` every real dial builds, driven
+        // through `dialFirstReachable` — the multi-candidate loop the
+        // Console's factory runs): a Wi-Fi-only first route, a non-Wi-Fi
+        // network hint, and only the Any-network routes dialable — the
+        // dial attempts ONLY the eligible priority order, never the
+        // gated route, and the first answering candidate connects.
+        HostRouteNetworkSnapshot.update(.nonWiFi)
+        defer { HostRouteNetworkSnapshot.update(.offline) }
+        let host = makeHost(eligibility: ["lan.example": .wifiOnly])
+        let connector = DialRecordingConnector(reachable: ["vpn.example"])
+
+        let settings = SSHTransportSettings(
+            host: host,
+            credentials: .password("pw"),
+            hostKeyPolicy: HostKeyPolicy(knownHosts: InMemoryKnownHostsStore()) { _ in false })
+        _ = try await SSHTransportConnector.dialFirstReachable(
+            settings: settings,
+            perCandidateTimeout: .seconds(4),
+            dialOne: { try await connector.connect(settings: $0) },
+            onCandidate: nil)
+
+        #expect(await connector.dialed == ["tailnet.example", "vpn.example"])
+    }
+
+    @Test func theRealDialPathDialsExactlyThePinnedRoute() async throws {
+        // Through the actual production dial seam: the pin is honored
+        // VERBATIM — one address, no failover, even when the pinned
+        // route is unreachable and others would answer.
+        HostRouteNetworkSnapshot.update(.wifi)
+        defer { HostRouteNetworkSnapshot.update(.offline) }
+        let host = makeHost(selection: .manual(address: "tailnet.example"))
+        let connector = DialRecordingConnector(reachable: ["lan.example", "vpn.example"])
+
+        let settings = SSHTransportSettings(
+            host: host,
+            credentials: .password("pw"),
+            hostKeyPolicy: HostKeyPolicy(knownHosts: InMemoryKnownHostsStore()) { _ in false })
+        await #expect(throws: TransportError.self) {
+            _ = try await SSHTransportConnector.dialFirstReachable(
+                settings: settings,
+                perCandidateTimeout: .seconds(4),
+                dialOne: { try await connector.connect(settings: $0) },
+                onCandidate: nil)
+        }
+
+        // Exactly one dial: the pinned (unreachable) route. The healthy
+        // alternatives were never tried — the pin's failure is the
+        // pinned route's failure.
+        #expect(await connector.dialed == ["tailnet.example"])
+    }
+
+    @Test func stickinessHoldsThroughTheRealConsumer() {
+        // The design contract's stickiness, at the consumer seam: a
+        // CONNECTED host's dial plan is never re-evaluated on path
+        // changes (no hop to a marginally faster endpoint), while an
+        // unconnected host re-evaluates on a satisfied path.
+        #expect(
+            !HostRoutePolicy.shouldReevaluateOnPathChange(
+                isConnected: true, network: .wifi))
+        #expect(
+            HostRoutePolicy.shouldReevaluateOnPathChange(
+                isConnected: false, network: .nonWiFi))
     }
 
     // MARK: Support

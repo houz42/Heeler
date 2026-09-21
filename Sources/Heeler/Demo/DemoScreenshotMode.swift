@@ -181,6 +181,11 @@
                     outcome: .unreachable, checkedAt: Date())
                 failure = .sshUnreachable(detail: "connection timed out")
             } else {
+                // The v2 surface shows for a Host carrying v2 settings:
+                // the fixture gives the VPN route a Wi-Fi-only gate
+                // (honest: most VPN clients ride the LAN's Wi-Fi path)
+                // so the automatic demo is a genuine v2 Host.
+                host.routeEligibility = ["studio.vpn.example": .wifiOnly]
                 probes["192.168.31.71"] = HostRouteProbeResult(
                     outcome: .reachable, checkedAt: Date(),
                     latency: .milliseconds(9))

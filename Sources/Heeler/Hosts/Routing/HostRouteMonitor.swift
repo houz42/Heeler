@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Network
 
 /// Runs the bounded route probes and folds their results. One probe =
@@ -40,24 +41,34 @@ final class HostRouteProber {
         self.now = now
     }
 
-    /// Probes the configured routes in priority order, publishing each
-    /// result as it lands. Probes ONLY configured endpoints — the routes
-    /// the Host names, never a discovered network range. An unanswered
-    /// probe counts after `probeTimeout` and the sweep moves on.
-    func probe(addresses: [String], host: Host) async {
+    /// Probes the configured routes in priority order, reporting each
+    /// result to `onResult` THE MOMENT it concludes (per-route
+    /// freshness), and returning only when every bounded dial has
+    /// concluded. Probes ONLY configured endpoints — the routes the Host
+    /// names, never a discovered network range. Throws the Host's
+    /// credential error BEFORE dialing anything when credentials do not
+    /// resolve: a credential failure is about the Host, not the path,
+    /// and must surface as the sweep's explanation, not as three
+    /// identical "unknown" rows.
+    func probe(
+        addresses: [String],
+        host: Host,
+        onResult: (@Sendable (String, HostRouteProbeResult) -> Void)? = nil
+    ) async throws {
         results = [:]
         isProbing = true
-        // The sweep runs inline so `probe` returning means every
-        // bounded dial concluded — the caller copies a COMPLETE result
-        // set, never a mid-sweep snapshot.
+        let resolved = try credentials.credentials(for: host)
         let clock = ContinuousClock()
         for address in addresses {
             let start = clock.now
-            let outcome = await probeOne(address: address, host: host)
-            results[address] = HostRouteProbeResult(
+            let outcome = await probeOne(
+                address: address, host: host, credentials: resolved)
+            let result = HostRouteProbeResult(
                 outcome: outcome,
                 checkedAt: now(),
                 latency: outcome == .reachable ? clock.now - start : nil)
+            results[address] = result
+            onResult?(address, result)
         }
         isProbing = false
     }
@@ -66,13 +77,8 @@ final class HostRouteProber {
     /// are unreachable; auth/trust failures prove the path and are
     /// reported as themselves.
     private func probeOne(
-        address: String, host: Host
+        address: String, host: Host, credentials resolved: SSHCredentials
     ) async -> HostRouteProbeResult.Outcome {
-        guard let resolved = try? credentials.credentials(for: host) else {
-            // A credential failure is about the Host, not the path; the
-            // sweep's caller surfaces it separately. Count as unknown.
-            return .unknown
-        }
         // No TOFU prompt from a probe: keys not already trusted fail the
         // probe quietly; the full connect owns the trust conversation.
         let policy = HostKeyPolicy(knownHosts: knownHosts) { _ in false }
@@ -148,9 +154,12 @@ final class HostRouteMonitor {
         coalesceTask?.cancel()
         coalesceTask = Task { [weak self] in
             try? await Task.sleep(for: self?.coalesceWindow ?? .milliseconds(500))
-            guard !Task.isCancelled else { return }
-            self?.changeRevision &+= 1
-            self?.pathUpdate?(self?.network ?? .offline)
+            guard !Task.isCancelled, let self else { return }
+            // The dial path (any executor) reads this snapshot; keep it
+            // in lockstep with the published state.
+            HostRouteNetworkSnapshot.update(self.network)
+            self.changeRevision &+= 1
+            self.pathUpdate?(self.network)
         }
     }
 
@@ -163,4 +172,30 @@ final class HostRouteMonitor {
             isSatisfied: path.status == .satisfied,
             isWiFiHint: path.usesInterfaceType(.wifi))
     }
+}
+
+/// The process-wide latest network state, readable from ANY executor
+/// (the dial path runs off the main actor). Written only by
+/// `HostRouteMonitor`; read by `SSHTransportSettings(host:)` so every
+/// real dial is eligibility-gated against the CURRENT network hint.
+/// Offline until the first path event lands — the conservative default:
+/// a Wi-Fi-only route does not dial before the hint says Wi-Fi, and an
+/// Any-network route is unaffected (the gate only restricts wifiOnly).
+enum HostRouteNetworkSnapshot {
+    private static let state = Mutex<HostRouteNetworkState>(.offline)
+
+    /// The latest coalesced network state.
+    static var current: HostRouteNetworkState {
+        state.withLock { $0 }
+    }
+
+    static func update(_ new: HostRouteNetworkState) {
+        state.withLock { $0 = new }
+    }
+}
+
+extension HostRouteMonitor {
+    /// The shared process monitor. Started by the app model; the route
+    /// surface observes it, and every dial reads its snapshot.
+    @MainActor static let shared = HostRouteMonitor()
 }

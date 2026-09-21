@@ -62,8 +62,6 @@ struct HostRouteProbeResult: Equatable, Sendable {
     var outcome: Outcome
     /// When the probe concluded; nil for `.unknown`.
     var checkedAt: Date?
-    /// Round trip of the probe dial, diagnostic only — priority wins, a
-    /// live healthy session never hops to a marginally faster route.
     var latency: Duration?
 
     static let unknown = HostRouteProbeResult(
@@ -106,19 +104,20 @@ enum HostRoutePolicy {
             .filter { isEligible(host.routeEligibility(for: $0), network: network) }
     }
 
-    /// Whether `eligibility` permits dialing under `network`. An
-    /// unsatisfied path gates every route; a not-Wi-Fi hint gates the
-    /// Wi-Fi-only ones. The hint is conservative in what it claims and
-    /// the dial remains the real proof.
+    /// Whether `eligibility` permits dialing under `network`. Any-network
+    /// routes dial regardless of the path hint — the dial itself is the
+    /// honest proof, and NWPathMonitor's pre-first-event state must never
+    /// silence a route that was dialable in v1. Wi-Fi-only routes require
+    /// a satisfied path whose interface classifies as Wi-Fi; the hint is
+    /// a gate, not a proof.
     static func isEligible(
         _ eligibility: HostRouteEligibility, network: HostRouteNetworkState
     ) -> Bool {
-        guard network.isSatisfied else { return false }
         switch eligibility {
         case .anyNetwork:
             return true
         case .wifiOnly:
-            return network.isWiFiHint
+            return network.isSatisfied && network.isWiFiHint
         }
     }
 
