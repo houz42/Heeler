@@ -151,6 +151,13 @@ internal struct ChatWorkEntry: Sendable, Equatable, Identifiable {
         self.name = name
         self.result = result
     }
+
+    /// The Work-summary row's accessibility label — singular/plural
+    /// correct (the visible row text went singular in the redesign
+    /// review round 4; this label had its own uncorrected copy).
+    static func accessibilitySummaryLabel(count: Int) -> String {
+        "Work summary: \(count) tool call\(count == 1 ? "" : "s"), opens details"
+    }
 }
 
 internal enum ChatTranscriptItem: Sendable, Equatable, Identifiable {
