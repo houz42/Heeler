@@ -290,3 +290,107 @@ private final class TransientBox: @unchecked Sendable {
     var value: Data
     init(_ value: Data) { self.value = value }
 }
+
+// MARK: - Tail-window loading (the long-session fix)
+
+/// The device finding: start() used to readWhole — the ENTIRE
+/// transcript over the wire before anything rendered, so a long
+/// session hung the chat open. The fix seeds from the LAST window of
+/// bytes (bounded probes + one read) and pages older backwards on
+/// demand. THE PIN: readWhole is NEVER called during start.
+private final class WholeReadSpy: ChatTranscriptReaderProtocol, @unchecked Sendable {
+    let file: Data
+    private let lock = NSLock()
+    private var _wholeReads = 0
+    var wholeReads: Int { lock.withLock { _wholeReads } }
+    init(file: Data) { self.file = file }
+
+    func readWhole(_ path: String) async throws -> Data {
+        lock.withLock { _wholeReads += 1 }
+        return file
+    }
+
+    func readChunk(_ path: String, _ offset: UInt64, _ length: Int) async throws -> Data {
+        guard offset < UInt64(file.count) else { return Data() }
+        let start = Int(offset)
+        let end = min(start + length, file.count)
+        return file.subdata(in: start..<end)
+    }
+}
+
+@MainActor
+struct ChatStoreTailWindowTests {
+    private func session(path: String) -> AgentSessionInfo {
+        AgentSessionInfo(
+            agent: "omp", kind: .path, source: "herdr:omp", value: path)
+    }
+
+    private func statusStream() -> AsyncStream<ConsoleStore.AgentStatusUpdate> {
+        AsyncStream { $0.finish() }
+    }
+
+    private func tmpBase() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("chat-tail-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    /// A JSONL transcript of `lines` assistant messages.
+    private func transcript(lines: [String]) -> Data {
+        lines.map { line in
+            #"{"type":"message","id":"\#(UUID().uuidString)","message":{"role":"assistant","content":[{"type":"text","text":"\#(line)"}]}}"#
+                + "\n"
+        }.joined().data(using: .utf8)!
+    }
+
+    @Test func startLoadsTheTailAndNeverReadsWhole() async throws {
+        // ~1.2 MB: well past the 1 MiB window.
+        var lines: [String] = []
+        for i in 0..<10_000 {
+            lines.append("line number \(i) of the long session record padding")
+        }
+        let data = transcript(lines: lines)
+        #expect(data.count > jsonlTranscriptWindowBytes)
+
+        let spy = WholeReadSpy(file: data)
+        let base = tmpBase()
+        let store = ChatStore(
+            hostID: Host.ID(), paneID: "w1:pT",
+            reader: spy.asReader,
+            cachesDirectory: { base })
+
+        await store.start(
+            agentSession: session(path: "/tmp/long-session.jsonl"),
+            statusUpdates: statusStream())
+
+        // THE PIN: no readWhole during start — bounded chunk reads only.
+        #expect(spy.wholeReads == 0)
+        #expect(store.phase == .ready)
+
+        // The tail rendered: the LAST line is visible.
+        let lastText =
+            "line number \(lines.count - 1) of the long session record padding"
+        #expect(store.content.messages.contains {
+            for block in $0.blocks {
+                if case .text(let t) = block, t.contains(lastText) { return true }
+            }
+            return false
+        })
+    }
+
+    @Test func smallTranscriptLoadsEverythingWithOneRead() async throws {
+        let data = transcript(lines: ["alpha", "beta", "gamma"])
+        let spy = WholeReadSpy(file: data)
+        let base = tmpBase()
+        let store = ChatStore(
+            hostID: Host.ID(), paneID: "w1:pS",
+            reader: spy.asReader,
+            cachesDirectory: { base })
+
+        await store.start(
+            agentSession: session(path: "/tmp/small.jsonl"),
+            statusUpdates: statusStream())
+        #expect(spy.wholeReads == 0)
+        #expect(store.phase == .ready)
+        #expect(store.hasOlder == false)
+    }
+}

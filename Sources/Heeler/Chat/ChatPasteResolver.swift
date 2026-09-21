@@ -82,15 +82,20 @@ protocol ChatPasteboardSnapshotProviding {
 }
 
 extension UIPasteboard: ChatPasteboardSnapshotProviding {
-    var hasImages: Bool { UIPasteboard.general.hasImages }
-    var stringForPaste: String? {
-        UIPasteboard.general.string
-    }
+    // DEVICE CRASH ROOT CAUSE (the user's phone report: stack overflow,
+    // 130k recursion levels of UIPasteboard.hasImages.getter):
+    // `UIPasteboard.general` returns the SAME singleton instance, so
+    // the original members here dispatched straight back into
+    // THEMSELVES — infinite recursion on every pasteboard read that
+    // fired from the change-observer (copy, picker completions, any
+    // write from this app). `hasImages` now uses the SYSTEM property
+    // directly (the conformance requires no custom member at all);
+    // the renamed shims read `self`'s real instance surface — never
+    // `UIPasteboard.general`.
+    var stringForPaste: String? { string }
     var imageDataRepresentation: Data? {
-        UIPasteboard.general.data(forPasteboardType: UTType.png.identifier)
-            ?? UIPasteboard.general.data(forPasteboardType: UTType.jpeg.identifier)
+        data(forPasteboardType: UTType.png.identifier)
+            ?? data(forPasteboardType: UTType.jpeg.identifier)
     }
-    var imageRepresentation: UIImage? {
-        UIPasteboard.general.image
-    }
+    var imageRepresentation: UIImage? { image }
 }

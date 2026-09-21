@@ -234,13 +234,21 @@ final class ChatInputUITextView: UITextView {
 
     /// Keeps ``imagePasteboardAvailable`` fresh without ever touching
     /// the pasteboard inside canPerformAction (the device crash path).
+    /// The refresh DEFERS one runloop hop: changedNotification fires
+    /// DURING the setter's own pasteboard mutation (a Copy action in
+    /// the message rail sets UIPasteboard.string from this same app),
+    /// and reading `hasImages` inside that in-flight mutation is the
+    /// pasteboard re-entrancy that crashed the device — the read must
+    /// land AFTER the write completes.
     private func observePasteboardChanges() {
         pasteboardObserver = NotificationCenter.default.addObserver(
             forName: UIPasteboard.changedNotification,
             object: UIPasteboard.general,
             queue: .main
         ) { [weak self] _ in
-            self?.refreshImagePasteboardAvailability()
+            DispatchQueue.main.async {
+                self?.refreshImagePasteboardAvailability()
+            }
         }
     }
 
