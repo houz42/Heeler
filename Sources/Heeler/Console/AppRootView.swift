@@ -24,8 +24,25 @@ struct AppRootView: View {
     /// window session — a pushed detail that hides the chrome restores
     /// the same fold on Back (#A).
     @State private var isSidebarCollapsed = false
-    /// Phone drawer presentation. An overlay, never a viewport change.
+    /// Phone drawer presentation (v2 interactive): the LIVE slide
+    /// distance, 0 … 184 pt — every path (trigger, left-edge swipe,
+    /// drag-to-close) writes this one value, so the motion is
+    /// continuous across gesture and settle. `isDrawerOpen` is the
+    /// RESTING state; the drawer MOUNTS while presented (see
+    /// `drawerOverlay`).
+    @State private var drawerReveal: CGFloat = 0
+    /// The drawer's RESTING state (v2): true once an open is committed —
+    /// the trigger's toggle, the edge swipe's settle, or a completed
+    /// drag-snap. The LIVE slide distance is `drawerReveal`.
     @State private var isDrawerOpen = false
+    /// True ONLY while a finger is driving the drawer live (edge pan
+    /// or drag-to-close) — keeps the drawer MOUNTED during the
+    /// gesture so the finger tracks 1:1 without a mount flash.
+    @State private var isTrackingDrawer = false
+    /// True only while a gesture-committed close is still sliding out
+    /// — keeps the drawer mounted through the exit spring so the
+    /// close is a slide, not a vanish (unmount happens on settle).
+    @State private var isSettlingDrawer = false
     /// Focus return (#A): the trigger that opened the drawer receives
     /// focus back on dismissal.
     @FocusState private var isTriggerFocused: Bool
@@ -89,43 +106,52 @@ struct AppRootView: View {
                 }
                 pages
             }
-            // The phone drawer: an overlay; the page viewport is untouched
-            // behind it. On open: assistive focus moves INTO the drawer;
-            // on dismissal it returns to the trigger (review finding 3).
+            // The phone drawer (v2 interactive): an overlay; the page
+            // viewport is untouched behind it. The drawer slides by
+            // `drawerReveal` — the trigger, the left-edge swipe, and
+            // the drag-to-close all write that one value, so the motion
+            // is continuous and the scrim fades in sync
+            // (reveal-proportional). Mounting (see `drawerOverlay`)
+            // removes the closed drawer from the AX tree entirely —
+            // the v1 containment. On open: assistive focus moves INTO
+            // the drawer; on dismissal it returns to the trigger
+            // (review finding 3).
             .overlay {
-                if isDrawerOpen {
-                    AppDestinationDrawer(
-                        selection: $destination,
-                        close: { restoreFocus in
-                            withAnimation(.snappy) { isDrawerOpen = false }
-                            isDrawerAXFocused = false
-                            if restoreFocus {
-                                // Keyboard focus returns to the trigger.
-                                isTriggerFocused = true
-                                // Assistive focus returns to the trigger
-                                // too (review round): the trigger is the
-                                // page's FIRST accessible element
-                                // (topBarLeading), so a .screenChanged
-                                // post lands VoiceOver on it — binding an
-                                // AccessibilityFocusState through env
-                                // into the toolbar suppresses the item's
-                                // rendering (verified), so the
-                                // notification is the mechanism.
-                                UIAccessibility.post(
-                                    notification: .screenChanged,
-                                    argument: nil)
-                            }
-                        })
-                        .accessibilityFocused($isDrawerAXFocused)
-                }
+                drawerOverlay
             }
+            // The left-edge swipe open (v2): a UIKit screen-edge pan on
+            // the window's root view, enabled on the phone's ROOT pages
+            // ONLY — the same suppression seam as the trigger, so the
+            // pushed detail's interactive back-swipe is never competed
+            // with. Additive to the hamburger trigger (the accessible
+            // path), never its replacement.
+            .background(
+                DrawerEdgePanBridge(
+                    isEnabled: !isWide && isPageFocused && !isDrawerOpen,
+                    isEligible: { !isWide && isPageFocused && !isDrawerOpen },
+                    onBegan: { isTrackingDrawer = true },
+                    onTranslate: { translation in
+                        // The finger tracks the reveal 1:1, rubber
+                        // damped past full open.
+                        drawerReveal = AppDestinationDrawer.dampedReveal(
+                            raw: translation)
+                    },
+                    onRelease: { translation, velocity, cancelled in
+                        settleEdgeOpen(
+                            translation: translation,
+                            velocity: velocity,
+                            cancelled: cancelled)
+                    }))
             .onChange(of: isDrawerOpen) { _, open in
                 if open {
-                    // Move assistive focus into the drawer once it lands.
-                    // GUARD (review round): a fast scrim-dismiss inside
-                    // the delay must not steal focus back onto an
-                    // already-dismissed drawer.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    // Move assistive focus into the drawer once it
+                    // lands. GUARD (review round): a fast scrim-dismiss
+                    // inside the delay must not steal focus back onto an
+                    // already-dismissed drawer. 0.6 s clears the
+                    // presentation spring (v2): the drawer is not an
+                    // AX target until its frame settles flush, so the
+                    // assignment must land after.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                         if isDrawerOpen {
                             isDrawerAXFocused = true
                         }
@@ -161,7 +187,8 @@ struct AppRootView: View {
 
     /// The trigger's identity + action for the CURRENT width: fold toggle
     /// on wide layouts, drawer toggle on narrow ones. A width change
-    /// simply recomputes this — never a page rebuild.
+    /// simply recomputes this — never a page rebuild. The gesture is
+    /// additive (v2): the trigger stays the accessible path.
     private func triggerContext(isWide: Bool) -> AppNavigationTriggerContext? {
         guard isPageFocused else { return nil }
         if isWide {
@@ -177,25 +204,165 @@ struct AppRootView: View {
         return AppNavigationTriggerContext(
             accessibilityLabel: "Open navigation",
             accessibilityValue: isDrawerOpen ? "Open" : "Closed",
-            action: { withAnimation(.snappy) { isDrawerOpen.toggle() } }
-        )
+            action: {
+                if isDrawerOpen {
+                    closeDrawer(restoreFocus: true)
+                } else {
+                    openDrawer()
+                }
+            })
     }
 
+    /// Opens the drawer to its resting state (v2) — the trigger's path
+    /// and a committed edge swipe. Mounts (if not already tracking)
+    /// with the standard move-from-edge transition, then springs the
+    /// reveal full. The exit-settle flag clears: a fresh open cancels
+    /// any still-sliding prior close.
+    private func openDrawer() {
+        isTrackingDrawer = false
+        isSettlingDrawer = false
+        withAnimation(AppDestinationDrawer.presentationSpring) {
+            drawerReveal = AppDestinationDrawer.width
+            isDrawerOpen = true
+        }
+    }
+
+    /// Closes the drawer (v2): springs the reveal to zero, clears the
+    /// resting state, and — for the assistive/keyboard dismissal paths —
+    /// hands focus back to the trigger (keyboard + the .screenChanged
+    /// VoiceOver post; the trigger is the page's FIRST accessible
+    /// element, topBarLeading, so the notification's default target IS
+    /// the trigger — binding an AccessibilityFocusState through env
+    /// into a toolbar item suppresses the item's rendering, verified).
+    private func closeDrawer(restoreFocus: Bool) {
+        settleClosed()
+        withAnimation(AppDestinationDrawer.presentationSpring) {
+            isDrawerOpen = false
+        }
+        isDrawerAXFocused = false
+        if restoreFocus {
+            // Keyboard focus returns to the trigger.
+            isTriggerFocused = true
+            // Assistive focus returns to the trigger too (review
+            // round): the trigger is the page's FIRST accessible
+            // element (topBarLeading), so a .screenChanged post lands
+            // VoiceOver on it — binding an AccessibilityFocusState
+            // through env into a toolbar item suppresses the item's
+            // rendering (verified), so the notification is the
+            // mechanism.
+            UIAccessibility.post(
+                notification: .screenChanged, argument: nil)
+        }
+    }
+
+    /// The edge-swipe release (v2): the finger's projected position —
+    /// translation plus momentum (velocity × the settle horizon) —
+    /// decides. Past the settle point commits the open; anything less
+    /// snaps closed. Same rule as the drag-to-close, mirrored.
+    private func settleEdgeOpen(
+        translation: CGFloat, velocity: CGFloat, cancelled: Bool
+    ) {
+        let projected = AppDestinationDrawer.dampedReveal(
+            raw: translation + velocity * 0.12)
+        let committed = !cancelled
+            && (projected >= AppDestinationDrawer.settlePoint
+                || translation >= AppDestinationDrawer.settlePoint)
+        if committed {
+            openDrawer()
+        } else {
+            settleClosed()
+        }
+    }
+
+    /// The snapped-closed settle (v2): the reveal springs to zero; the
+    /// drawer stays MOUNTED through the slide (isSettlingDrawer) and
+    /// unmounts when the spring has died — the exit is a slide, not a
+    /// vanish.
+    private func settleClosed() {
+        withAnimation(AppDestinationDrawer.presentationSpring) {
+            drawerReveal = 0
+        }
+        isTrackingDrawer = false
+        isSettlingDrawer = true
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + AppDestinationDrawer.settleOutInterval
+        ) {
+            isSettlingDrawer = false
+        }
+    }
+
+    /// The phone drawer overlay (v2 revision): the standard SwiftUI
+    /// slide-over — a ZStack-layered sibling that MOUNTS only while
+    /// presented (resting open, finger-tracked, or mid-settle) with a
+    /// `.move(.leading)` transition, sliding by `drawerReveal`. The
+    /// scrim fades IN SYNC (reveal-proportional), so the edge-swipe
+    /// open and the drag-to-close both carry it. MOUNTING is what
+    /// keeps the closed drawer out of the AX tree — the v1 property
+    /// that every always-mounted AX gate (hidden, children-ignore,
+    /// focus-detach, opacity-0, rendered-geometry) failed to
+    /// reproduce (verified: the offscreen × stayed resolvable through
+    /// all of them; XCUITest kept matching it minutes after close).
+    private var drawerOverlay: some View {
+        let presented =
+            isDrawerOpen || isTrackingDrawer || isSettlingDrawer
+            || drawerReveal > 0
+        return ZStack(alignment: .leading) {
+            if presented {
+                // The scrim: reveal-proportional (v2), outside-tap
+                // dismissal + inert content behind.
+                Color.black
+                    .opacity(
+                        0.19 * min(
+                            drawerReveal / AppDestinationDrawer.width, 1))
+                    .ignoresSafeArea()
+                    .onTapGesture { closeDrawer(restoreFocus: true) }
+                    .accessibilityLabel("Dismiss navigation")
+                    .accessibilityAddTraits(.isButton)
+
+                    .allowsHitTesting(true)
+                AppDestinationDrawer(
+                    selection: $destination,
+                    close: { restoreFocus in
+                        closeDrawer(restoreFocus: restoreFocus)
+                    },
+                    reveal: $drawerReveal,
+                    isOpen: isDrawerOpen,
+                    isFocused: $isDrawerAXFocused,
+                    onTracking: { tracking in
+                        isTrackingDrawer = tracking
+                    })
+                    // While a finger drives the drawer the mount must
+                    // NOT play the insertion transition (the reveal
+                    // already places it); programmatic opens get the
+                    // standard move-from-edge slide instead.
+                    .transition(
+                        isTrackingDrawer ? .identity
+                        : .move(edge: .leading).combined(with: .opacity))
+            }
+        }
+        // While the drawer is presented, the pages behind must be inert
+        // to touch AND absent from the AX tree (v1 containment, applied
+        // to the WHOLE overlay layer so the scrim/drawer pair contains
+        // the user; pages are separately hidden through `pages`).
+        .accessibilityHidden(!presented)
+        .allowsHitTesting(presented)
+    }
 
     /// All three pages stay mounted; only the selected one is on stage.
-    /// While the drawer is open, the on-stage page is excluded from AX
-    /// AND hit-testing too (review finding 3): a modal must contain the
-    /// user — the scrim blocks sighted touches, but VoiceOver/switch
-    /// control would still reach the page without this.
+    /// While the drawer is presented — resting open OR mid-gesture, i.e.
+    /// reveal > 0 (v2) — the on-stage page is excluded from AX AND
+    /// hit-testing (review finding 3): a modal must contain the user —
+    /// the scrim blocks sighted touches, but VoiceOver/switch control
+    /// would still reach the page without this.
     private var pages: some View {
         ZStack {
             ForEach(AppDestination.allCases) { candidate in
                 page(candidate)
                     .opacity(candidate == destination ? 1 : 0)
                     .allowsHitTesting(
-                        candidate == destination && !isDrawerOpen)
+                        candidate == destination && drawerReveal <= 0)
                     .accessibilityHidden(
-                        candidate != destination || isDrawerOpen)
+                        candidate != destination || drawerReveal > 0)
             }
         }
     }
