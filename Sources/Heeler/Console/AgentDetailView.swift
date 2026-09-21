@@ -462,6 +462,22 @@ struct AgentDetailView: View {
                     try await console.readRemoteFile(
                         at: path, on: agent.hostID)
                 })
+                // The honest resolved-ask note (answered elsewhere /
+                // cancelled / expired): the card is gone but the WHY
+                // renders — the newest resolution, above the composer.
+                .overlay(alignment: .bottom) {
+                    if let latest = store.interactionResolutions.last {
+                        Text(latest.message)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(.thinMaterial, in: Capsule())
+                            .padding(.bottom, 120)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                            .id(latest.id)
+                    }
+                }
                 .overlay(alignment: .bottom) {
                     if case .disconnected(let reason) = store.phase {
                         AgentChatStateBanner(

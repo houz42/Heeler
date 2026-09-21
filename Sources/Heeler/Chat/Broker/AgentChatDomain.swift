@@ -411,6 +411,35 @@ struct AgentChatInteractionsResult: Decodable, Sendable, Equatable {
     let pending: [AgentChatInteraction]
 }
 
+/// One resolved ask (honest state): the card is gone but the WHY
+/// renders — answered (with where: the agent's terminal vs this
+/// client), cancelled, or expired.
+struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable {
+    let requestId: String
+    /// The wire outcome: answered / cancelled / expired.
+    let outcome: String
+    /// The wire source: remote (this client) / terminal.
+    let source: String
+
+    var id: String { requestId }
+
+    /// The user-facing note.
+    var message: String {
+        switch outcome {
+        case "answered":
+            source == "remote"
+                ? "Answered from this device."
+                : "Answered in the agent's terminal."
+        case "cancelled":
+            "The question was cancelled."
+        case "expired":
+            "The question expired before it was answered."
+        default:
+            "The question was resolved."
+        }
+    }
+}
+
 /// One answer to one question of an interaction.
 struct AgentChatAnswer: Encodable, Sendable, Equatable {
     let questionId: String

@@ -720,3 +720,24 @@ struct AgentChatInteractionRaceTests {
         #expect(merged.isEmpty)
     }
 }
+
+// MARK: - The ask-options app chain (v1 scope)
+
+struct AgentAskAppChainTests {
+    @Test func resolutionMessagesAreHonest() {
+        // The resolved card's WHY: answered-elsewhere / cancelled /
+        // expired — never silent.
+        let remote = AgentChatInteractionResolution(
+            requestId: "r1", outcome: "answered", source: "remote")
+        let terminal = AgentChatInteractionResolution(
+            requestId: "r2", outcome: "answered", source: "terminal")
+        let cancelled = AgentChatInteractionResolution(
+            requestId: "r3", outcome: "cancelled", source: "remote")
+        let expired = AgentChatInteractionResolution(
+            requestId: "r4", outcome: "expired", source: "terminal")
+        #expect(remote.message == "Answered from this device.")
+        #expect(terminal.message == "Answered in the agent's terminal.")
+        #expect(cancelled.message == "The question was cancelled.")
+        #expect(expired.message == "The question expired before it was answered.")
+    }
+}
