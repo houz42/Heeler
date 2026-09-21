@@ -166,9 +166,17 @@ extension SSHTransportSettings {
     /// candidate address: they name the same sshd on the same machine. A
     /// user-preferred address (see `PreferredAddressStore`) dials first; the
     /// rest keep their configured order behind it.
+    ///
+    /// v2 route selection: a manual pin narrows the dial to exactly the
+    /// pinned address — the pin is honored VERBATIM, never silently
+    /// overridden, and its failure surfaces as the pinned route's failure
+    /// (Try another route / Return to automatic), not a failover. Under
+    /// Automatic the v1 preferred order stands.
     init(host: Host, credentials: SSHCredentials, hostKeyPolicy: HostKeyPolicy) {
-        let preferredOrder = PreferredAddressStore(hostID: host.id)
-            .preferredOrder(for: host.candidateAddresses)
+        let preferred = PreferredAddressStore(hostID: host.id)
+        let preferredOrder = preferred.preferredOrder(
+            forCandidates: host.candidateAddresses,
+            pinnedAddress: host.pinnedRouteAddress)
         self.init(
             host: preferredOrder.first ?? host.address,
             candidateAddresses: Array(preferredOrder.dropFirst()),

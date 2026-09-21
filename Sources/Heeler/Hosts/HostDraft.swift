@@ -54,6 +54,14 @@ struct HostDraft: Equatable, Sendable {
     /// Optional native chat broker socket path on the Host; blank means
     /// no broker (the chat surface stays on the transcript backend).
     var brokerChatSocketPath = ""
+    /// Per-route eligibility gates (v2), keyed by address. Carried
+    /// through a form edit untouched — the v1 form does not edit gates;
+    /// the v2 route surface owns them.
+    var routeEligibility: [String: HostRouteEligibility] = [:]
+    /// The pin (or Automatic), carried through a form edit. Never
+    /// altered here: reinterpreting a pin is forbidden; a pin made
+    /// stale by the edit is surfaced honestly by the route surface.
+    var routeSelection: HostRouteSelection = .automatic
 
     init() {}
 
@@ -75,6 +83,8 @@ struct HostDraft: Equatable, Sendable {
         jumpUsername = host.jumpUsername
         alias = host.alias ?? ""
         brokerChatSocketPath = host.brokerChatSocketPath
+        routeEligibility = host.routeEligibility
+        routeSelection = host.routeSelection
     }
 
     var portNumber: Int? {
@@ -128,6 +138,8 @@ struct HostDraft: Equatable, Sendable {
             sessionName: sessionName.trimmingCharacters(in: .whitespaces),
             additionalAddresses: Array(trimmed.dropFirst()),
             routeLabels: routeLabels,
+            routeEligibility: routeEligibility,
+            routeSelection: routeSelection,
             jumpAddress: jumpAddress.trimmingCharacters(in: .whitespaces),
             jumpPort: jumpPortNumber ?? 22,
             jumpUsername: jumpUsername.trimmingCharacters(in: .whitespaces),

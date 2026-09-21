@@ -8,6 +8,20 @@ Entries reference the issue that motivated them.
 ## [Unreleased]
 
 ### Added
+- Per-Host automatic route selection. Each saved address can carry a
+  label ("Local network", "Tailscale") and an eligibility gate (Any
+  network / Wi-Fi only); the Host detail page shows the selection
+  (Automatic by default, or a manual pin), the result line ("Using
+  Local network" — route names describe saved endpoints, the app never
+  claims to see which VPN client is active), per-route probe statuses
+  with latency as a diagnostic, and Check routes / Edit priority
+  actions. Automatic dials the saved priority order with bounded probes
+  of the configured endpoints only; a healthy connection is never
+  preempted for a faster route. A manual pin dials exactly its route,
+  is never silently overridden, and a failed connect offers Try another
+  route / Return to automatic. Auth and host-key failures show as
+  themselves — never as unreachable, never weakened. Hosts saved
+  before routes keep their v1 dialing unchanged.
 - A Host can carry additional addresses for the same machine (home LAN and
   VPN, for example). The Host form gives each address its own row (add,
   remove, reorder; the primary address always stays), the Host detail page

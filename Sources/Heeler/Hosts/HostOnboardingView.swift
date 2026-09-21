@@ -20,6 +20,10 @@ struct HostOnboardingView: View {
     @State private var isEditing = false
     @State private var isConfirmingHostKeyReplacement = false
     @State private var sessionSelectionError: String?
+    @State private var routeStore: HostRouteStatusStore?
+    @State private var routeError: String?
+    @Environment(\.scenePhase) private var scenePhase
+
 
     init(
         host: Host,
@@ -35,7 +39,11 @@ struct HostOnboardingView: View {
         connectedAddress: String? = nil,
         /// Pre-built store override for demo screenshots; nil builds the
         /// production store keyed to this Host.
-        store: HostOnboardingStore? = nil
+        store: HostOnboardingStore? = nil,
+        /// Pre-built route status store override for demo screenshots; nil
+        /// builds the production store on first use. Explicit rather than
+        /// an environment value so a scripted store cannot miss the view.
+        routeStatusStore: HostRouteStatusStore? = nil
     ) {
         self.catalog = catalog
         self.connectionStatus = connectionStatus
@@ -47,6 +55,7 @@ struct HostOnboardingView: View {
             initialValue: store ?? HostOnboardingStore(
                 host: host,
                 preferredAddresses: PreferredAddressStore(hostID: host.id)))
+        _routeStore = State(initialValue: routeStatusStore)
     }
 
     var body: some View {
@@ -79,6 +88,46 @@ struct HostOnboardingView: View {
             } footer: {
                 Text(addressSectionFooter)
             }
+            // The design contract's failure offer: on a connect failure
+            // with more than one saved route, offer Try another route /
+            // Return to automatic. A pinned Host offers both (the pin
+            // is never silently overridden — the user must drop it
+            // explicitly); an Automatic Host offers the alternates.
+            // Placed ABOVE the Routes section: when a dial just failed,
+            // the offer is the most important state on the page.
+            if showsRouteFailureOffer {
+                Section {
+                    if store.host.isManuallyRouted {
+                        Button {
+                            returnToAutomatic()
+                        } label: {
+                            Label("Return to automatic", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                    }
+                    ForEach(tryAnotherRouteChoices, id: \.self) { address in
+                        Button {
+                            Task { await tryRoute(address) }
+                        } label: {
+                            Label(
+                                "Try \(store.host.routeName(for: address))",
+                                systemImage: "arrow.triangle.branch")
+                        }
+                    }
+                } header: {
+                    Text("Route failed")
+                } footer: {
+                    Text(
+                        "The connection did not go through. "
+                            + "You can try one of this Host's other saved routes "
+                            + "or return to automatic selection.")
+                }
+            }
+
+            // MARK: Routes (v2 automatic route selection). Sits right
+            // under Addresses/failure offer: per the design contract the
+            // route selection is a first-class per-Host setting, not a
+            // footnote after the preflight checklist.
+            routesSection
 
             if retryConnection != nil {
                 Section {
@@ -109,6 +158,7 @@ struct HostOnboardingView: View {
                     .smooth(duration: 0.25),
                     value: connectionPresentation.connectionErrorMessage)
             }
+
 
             Section {
                 ForEach(PreflightCheck.allCases, id: \.self) { check in
@@ -157,6 +207,7 @@ struct HostOnboardingView: View {
                     Text("Only continue after verifying the new fingerprint with the Host owner.")
                 }
             }
+
         }
         .navigationTitle(store.host.displayName)
         .navigationBarTitleDisplayMode(.inline)
@@ -208,11 +259,38 @@ struct HostOnboardingView: View {
         } message: {
             Text(sessionSelectionError ?? "")
         }
+        .alert(
+            "Could Not Save Route Selection",
+            isPresented: Binding(
+                get: { routeError != nil },
+                set: { if !$0 { routeError = nil } })
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(routeError ?? "")
+        }
         .task {
+            // The route surface renders its statuses from the store's
+            // probe results; build it on arrival so the section is live
+            // (and the foreground recheck has something to refresh)
+            // rather than waiting for the first Check routes press.
+            _ = ensureRouteStore()
             if store.phase == .idle {
                 await store.runChecks()
             }
         }
+        // The design contract's recheck on foreground: when the app
+        // returns, re-run one bounded sweep of the configured routes so
+        // the statuses on screen are current. No continuous background
+        // promises — this fires because the user came back.
+        .onChange(of: scenePhase, { previous, phase in
+            // A real foreground return only: the launch transition into
+            // active is not a recheck trigger.
+            guard previous != .active, phase == .active, let routeStore,
+                !routeStore.isProbing
+            else { return }
+            Task { await routeStore.recheckOnForeground() }
+        })
     }
 
     /// Presentation tracks the pending candidate; dismissal is decided by
@@ -302,6 +380,214 @@ struct HostOnboardingView: View {
                 + "A pick made here becomes the preferred path."
         }
         return ""
+    }
+
+    // MARK: Routes (v2)
+
+    /// The route surface from the design contract: Route selection, the
+    /// result line, the saved-priority list with honest per-route
+    /// statuses, and the actions Check routes / Choose manually / Edit
+    /// priority. Route names describe saved endpoints; the footer states
+    /// plainly that the app cannot see which VPN client is active.
+    @ViewBuilder
+    private var routesSection: some View {
+        Section {
+            LabeledContent("Route selection", value: routeSelectionTitle)
+            Text(routeResultLine)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            ForEach(routeAddresses, id: \.self) { address in
+                routeRow(address)
+            }
+            Button {
+                Task { await checkRoutes() }
+            } label: {
+                Label("Check routes", systemImage: "antenna.radiowaves.left.and.right")
+            }
+            .disabled(isRouteCheckInFlight)
+        } header: {
+            Text("Routes")
+        } footer: {
+            Text(
+                "Routes are dialed top to bottom until one answers. "
+                    + "Names describe saved endpoints; the app cannot see "
+                    + "which VPN client is active. Priority follows the "
+                    + "saved address order (edit it on the Host form).")
+        }
+    }
+
+    /// The saved routes in priority order: the Host's candidate addresses,
+    /// presented under their labels.
+    private var routeAddresses: [String] {
+        store.host.candidateAddresses
+    }
+
+    private var routeSelectionTitle: String {
+        if let pinned = store.host.pinnedRouteAddress {
+            return store.host.routeName(for: pinned)
+        }
+        return "Automatic"
+    }
+
+    private var routeResultLine: String {
+        HostRoutePolicy.resultLine(
+            host: store.host,
+            liveAddress: connectedAddress,
+            probes: routeProbeResults,
+            network: routeNetwork)
+    }
+
+    /// Whether the connect-failure offer shows: a failed/reconnecting
+    /// status whose standing failure is reach-class, on a Host with
+    /// more than one saved route OR a stale manual pin (a pinned Host
+    /// must be able to return to automatic even when it has no
+    /// alternates). Auth/trust failures are NOT route failures — they
+    /// show as themselves and switching routes cannot truthfully fix
+    /// them (the same key answers on every route).
+    private var showsRouteFailureOffer: Bool {
+        guard let standingFailure else { return false }
+        switch connectionStatus {
+        case .failed, .reconnecting:
+            break
+        default:
+            return false
+        }
+        guard standingFailure.isReachFailure else { return false }
+        let routeCount = routeAddresses.count
+        return routeCount > 1 || (routeCount == 1 && store.host.isManuallyRouted)
+    }
+
+    /// The routes "Try another" may switch to: everything except the
+    /// route the failed dial went through (the pinned route, or the
+    /// live/last-tried address), in priority order.
+    private var tryAnotherRouteChoices: [String] {
+        let failedAddress = store.host.pinnedRouteAddress ?? connectedAddress
+        return routeAddresses.filter { $0 != failedAddress }
+    }
+
+    /// Try another route: pin the choice and retry the Host connection —
+    /// the retry observes the pin through the dial plan.
+    private func tryRoute(_ address: String) async {
+        do {
+            try await ensureRouteStore().tryRoute(address)
+        } catch {
+            routeError = "The route selection could not be saved."
+        }
+    }
+
+    private var isRouteCheckInFlight: Bool {
+        routeStore?.isProbing ?? false
+    }
+
+    private var routeProbeResults: [String: HostRouteProbeResult] {
+        routeStore?.probes ?? [:]
+    }
+
+    private var routeNetwork: HostRouteNetworkState {
+        routeStore?.network ?? .offline
+    }
+
+    private func routeRow(_ address: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: routeIcon(address))
+                .foregroundStyle(routeIconTint(address))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(store.host.routeName(for: address))
+                    .font(.subheadline)
+                Text(address)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text(routeStatus(for: address))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .swipeActions {
+            Button("Use") {
+                pinRoute(address)
+            }
+            .tint(.blue)
+        }
+    }
+
+    private func routeIcon(_ address: String) -> String {
+        if store.host.pinnedRouteAddress == address {
+            return "pin.fill"
+        }
+        if connectedAddress == address {
+            return "bolt.fill"
+        }
+        switch routeProbeResults[address]?.outcome {
+        case .reachable: return "checkmark.circle.fill"
+        case .unreachable: return "xmark.circle.fill"
+        case .authenticationRejected, .hostKeyProblem: return "exclamationmark.triangle.fill"
+        case .unknown, nil: return "questionmark.circle"
+        }
+    }
+
+    private func routeIconTint(_ address: String) -> Color {
+        if store.host.pinnedRouteAddress == address {
+            return .blue
+        }
+        if connectedAddress == address {
+            return .green
+        }
+        switch routeProbeResults[address]?.outcome {
+        case .reachable: return .green
+        case .unreachable: return .red
+        case .authenticationRejected, .hostKeyProblem: return .orange
+        case .unknown, nil: return .secondary
+        }
+    }
+
+    private func routeStatus(for address: String) -> String {
+        HostRoutePolicy.rowStatus(
+            address: address,
+            host: store.host,
+            liveAddress: connectedAddress,
+            probes: routeProbeResults,
+            network: routeNetwork)
+    }
+
+    /// "Check routes": one bounded sweep of the configured routes. The
+    /// probes run on the shared prober so the same results feed the
+    /// failure offer's Try-another-route choices.
+    private func checkRoutes() async {
+        let store = ensureRouteStore()
+        await store.checkRoutes()
+    }
+
+    private func ensureRouteStore() -> HostRouteStatusStore {
+        // A scripted store (demo screenshots) arrives through the init;
+        // production builds the real store here on first use.
+        if let routeStore { return routeStore }
+        let store = HostRouteStatusStore(
+            host: store.host,
+            prober: HostRouteProber(),
+            catalog: catalog,
+            retryConnection: { [retryConnection] in await retryConnection?() })
+        routeStore = store
+        return store
+    }
+
+    /// "Choose manually": pins a route — the pin is never silently
+    /// overridden; a pinned dial never fails over.
+    private func pinRoute(_ address: String) {
+        do {
+            try ensureRouteStore().pin(address)
+        } catch {
+            routeError = "The route selection could not be saved."
+        }
+    }
+
+    /// "Return to automatic": drops the pin.
+    private func returnToAutomatic() {
+        do {
+            try ensureRouteStore().returnToAutomatic()
+        } catch {
+            routeError = "The route selection could not be saved."
+        }
     }
 
     private func retry() {

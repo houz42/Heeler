@@ -38,6 +38,12 @@ enum UITestApp {
         case hostDetailProbing
         /// The Host detail page stopped on the pick between two addresses.
         case hostDetailPick
+        /// The Host detail page with the v2 route surface (Automatic,
+        /// probed statuses).
+        case hostRoutes
+        /// The Host detail page with the v2 route surface pinned manually
+        /// after a reach failure.
+        case hostRoutesPinnedFailed
         /// Console + Settings sheet presented on launch.
         case settings
 
@@ -50,6 +56,10 @@ enum UITestApp {
                 return ["--demo-screenshots", "--demo-host-detail-probing"]
             case .hostDetailPick:
                 return ["--demo-screenshots", "--demo-host-detail-pick"]
+            case .hostRoutes:
+                return ["--demo-screenshots", "--demo-host-routes"]
+            case .hostRoutesPinnedFailed:
+                return ["--demo-screenshots", "--demo-host-routes-pinned-failed"]
             case .settings:
                 return ["--demo-screenshots", "--demo-screenshots-settings"]
             }

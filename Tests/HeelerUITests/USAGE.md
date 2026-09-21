@@ -26,10 +26,10 @@ let app = UITestApp.launch()                  // plain app (empty state only)
 ```
 
 Demo routes: `.console` `.hostForm` `.hostDetailProbing`
-`.hostDetailPick` `.settings` — each maps to the `--demo-*` launch
-args already in the app (Debug + simulator only). Demo mode is the ONLY
-sanctioned fixture source: no real SSH, no real herdr, no host-dependent
-state. CI must pass on a clean checkout with a booted sim.
+`.hostDetailPick` `.hostRoutes` `.hostRoutesPinnedFailed` `.settings` — each maps
+to the `--demo-*` launch args already in the app (Debug + simulator only). Demo
+mode is the ONLY sanctioned fixture source: no real SSH, no real herdr, no
+host-dependent state. CI must pass on a clean checkout with a booted sim.
 
 3. Assert on the accessibility tree (`staticTexts`, `buttons`,
    `textFields` by label/placeholder), not pixel diffs. Keep each test

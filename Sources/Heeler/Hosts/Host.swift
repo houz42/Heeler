@@ -37,6 +37,17 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
     /// `routeName(for:)` resolves presentation, with the address itself as
     /// the fallback label. Pruned to only cover live candidates.
     var routeLabels: [String: String]
+    /// Per-route eligibility gates for automatic route selection (v2):
+    /// "Wi-Fi only" routes are skipped while the current path's interface
+    /// hint is not Wi-Fi. Keyed by exact address, pruned to live
+    /// candidates, same contract as `routeLabels`. Absent addresses dial
+    /// under Any-network eligibility.
+    var routeEligibility: [String: HostRouteEligibility]
+    /// Per-Host route selection (v2): Automatic dials the saved priority
+    /// order over eligible routes; a manual pin dials exactly one route
+    /// and is never silently overridden. Defaults to `.automatic` for
+    /// Hosts saved before the field existed.
+    var routeSelection: HostRouteSelection
     /// Optional Jump Host this Host is reached through. Blank means a direct
     /// connection; when set, `address`/`port` are resolved from the Jump Host
     /// and normally point at a loopback port held open by a reverse tunnel.
@@ -63,6 +74,7 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id, name, address, port, username, authMethod, sessionName
         case additionalAddresses, routeLabels, jumpAddress, jumpPort, jumpUsername, alias
+        case routeEligibility, routeSelection
         case brokerChatSocketPath = "broker_chat_socket_path"
     }
 
@@ -96,6 +108,8 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         sessionName: String = "",
         additionalAddresses: [String] = [],
         routeLabels: [String: String] = [:],
+        routeEligibility: [String: HostRouteEligibility] = [:],
+        routeSelection: HostRouteSelection = .automatic,
         jumpAddress: String = "",
         jumpPort: Int = 22,
         jumpUsername: String = "",
@@ -113,6 +127,10 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         self.routeLabels = Self.normalizedRouteLabels(
             routeLabels,
             candidates: Self.rawCandidates(address: address, additional: additionalAddresses))
+        self.routeEligibility = Self.normalizedRouteEligibility(
+            routeEligibility,
+            candidates: Self.rawCandidates(address: address, additional: additionalAddresses))
+        self.routeSelection = routeSelection
         self.jumpAddress = jumpAddress
         self.jumpPort = jumpPort
         self.jumpUsername = jumpUsername
@@ -134,10 +152,16 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         additionalAddresses =
             try container.decodeIfPresent([String].self, forKey: .additionalAddresses)
             .map(Self.normalizedAdditionalAddresses) ?? []
-        // Absent in Hosts saved before named routes; unlabeled addresses
-        // keep their address-as-label presentation unchanged.
         routeLabels =
             try container.decodeIfPresent([String: String].self, forKey: .routeLabels) ?? [:]
+        // Absent in Hosts saved before v2 route selection: no eligibility
+        // gates (every route dials under Any network) and Automatic
+        // selection — the v1 behavior unchanged.
+        routeEligibility =
+            try container.decodeIfPresent(
+                [String: HostRouteEligibility].self, forKey: .routeEligibility) ?? [:]
+        routeSelection = try container.decodeIfPresent(
+            HostRouteSelection.self, forKey: .routeSelection) ?? .automatic
         // Absent in Hosts saved before jump-host support; a blank address
         // decodes as the direct connection those Hosts already had.
         jumpAddress = try container.decodeIfPresent(String.self, forKey: .jumpAddress) ?? ""
@@ -156,6 +180,8 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
                 forKey: .sessionName, in: container, debugDescription: "Invalid herdr session name")
         }
         routeLabels = Self.normalizedRouteLabels(routeLabels, candidates: candidateAddresses)
+        routeEligibility = Self.normalizedRouteEligibility(
+            routeEligibility, candidates: candidateAddresses)
     }
 
     /// The presentation name of one connection route: the user's label
@@ -186,6 +212,35 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
             }
         }
         return normalized
+    }
+
+    /// Eligibility gates only count while their address still dials: stale
+    /// keys pruned, same contract as `normalizedRouteLabels`. An address
+    /// with no entry dials under Any-network eligibility.
+    private static func normalizedRouteEligibility(
+        _ raw: [String: HostRouteEligibility], candidates: [String]
+    ) -> [String: HostRouteEligibility] {
+        let live = Set(candidates)
+        return raw.filter { live.contains($0.key) }
+    }
+
+    /// Whether this Host manually pinned one route (v2). The pin dials
+    /// exactly its address and is never silently overridden.
+    var isManuallyRouted: Bool {
+        if case .manual = routeSelection { return true }
+        return false
+    }
+
+    /// The pinned route's address, or nil while Automatic.
+    var pinnedRouteAddress: String? {
+        if case .manual(let address) = routeSelection { return address }
+        return nil
+    }
+
+    /// The eligibility gate for one route's address: the saved gate, or
+    /// Any network for addresses saved before gates existed.
+    func routeEligibility(for address: String) -> HostRouteEligibility {
+        routeEligibility[address] ?? .anyNetwork
     }
 
     /// A stored alias is only meaningful when it renders: trimmed, and nil

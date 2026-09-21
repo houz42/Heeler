@@ -37,9 +37,19 @@
             /// The Host detail page stopped on the pick between two
             /// reachable addresses.
             case hostDetailPick
+            /// The Host detail page with the v2 route surface (Automatic,
+            /// probed statuses).
+            case hostRoutes
+            /// The Host detail page with the v2 route surface pinned
+            /// manually after a reach failure.
+            case hostRoutesPinnedFailed
 
             static func fromArguments() -> Route {
                 let arguments = ProcessInfo.processInfo.arguments
+                if arguments.contains(hostRoutesPinnedFailedLaunchArgument) {
+                    return .hostRoutesPinnedFailed
+                }
+                if arguments.contains(hostRoutesLaunchArgument) { return .hostRoutes }
                 if arguments.contains(hostDetailProbingLaunchArgument) { return .hostDetailProbing }
                 if arguments.contains(hostListLaunchArgument) { return .hostList }
                 if arguments.contains(hostFormLaunchArgument) { return .hostForm }
@@ -51,6 +61,9 @@
         static let hostListLaunchArgument = "--demo-host-list"
         static let hostDetailProbingLaunchArgument = "--demo-host-detail-probing"
         static let hostDetailPickLaunchArgument = "--demo-host-detail-pick"
+        static let hostRoutesLaunchArgument = "--demo-host-routes"
+        static let hostRoutesPinnedFailedLaunchArgument =
+            "--demo-host-routes-pinned-failed"
 
         /// The multi-path demo Host: the same machine over LAN and VPN.
         static let multipathHost = Host(
@@ -142,6 +155,66 @@
                 multipathDetail(midProbe: true)
             case .hostDetailPick:
                 multipathDetail(midProbe: false)
+            case .hostRoutes:
+                routedDetail(pinnedFailed: false)
+            case .hostRoutesPinnedFailed:
+                routedDetail(pinnedFailed: true)
+            }
+        }
+
+        /// The v2 route surface against the multipath demo Host, its
+        /// route store scripted to the captured state: Automatic with
+        /// probed statuses, or a manual pin that failed to reach (the
+        /// Try another route / Return to automatic offer).
+        private func routedDetail(pinnedFailed: Bool) -> some View {
+            var host = DemoScreenshotMode.multipathHost
+            var probes = [String: HostRouteProbeResult]()
+            var failure: TransportError?
+            if pinnedFailed {
+                host.routeSelection = .manual(address: "studio.vpn.example")
+                probes["studio.vpn.example"] = HostRouteProbeResult(
+                    outcome: .unreachable, checkedAt: Date())
+                probes["192.168.31.71"] = HostRouteProbeResult(
+                    outcome: .reachable, checkedAt: Date(),
+                    latency: .milliseconds(12))
+                probes["CMF79KM7YF.local"] = HostRouteProbeResult(
+                    outcome: .unreachable, checkedAt: Date())
+                failure = .sshUnreachable(detail: "connection timed out")
+            } else {
+                probes["192.168.31.71"] = HostRouteProbeResult(
+                    outcome: .reachable, checkedAt: Date(),
+                    latency: .milliseconds(9))
+                probes["CMF79KM7YF.local"] = HostRouteProbeResult(
+                    outcome: .reachable, checkedAt: Date(),
+                    latency: .milliseconds(23))
+                probes["studio.vpn.example"] = HostRouteProbeResult(
+                    outcome: .unreachable, checkedAt: Date())
+            }
+            let routeStore = HostRouteStatusStore(
+                host: host,
+                network: .wifi,
+                prober: HostRouteProber(
+                    connector: DemoMultipathConnector(),
+                    credentials: HostCredentialsProvider(
+                        deviceKeys: DeviceKeyStore(secrets: DemoSecretStore()),
+                        secrets: DemoSecretStore()),
+                    knownHosts: InMemoryKnownHostsStore()),
+                catalog: hosts,
+                seededProbes: probes)
+            return NavigationStack {
+                HostOnboardingView(
+                    host: host,
+                    catalog: hosts,
+                    connectionStatus: pinnedFailed ? .failed(failure!) : nil,
+                    standingFailure: failure,
+                    connectedAddress: pinnedFailed ? nil : "192.168.31.71",
+                    store: HostOnboardingStore(
+                        host: host,
+                        connector: DemoMultipathConnector(),
+                        preferredAddresses: PreferredAddressStore(
+                            defaults: DemoScreenshotFixture.makeDefaults(),
+                            hostID: host.id)),
+                    routeStatusStore: routeStore)
             }
         }
 
@@ -236,6 +309,15 @@
         func connect(settings: SSHTransportSettings) async throws -> any Transport {
             throw TransportError.sshUnreachable(detail: "Demo route never dials.")
         }
+    }
+
+    /// Keeps the demo route surface out of the real Keychain (the demo
+    /// never dials, but the prober still resolves credentials).
+    private final class DemoSecretStore: SecretStore {
+        func read(account: String) throws -> Data? { nil }
+        func readAll() throws -> [String: Data] { [:] }
+        func write(_ secret: Data, account: String) throws {}
+        func removeSecret(account: String) throws {}
     }
 
     @MainActor
