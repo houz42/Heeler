@@ -248,6 +248,14 @@ struct ConsoleView: View {
                 destinationMenu
             }
         }
+        // The quick-state chips in the HEADER row (v2 directive, per the
+        // design's inbox(): chips at margin-left:auto — trailing side of
+        // the title row, before the New Agent +; the search field stays
+        // its own row below). Semantics unchanged: same state-filter
+        // model, selected iff active, All clears.
+        ToolbarItem(placement: .primaryAction) {
+            AgentQuickStateChips(searchStore: agentSearch)
+        }
         // (User directive: the host-filter menu is gone — search's
         // host: chip subsumed it.)
         ToolbarItem(placement: .primaryAction) {
@@ -499,10 +507,6 @@ struct ConsoleView: View {
                 store: agentSearch,
                 agents: searchUniverse,
                 isFocused: $isSearchFocused)
-            // The approved quick-state chips (user device finding):
-            // All / Needs you / Working, trailing of the count row —
-            // riding the same filter model as typed state: chips.
-            AgentQuickStateChips(searchStore: agentSearch)
             AgentListCountBarView(
                 matchCount: searchedAgents.count,
                 totalCount: searchUniverse.count,

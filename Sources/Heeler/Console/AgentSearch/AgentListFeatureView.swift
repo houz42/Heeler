@@ -37,13 +37,15 @@ struct AgentListCountBarView: View {
                 viewSheet = .view
             } label: {
                 HStack(spacing: 4) {
+                    // The design's .agent-list-viewbar: color var(--accent)
+                    // — the accent green, not muted (v2 directive).
                     Text("\(layoutStore.grouping.label) · \(layoutStore.order.label)")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.accentColor)
                         .lineLimit(1)
                     Image(systemName: "chevron.up.chevron.down")
                         .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Color.accentColor)
                 }
             }
             .buttonStyle(.plain)
