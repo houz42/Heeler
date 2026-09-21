@@ -17,15 +17,13 @@ struct ChatDraftComposerTests {
         .image(id: "i-\(path)", remotePath: path, previewData: nil)
     }
 
-    @Test func pasteImageAloneIsTheMessage() {
+    @Test func imageAloneIsTheAtReference() {
         let text = ChatDraftComposer.messageText(
             items: [image("/remote/pasted.png")], draft: "")
-        #expect(text == "/remote/pasted.png")
+        #expect(text == "@/remote/pasted.png")
     }
 
-    @Test func everyAttachmentRidesExactlyOnce() {
-        // Two images + one file + prose: all three paths lead, prose
-        // last, each path once.
+    @Test func everyAttachmentRidesExactlyOnceAsAt() {
         let text = ChatDraftComposer.messageText(
             items: [
                 image("/remote/a.png"),
@@ -35,34 +33,31 @@ struct ChatDraftComposerTests {
             draft: "please review")
         let lines = text.components(separatedBy: "\n")
         #expect(lines.count == 4)
-        #expect(lines[0] == "/remote/a.png")
-        #expect(lines[1] == "/remote/notes.md")
-        #expect(lines[2] == "/remote/b.png")
-        #expect(lines[3] == "please review")
+        #expect(lines[0] == "please review")
+        #expect(lines[1] == "@/remote/a.png")
+        #expect(lines[2] == "@/remote/notes.md")
+        #expect(lines[3] == "@/remote/b.png")
     }
 
     @Test func userTypedPathStringsSurviveVerbatim() {
-        // Attachment paths never live in the prose (removed at
-        // tile-creation time), so a USER-TYPED path string is prose
-        // and survives verbatim — never eaten by the composition.
+        // Attachment paths ride as explicit @-references; a USER-TYPED
+        // path string is prose and survives verbatim — never eaten.
         let draft = "look at /remote/pick.png for the details"
         let text = ChatDraftComposer.messageText(
             items: [image("/remote/some-other.png")], draft: draft)
         let lines = text.components(separatedBy: "\n")
-        #expect(lines[0] == "/remote/some-other.png")
-        #expect(lines[1] == "look at /remote/pick.png for the details")
+        #expect(lines[0] == "look at /remote/pick.png for the details")
+        #expect(lines[1] == "@/remote/some-other.png")
     }
 
     @Test func multipleFilesPlusProseSend() {
-        // The real send shape: two attachments + prose — all items
-        // once, prose last, exactly once.
         let text = ChatDraftComposer.messageText(
             items: [
                 image("/remote/a.png"),
                 .file(id: "f1", name: "notes.md", remotePath: "/remote/notes.md"),
             ],
             draft: "review both please")
-        #expect(text == "/remote/a.png\n/remote/notes.md\nreview both please")
+        #expect(text == "review both please\n@/remote/a.png\n@/remote/notes.md")
     }
 
     @Test func quotesDeliverBlockQuotedAndProsePreserved() {
@@ -128,11 +123,14 @@ struct ChatDraftCompositionOrderTests {
         #expect(text == "please review\n@/remote/notes.md")
     }
 
-    @Test func imageReferencesKeepTheBarePathConvention() {
+    @Test func imageReferencesUseTheSameAtGrammar() {
+        // The user's contract: BOTH files and images reference as @path
+        // (the old bare-path image form was the no-@ defect in the
+        // user's real transcript).
         let text = ChatDraftComposer.messageText(
             items: [.image(id: "i1", remotePath: "/remote/shot.png", previewData: nil)],
             draft: "see this")
-        #expect(text == "see this\n/remote/shot.png")
+        #expect(text == "see this\n@/remote/shot.png")
     }
 
     @Test func attachmentBearingSendsBypassClassification() {

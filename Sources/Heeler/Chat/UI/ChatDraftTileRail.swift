@@ -49,18 +49,23 @@ enum ChatDraftItem: Identifiable, Equatable {
 enum ChatDraftComposer {
     static func messageText(items: [ChatDraftItem], draft: String) -> String {
         var parts: [String] = []
+        // Quotes lead (the blockquoted context ahead of the reply —
+        // the reading order), then the prose, then the @-references
+        // (the user's contract: BOTH files and images reference as
+        // @path — never a bare path).
+        for item in items {
+            if case .quote(_, let text, _) = item {
+                parts.append(ChatQuote.draft(for: text))
+            }
+        }
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { parts.append(trimmed) }
         for item in items {
             switch item {
-            case .image(_, let path, _):
-                parts.append(path)
-            case .file(_, _, let path):
-                // The @-mention file grammar: the agent reads @path as
-                // a file reference.
+            case .image(_, let path, _), .file(_, _, let path):
                 parts.append("@\(path)")
-            case .quote(_, let text, _):
-                parts.append(ChatQuote.draft(for: text))
+            case .quote:
+                continue  // already led
             }
         }
         return parts.joined(separator: "\n")
