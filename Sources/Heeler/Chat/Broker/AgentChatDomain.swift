@@ -420,17 +420,20 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
     /// outcome/source pair maps here at capture time; a resolution
     /// this device recorded itself is `youAnswered` (with labels).
     enum Kind: String, Sendable, Equatable, Codable {
-        /// THIS device answered; `labels` carries the chosen option
-        /// LABELS (resolved against the interaction's questions at
-        /// submit time — the wire's `idx:<n>` ids are never
-        /// user-facing).
+        /// THIS device answered and the broker's acknowledgement
+        /// CONFIRMED this client's submission; `labels` carries the
+        /// chosen option LABELS (resolved against the interaction's
+        /// questions at submit time — the wire's `idx:<n>` ids are
+        /// never user-facing).
         case youAnswered
         /// Answered at the agent's own terminal.
         case answeredInTerminal
-        /// Answered by a remote client that is NOT this device
-        /// (wire says source 'remote' but this store never recorded
-        /// the answer).
-        case answeredFromAnotherDevice
+        /// Answered by SOME remote client — this device or another:
+        /// the broadcast event cannot identify the winner, so before
+        /// our own acknowledgement confirms the claim the honest
+        /// record is neutral. Only the ack (accepted) upgrades this
+        /// to `youAnswered`; a refusal keeps or replaces it.
+        case answeredRemotely
         /// Cancelled (terminal or a remote client).
         case cancelled
         /// Expired before it was answered (generation churn or
@@ -462,8 +465,8 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
             return "You answered."
         case .answeredInTerminal:
             return "Answered in the agent's terminal."
-        case .answeredFromAnotherDevice:
-            return "Answered from another device."
+        case .answeredRemotely:
+            return "Answered remotely."
         case .cancelled:
             return "The question was cancelled."
         case .expired:
@@ -476,7 +479,9 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
     /// Builds the resolution for an answer submitted by THIS device,
     /// resolving option ids to their user-facing labels against the
     /// interaction's questions. An id with no matching option is
-    /// dropped, never rendered raw.
+    /// dropped, never rendered raw. Only the store's ACKNOWLEDGED
+    /// answer path may record this kind — the broadcast event cannot
+    /// identify the winner, so an unconfirmed submit never claims it.
     init(
         answered interaction: AgentChatInteraction,
         answers: [AgentChatAnswer]
@@ -488,17 +493,19 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
                 interaction: interaction, answers: answers))
     }
 
-    /// Maps a broker `interaction.resolved` event THIS device did not
-    /// record itself. source 'remote' here means a remote client —
-    /// this store knows it was not this one (a locally-answered ask
-    /// never reaches this init; the store dedups by requestId first),
-    /// so it reads as ANOTHER device, honestly.
+    /// Maps a broker `interaction.resolved` event. source 'remote'
+    /// means SOME remote client answered — this device or another —
+    /// and the broadcast carries no winner correlation, so the
+    /// honest pre-ack record is NEUTRAL: 'Answered remotely.' Only
+    /// this store's own accepted acknowledgement upgrades the record
+    /// to `youAnswered` (the store's ack path replaces this entry);
+    /// a refused/uncertain submit never claims labels.
     init(requestId: String, wireOutcome: String, wireSource: String) {
         let kind: Kind
         switch wireOutcome {
         case "answered":
             kind = wireSource == "remote"
-                ? .answeredFromAnotherDevice : .answeredInTerminal
+                ? .answeredRemotely : .answeredInTerminal
         case "cancelled":
             kind = .cancelled
         case "expired":

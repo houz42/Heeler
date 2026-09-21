@@ -734,7 +734,7 @@ struct AgentAskAppChainTests {
         let terminal = AgentChatInteractionResolution(
             requestId: "r2", kind: .answeredInTerminal, labels: nil)
         let other = AgentChatInteractionResolution(
-            requestId: "r2b", kind: .answeredFromAnotherDevice, labels: nil)
+            requestId: "r2b", kind: .answeredRemotely, labels: nil)
         let cancelled = AgentChatInteractionResolution(
             requestId: "r3", kind: .cancelled, labels: nil)
         let expired = AgentChatInteractionResolution(
@@ -744,7 +744,7 @@ struct AgentAskAppChainTests {
         #expect(you.transcriptBody == "You answered: Ship it")
         #expect(youNoLabels.transcriptBody == "You answered.")
         #expect(terminal.transcriptBody == "Answered in the agent's terminal.")
-        #expect(other.transcriptBody == "Answered from another device.")
+        #expect(other.transcriptBody == "Answered remotely.")
         #expect(cancelled.transcriptBody == "The question was cancelled.")
         #expect(expired.transcriptBody == "The question expired before it was answered.")
         #expect(settled.transcriptBody == "This question was already answered or cancelled elsewhere.")
@@ -814,12 +814,12 @@ struct AgentAskTranscriptTests {
                 == "You answered: Frames + Video")
     }
 
-    @Test("a wire 'remote' resolved event THIS store did not record is ANOTHER device, not this one")
-    func remoteEventMapsToAnotherDevice() {
+    @Test("a wire 'remote' resolved event maps NEUTRALLY — the broadcast cannot identify the winner")
+    func remoteEventMapsNeutrally() {
         let other = AgentChatInteractionResolution(
             requestId: "r1", wireOutcome: "answered", wireSource: "remote")
-        #expect(other.kind == .answeredFromAnotherDevice)
-        #expect(other.transcriptBody == "Answered from another device.")
+        #expect(other.kind == .answeredRemotely)
+        #expect(other.transcriptBody == "Answered remotely.")
         // Terminal source is unambiguous.
         let terminal = AgentChatInteractionResolution(
             requestId: "r2", wireOutcome: "answered", wireSource: "terminal")
@@ -911,13 +911,13 @@ struct AgentChatSubmissionRaceTests {
         #expect(store.interactionResolutions.count == 1)
     }
 
-    @Test("a resolution with NO local submission and wire source remote is another device")
-    func unsubmittedRemoteIsAnotherDevice() {
+    @Test("a resolution with NO local submission and wire source remote reads NEUTRAL")
+    func unsubmittedRemoteIsNeutral() {
         let resolution = AgentChatInteractionResolution(
             requestId: "r-9", wireOutcome: "answered", wireSource: "remote")
-        #expect(resolution.kind == .answeredFromAnotherDevice)
+        #expect(resolution.kind == .answeredRemotely)
         #expect(
-            resolution.transcriptBody == "Answered from another device.")
+            resolution.transcriptBody == "Answered remotely.")
     }
 }
 
@@ -955,11 +955,11 @@ struct AgentChatResolvedOutcomeGatingTests {
                 == .expired)
     }
 
-    @Test("answered+remote with NO local submission is another device")
-    func unsubmittedAnsweredRemoteIsAnotherDevice() {
+    @Test("answered+remote reads NEUTRAL until our ack confirms the win")
+    func answeredRemoteNeutralUntilAck() {
         let wire = wireResolution(outcome: "answered", source: "remote")
-        #expect(wire.kind == .answeredFromAnotherDevice)
-        #expect(wire.transcriptBody == "Answered from another device.")
+        #expect(wire.kind == .answeredRemotely)
+        #expect(wire.transcriptBody == "Answered remotely.")
     }
 
     @Test("an unknown outcome+source never fabricates a specific result")

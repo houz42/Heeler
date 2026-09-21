@@ -541,12 +541,14 @@ struct AgentDetailView: View {
                 })
         } ?? []
         // Resolved asks render as quiet blocks in the transcript flow:
-        // 'You answered: <labels>' (this device's answers) or the
-        // honest outcome note (answered in terminal / from another
-        // device / cancelled / expired / settled elsewhere). They
-        // persist across reconnects and reopen (the store keeps them
-        // for the agent's chat life) and park deterministically after
-        // the transcript's rows, before any pending card.
+        // 'You answered: <labels>' (only when this store's own
+        // acknowledgement confirmed the win) or the honest outcome note
+        // (answered in terminal / answered remotely — the broadcast
+        // cannot identify the winner — / cancelled / expired /
+        // settled elsewhere). They persist across reconnects and
+        // reopen (the store keeps them for the agent's chat life)
+        // and park deterministically after the transcript's rows,
+        // before any pending card.
         content.resolvedAsks = brokerChat?.interactionResolutions.map {
             resolution in
             ResolvedAsk(

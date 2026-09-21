@@ -92,8 +92,9 @@ final class AgentChatStore {
     /// Answers THIS store has submitted but not yet acknowledged (the
     /// broker emits interaction.resolved synchronously with accepting,
     /// so the event can beat the submit's own reply). The resolved
-    /// handler recognizes these as OURS — a lost ack must never
-    /// misread this device's answer as 'another device'.
+    /// handler records these NEUTRALLY — the broadcast cannot identify
+    /// the winner — and only this store's accepted acknowledgement
+    /// (the answer path) upgrades the record to our labels.
     @ObservationIgnored private var submittedAnswers:
         [String: AgentChatInteractionResolution] = [:]
     @ObservationIgnored private var subscribed = false
@@ -491,9 +492,12 @@ final class AgentChatStore {
         // In-flight marker BEFORE the request: the broker emits
         // interaction.resolved synchronously with accepting, so the
         // event can arrive BEFORE this submit's own acknowledgement
-        // returns — the resolved handler must still recognize THIS
-        // device's answer (a lost ack must not misread our own
-        // answer as 'another device').
+        // returns. The resolved handler records the event NEUTRALLY
+        // ('Answered remotely.' — the broadcast cannot identify the
+        // winner); this stash lets the ACK path — the only winner
+        // confirmation the protocol offers — replace that record
+        // with our labels on accepted, or the honest refusal note on
+        // item_changed.
         let submission = AgentChatInteractionResolution(
             answered: interaction, answers: answers)
         submittedAnswers[interaction.requestId] = submission
@@ -536,10 +540,14 @@ final class AgentChatStore {
                 // A transport error (lost connection, timeout) is
                 // UNCERTAIN, not proof of rejection: the broker may
                 // have accepted and already emitted interaction.resolved
-                // (which can also be lost). The stash STAYS so a later
-                // resolved event — on this connection or a reconnect —
-                // can still correlate OUR answer; the user retries and
-                // the duplicate claim settles honestly broker-side.
+                // (which can also be lost). The stash STAYS for THIS
+                // connection — the resolved handler records neutral
+                // 'Answered remotely.' for it and the ack, if it lands,
+                // upgrades to our labels. On a RECONNECT the stash is
+                // cleared (start() resets submittedAnswers — a stash
+                // belongs to its connection): any resolution arriving
+                // on the new connection reads via the honest wire
+                // mapping, neutral for answered+remote.
             }
             throw error
         }
@@ -671,43 +679,47 @@ final class AgentChatStore {
             // resolution racing interactions.list can never resurrect.
             resolvedInteractionTombstones.insert(requestId)
             interactions.removeAll { $0.requestId == requestId }
-            // The event's outcome+source are AUTHORITATIVE — an
-            // in-flight submission is only proof OUR request was
-            // sent, never that it WON: the terminal can answer or
-            // the ask can be cancelled/expired while our request is
-            // in flight, and even answered+remote cannot say WHICH
-            // remote client won. Only the adapter's own settle for a
-            // THIS-store submit carries answered+remote (ask.ts
-            // settle(entry, "answered", "remote")); a competing
-            // terminal/remote settle emits answered+terminal,
-            // cancelled/*, or expired/* and must override the stash.
-            if let submission = submittedAnswers[requestId] {
-                if outcome == "answered" && source == "remote" {
-                    // OUR answer won (the only settle shape this
-                    // store's own submission produces). The stashed
-                    // resolution carries the resolved labels; the ack
-                    // path dedups by requestId when it lands.
-                    submittedAnswers[requestId] = nil
-                    recordResolution(submission)
-                    return
-                }
+            // The event's outcome+source are AUTHORITATIVE and the
+            // broadcast carries NO winner correlation: answered+remote
+            // means SOME remote client answered — this device or
+            // another. An in-flight submission is only proof we SENT,
+            // never that we WON, so the event never claims our labels.
+            // The pre-ack record is NEUTRAL ('Answered remotely.');
+            // this store's own acknowledgement — the only winner
+            // confirmation the protocol offers — replaces it with the
+            // recorded labels on accepted, or the honest refusal note
+            // on item_changed. Competing answered+terminal, cancelled,
+            // and expired settles record what actually happened.
+            if submittedAnswers[requestId] != nil,
+                outcome == "answered", source == "remote"
+            {
+                // Maybe ours — the ack is still coming on THIS
+                // connection. Record neutral now; the stash stays for
+                // the ack path's upgrade/replace. If the ack never
+                // returns (transport loss mid-flight), the neutral
+                // record stands — honest: we cannot prove we won.
+                recordResolution(AgentChatInteractionResolution(
+                    requestId: requestId, kind: .answeredRemotely,
+                    labels: nil))
+                return
+            }
+            if submittedAnswers[requestId] != nil {
                 // A competing outcome settled first: our submission
                 // LOST. Clear the stash and record what actually
                 // happened — never our labels.
                 submittedAnswers[requestId] = nil
-                recordResolution(AgentChatInteractionResolution(
-                    requestId: requestId, wireOutcome: outcome, wireSource: source))
-                return
             }
-            // Already recorded (the answer ack beat the event): the
-            // recorded entry keeps its labels and stays in place.
             if interactionResolutions.contains(where: {
                 $0.requestId == requestId
-            }) {
+            }), outcome == "answered", source == "remote" {
+                // OUR accepted answer was recorded by the ack path;
+                // this broadcast duplicate must not downgrade it to
+                // the neutral note. Keep the recorded labels.
                 return
             }
-            // Not ours: a wire 'remote' resolution this store never
-            // submitted was answered by ANOTHER device.
+            // No claim to labels: the honest wire mapping
+            // (answered+remote reads NEUTRAL 'Answered remotely.' —
+            // the store cannot prove which remote client won).
             recordResolution(AgentChatInteractionResolution(
                 requestId: requestId, wireOutcome: outcome, wireSource: source))
         }
