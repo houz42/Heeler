@@ -189,22 +189,42 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 	/** session.telemetry snapshot: honest fields only; absent surfaces stay absent. */
 	function telemetrySnapshot(ctx: TelemetryCtx): Record<string, unknown> {
 		const out: Record<string, unknown> = {};
-		const model = projectModel(ctx.model);
-		if (model !== null) out.model = model;
+		// Host ctx getters can throw while session state is mid-restore; each
+		// surface is read defensively so one bad getter degrades to honest
+		// absence instead of killing the request.
+		let model: unknown;
+		try {
+			model = ctx.model;
+		} catch {
+			model = undefined;
+		}
+		const projected = projectModel(model);
+		if (projected !== null) out.model = projected;
+
 		if (typeof ctx.getContextUsage === "function") {
-			const usage = (ctx.getContextUsage as () => unknown)();
-			if (typeof usage === "object" && usage !== null) {
-				const u = usage as Record<string, unknown>;
-				const reported: Record<string, unknown> = {};
-				if (typeof u.tokens === "number") reported.tokens = u.tokens;
-				if (typeof u.contextWindow === "number") reported.contextWindow = u.contextWindow;
-				if (Object.keys(reported).length > 0) out.context = reported;
+			// The host method can throw mid-restore (internal state not yet
+			// seeded); an honest absent field beats a dead request.
+			try {
+				const usage = (ctx.getContextUsage as () => unknown)();
+				if (typeof usage === "object" && usage !== null) {
+					const u = usage as Record<string, unknown>;
+					const reported: Record<string, unknown> = {};
+					if (typeof u.tokens === "number") reported.tokens = u.tokens;
+					if (typeof u.contextWindow === "number") reported.contextWindow = u.contextWindow;
+					if (Object.keys(reported).length > 0) out.context = reported;
+				}
+			} catch {
+				/* honest absence */
 			}
 		}
-		const cwd = ctx.sessionManager?.getCwd;
-		if (typeof cwd === "function") {
-			const value = (cwd as () => unknown)();
-			if (typeof value === "string" && value.length > 0) out.cwd = value;
+		try {
+			const cwd = ctx.sessionManager?.getCwd;
+			if (typeof cwd === "function") {
+				const value = (cwd as () => unknown)();
+				if (typeof value === "string" && value.length > 0) out.cwd = value;
+			}
+		} catch {
+			/* honest absence */
 		}
 		return out;
 	}
@@ -573,22 +593,39 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 					}
 					const available = ctx.modelRegistry?.getAvailable?.() ?? [];
 					const target = available.find(m => typeof m === "object" && m !== null && m.provider + "/" + m.id === id);
-					const setModelFn = (pi as unknown as { setModel?: (m: unknown) => Promise<boolean> }).setModel;
-					if (target === undefined || typeof setModelFn !== "function") {
+					// Method call MUST stay bound to pi: the host implementation
+					// reads `this.ctx`/`this.runtime` — a detached call loses
+					// `this` and dies as an internal TypeError (proven live).
+					const setModelFn = (pi as unknown as { setModel?: (m: unknown) => Promise<boolean> }).setModel?.bind(pi);
+										if (target === undefined || typeof setModelFn !== "function") {
 						respondError(frame.id, "invalid_request", "unknown model " + id);
 						return;
 					}
-					const switched = await setModelFn(target);
+					// setModel touches host internals (API-key lookup, session
+					// switch); any throw is a rejection, never a crash.
+					let switched: boolean;
+					try {
+						switched = (await setModelFn(target)) === true;
+					} catch (error) {
+												switched = false;
+					}
+					const currentModel = () => {
+						try {
+							return projectModel((currentCtx as unknown as TelemetryCtx).model);
+						} catch {
+							return null;
+						}
+					};
 					if (switched !== true) {
 						// Provider/adapter rejected (no auth or unavailable): the
 						// agent keeps its current model — the client's pending
 						// state resolves as rejected with the old model retained.
-						respond(frame.id, { switched: false, reason: "rejected", model: projectModel((ctx as unknown as Record<string, unknown>).model) });
+						respond(frame.id, { switched: false, reason: "rejected", model: currentModel() });
 						return;
 					}
 					revision = `rev:${randomUUID()}`;
 					emitEvent("history.changed", { revision });
-					respond(frame.id, { switched: true, model: projectModel((ctx as unknown as Record<string, unknown>).model) });
+					respond(frame.id, { switched: true, model: currentModel() });
 					return;
 				}
 				case "commands.list": {
