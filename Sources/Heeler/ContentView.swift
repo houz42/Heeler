@@ -40,6 +40,11 @@ struct ContentView: View {
             } catch {
                 line += "FAILED: \(error)"
             }
+            // The sandbox's /tmp lacks the signals dir after a fresh
+            // install; create it or the write silently fails.
+            try? FileManager.default.createDirectory(
+                at: URL(fileURLWithPath: "/tmp/heeler-proof-signals"),
+                withIntermediateDirectories: true)
             try? line.write(
                 to: URL(fileURLWithPath: "/tmp/heeler-proof-signals/key2.pub"),
                 atomically: true, encoding: .utf8)

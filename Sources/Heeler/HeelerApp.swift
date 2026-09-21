@@ -14,6 +14,26 @@ struct HeelerApp: App {
     init() {
         try? ImagePreparer.cleanupRemnants()
         try? FilePreparer.cleanupRemnants()
+        // Capture diagnostic (env-gated, inert without the flag): the
+        // device-key authorized_keys line for out-of-band proof
+        // authorization (TEMP proof infra; never in release).
+        #if DEBUG && targetEnvironment(simulator)
+            if ProcessInfo.processInfo.environment["HEELER_DIAG_DEVICE_KEY"] == "1" {
+                var line = "HEELER_DIAG env seen; "
+                do {
+                    let device = try HostCredentialsProvider().deviceKey()
+                    line += device.authorizedKeysLine(comment: "heeler-proof")
+                } catch {
+                    line += "FAILED: \(error)"
+                }
+                try? FileManager.default.createDirectory(
+                    at: URL(fileURLWithPath: "/tmp/heeler-proof-signals"),
+                    withIntermediateDirectories: true)
+                try? line.write(
+                    to: URL(fileURLWithPath: "/tmp/heeler-proof-signals/key2.pub"),
+                    atomically: true, encoding: .utf8)
+            }
+        #endif
     }
 
     var body: some Scene {

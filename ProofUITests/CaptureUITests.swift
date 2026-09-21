@@ -719,7 +719,8 @@ extension CaptureUITests {
         }
         XCTAssertTrue(honest, "honest Not reported state missing")
         // Compaction history: empty honest state.
-        let compactions = app.buttons["Compactions"].firstMatch
+        let compactions = app.buttons.matching(
+                    NSPredicate(format: "label BEGINSWITH 'Compactions'")).firstMatch
         if compactions.waitForExistence(timeout: 5) {
             compactions.tap()
             Thread.sleep(forTimeInterval: 2)
@@ -766,20 +767,183 @@ extension CaptureUITests {
         // The proof session pin so the broker pane matches the live
         // telemetry registration.
         app.launchEnvironment["HEELER_AGENT_CHAT_PROOF_SESSION_FILE"]
-            = "/tmp/v2e2e-session.jsonl"
+            = "/tmp/v2-captures-session.jsonl"
         app.launch()
         Thread.sleep(forTimeInterval: 10)
-        // HOSTS: add the live broker host.
-        let menuButton = app.buttons.matching(
-            NSPredicate(format: "label CONTAINS 'switch destination'")).firstMatch
-        XCTAssertTrue(menuButton.waitForExistence(timeout: 10))
-        menuButton.tap()
+        // HOSTS: the nav-v2 drawer — "Open navigation" trigger → Hosts row.
+        let navTrigger = app.buttons.matching(
+            NSPredicate(format: "label == 'Open navigation'")).firstMatch
+        XCTAssertTrue(navTrigger.waitForExistence(timeout: 15), "nav trigger missing")
+        navTrigger.tap()
         Thread.sleep(forTimeInterval: 1)
         let hosts = app.buttons["Hosts"].firstMatch
-        XCTAssertTrue(hosts.waitForExistence(timeout: 5))
+        XCTAssertTrue(hosts.waitForExistence(timeout: 8), "Hosts row missing from drawer")
         hosts.tap()
         Thread.sleep(forTimeInterval: 2)
         screenshot("live-hosts-page")
+        // Reuse path: when the host already exists from an earlier run,
+        // open it directly instead of re-provisioning.
+        let existing = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'V2 Live Broker'")).firstMatch
+        if existing.waitForExistence(timeout: 6) {
+            existing.tap()
+            Thread.sleep(forTimeInterval: 10)
+            let trustEarly = app.buttons["Trust"].firstMatch
+            if trustEarly.waitForExistence(timeout: 20) { trustEarly.tap() }
+            Thread.sleep(forTimeInterval: 6)
+            screenshot("live-host-connected")
+            let backEarly = app.navigationBars.buttons.firstMatch
+            if backEarly.exists && backEarly.isHittable {
+                backEarly.tap()
+                Thread.sleep(forTimeInterval: 2)
+            }
+            let navTriggerDirect = app.buttons.matching(
+                NSPredicate(format: "label == 'Open navigation'")).firstMatch
+            XCTAssertTrue(navTriggerDirect.waitForExistence(timeout: 15), "nav trigger missing")
+            navTriggerDirect.tap()
+            Thread.sleep(forTimeInterval: 1)
+            let agentsDirect = app.buttons["Agents"].firstMatch
+            XCTAssertTrue(agentsDirect.waitForExistence(timeout: 8))
+            agentsDirect.tap()
+            Thread.sleep(forTimeInterval: 5)
+            let agentRow = app.buttons.matching(
+                NSPredicate(format: "label CONTAINS 'status'"))
+                .allElementsBoundByIndex.first(where: { $0.isHittable })
+            XCTAssertTrue(agentRow?.waitForExistence(timeout: 20) == true, "no agent row")
+            agentRow?.tap()
+            Thread.sleep(forTimeInterval: 12)
+            screenshot("live-agent-open")
+            try? app.debugDescription.write(
+                to: URL(fileURLWithPath: "/tmp/v2-live-a11y-dump.txt"),
+                atomically: true, encoding: .utf8)
+            let menu0 = app.buttons.matching(
+                NSPredicate(format: "label CONTAINS 'Agent options'")).firstMatch
+            XCTAssertTrue(menu0.waitForExistence(timeout: 15), "three-dot entry missing on chat surface (reuse)")
+            screenshot("live-entry-chat-surface-reuse")
+            menu0.tap()
+            Thread.sleep(forTimeInterval: 1)
+            let entry0 = app.buttons["Agent details"].firstMatch
+            XCTAssertTrue(entry0.waitForExistence(timeout: 5))
+            entry0.tap()
+            Thread.sleep(forTimeInterval: 3)
+            // The REAL telemetry root: live context panel + facts.
+            screenshot("live-agent-details-telemetry-root")
+            // The terminal surface's entry.
+            let doneR = app.buttons["Done"].firstMatch
+            if doneR.waitForExistence(timeout: 5) { doneR.tap() }
+            Thread.sleep(forTimeInterval: 1)
+            let toggleR = app.buttons.matching(
+                NSPredicate(format: "label == 'Show Terminal'")).firstMatch
+            if toggleR.waitForExistence(timeout: 5) {
+                toggleR.tap()
+                Thread.sleep(forTimeInterval: 3)
+                let termMenuR = app.buttons.matching(
+                    NSPredicate(format: "label CONTAINS 'Agent options'")).firstMatch
+                XCTAssertTrue(termMenuR.waitForExistence(timeout: 8), "three-dot entry missing on terminal surface (reuse)")
+                screenshot("live-entry-terminal-surface")
+                termMenuR.tap()
+                Thread.sleep(forTimeInterval: 1)
+                let termEntryR = app.buttons["Agent details"].firstMatch
+                XCTAssertTrue(termEntryR.waitForExistence(timeout: 5))
+                termEntryR.tap()
+                Thread.sleep(forTimeInterval: 3)
+                screenshot("live-agent-details-from-terminal")
+                let doneR2 = app.buttons["Done"].firstMatch
+                if doneR2.waitForExistence(timeout: 5) { doneR2.tap() }
+                let backR = app.buttons.matching(
+                    NSPredicate(format: "label == 'Show Chat'")).firstMatch
+                if backR.waitForExistence(timeout: 5) { backR.tap() }
+                Thread.sleep(forTimeInterval: 2)
+            }
+            // MODEL PICKER → search → details card → confirm → pending → outcome.
+            let menuR2 = app.buttons.matching(
+                NSPredicate(format: "label CONTAINS 'Agent options'")).firstMatch
+            if menuR2.waitForExistence(timeout: 8) {
+                menuR2.tap()
+                Thread.sleep(forTimeInterval: 1)
+                let entryR2 = app.buttons["Agent details"].firstMatch
+                if entryR2.waitForExistence(timeout: 5) {
+                    entryR2.tap()
+                    Thread.sleep(forTimeInterval: 2)
+                    let modelRowR = app.buttons.matching(
+                        NSPredicate(format: "label BEGINSWITH 'Model'")).firstMatch
+                    if modelRowR.waitForExistence(timeout: 8) {
+                        modelRowR.tap()
+                        Thread.sleep(forTimeInterval: 6)
+                        screenshot("live-model-list")
+                        let searchR = (app.searchFields.firstMatch.exists
+                            ? app.searchFields.firstMatch
+                            : app.textFields.firstMatch)
+                        if searchR.waitForExistence(timeout: 6) {
+                            searchR.tap()
+                            searchR.typeText("glm")
+                            Thread.sleep(forTimeInterval: 4)
+                            screenshot("live-model-search")
+                        }
+                        let targetModelR = app.buttons.matching(
+                            NSPredicate(format: "label CONTAINS 'glm-5.3'")).firstMatch
+                        if targetModelR.waitForExistence(timeout: 10) {
+                            targetModelR.tap()
+                            Thread.sleep(forTimeInterval: 4)
+                            screenshot("live-model-details-and-confirm-card")
+                            // The card may be the fit-refusal variant (usage
+                            // exceeds the target window) or the confirm
+                            // variant; scroll and match whichever exists.
+                            let confirmR = app.buttons["Confirm change"].firstMatch
+                            if !confirmR.exists {
+                                app.swipeUp()
+                                Thread.sleep(forTimeInterval: 1)
+                            }
+                            if confirmR.waitForExistence(timeout: 6) {
+                                confirmR.tap()
+                                Thread.sleep(forTimeInterval: 2)
+                                screenshot("live-model-pending")
+                                Thread.sleep(forTimeInterval: 10)
+                                screenshot("live-model-outcome")
+                            } else {
+                                // The fit refusal: nothing will be trimmed.
+                                let chooseAnother = app.buttons["Choose another model"].firstMatch
+                                if chooseAnother.waitForExistence(timeout: 4) {
+                                    screenshot("live-model-context-fit-refusal")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Compaction history + record.
+            let menuR3 = app.buttons.matching(
+                NSPredicate(format: "label CONTAINS 'Agent options'")).firstMatch
+            if menuR3.waitForExistence(timeout: 8) {
+                menuR3.tap()
+                Thread.sleep(forTimeInterval: 1)
+                let entryR3 = app.buttons["Agent details"].firstMatch
+                if entryR3.waitForExistence(timeout: 5) {
+                    entryR3.tap()
+                    Thread.sleep(forTimeInterval: 2)
+                    let compactionsR = app.buttons.matching(
+                        NSPredicate(format: "label BEGINSWITH 'Compactions'")).firstMatch
+                    if compactionsR.waitForExistence(timeout: 8) {
+                        compactionsR.tap()
+                        Thread.sleep(forTimeInterval: 4)
+                        screenshot("live-compaction-history")
+                        var recordR = app.buttons.matching(
+                            NSPredicate(format: "label CONTAINS 'tokens' OR label CONTAINS 'snapcompact' OR label CONTAINS 'unavailable'")).firstMatch
+                        if !recordR.waitForExistence(timeout: 6) {
+                            recordR = app.buttons.allElementsBoundByIndex
+                                .first(where: { $0.isHittable && $0.label.count > 8 })
+                                ?? recordR
+                        }
+                        if recordR.exists {
+                            recordR.tap()
+                            Thread.sleep(forTimeInterval: 3)
+                            screenshot("live-compaction-record")
+                        }
+                    }
+                }
+            }
+            return
+        }
         // Add manually (reuse the established form-filling flow).
         let manual = app.buttons.matching(NSPredicate(format: "label == 'Add Manually'"))
             .allElementsBoundByIndex.first(where: { $0.isHittable })
@@ -816,32 +980,72 @@ extension CaptureUITests {
         app.swipeUp()
         Thread.sleep(forTimeInterval: 1)
         let broker = field("Chat broker socket path")
-        broker.tap(); broker.typeText("/tmp/v2e2e-broker.sock")
+        broker.tap(); broker.typeText("/tmp/v2-captures-broker.sock")
         let save = app.buttons["Save"].firstMatch
         XCTAssertTrue(save.waitForExistence(timeout: 5))
         save.tap()
         Thread.sleep(forTimeInterval: 4)
         let trust = app.buttons["Trust"].firstMatch
-        if trust.waitForExistence(timeout: 8) { trust.tap() }
+        if trust.waitForExistence(timeout: 20) { trust.tap() }
+        // The trust dialog can appear a beat later as the SSH handshake
+        // completes; check once more.
+        Thread.sleep(forTimeInterval: 4)
+        if trust.exists { trust.tap() }
         Thread.sleep(forTimeInterval: 10)
         screenshot("live-host-connected")
-        // Open the agent (the broker pane matches the pinned session).
-        let row = app.buttons.matching(
-            NSPredicate(format: "label CONTAINS 'V2 Live Broker ·'")).firstMatch
-        if !row.waitForExistence(timeout: 15) {
-            let anyRow = app.buttons.matching(
-                NSPredicate(format: "label CONTAINS '·'")).firstMatch
-            XCTAssertTrue(anyRow.waitForExistence(timeout: 10), "no agent row after connect")
-            anyRow.tap()
-        } else {
-            row.tap()
+        // Post-connect the app may sit inside the Host's DETAIL page,
+        // where the drawer trigger is absent — pop back first if needed.
+        let back = app.navigationBars.buttons.firstMatch
+        if back.exists && back.isHittable {
+            back.tap()
+            Thread.sleep(forTimeInterval: 2)
         }
-        Thread.sleep(forTimeInterval: 8)
+        let navTrigger2 = app.buttons.matching(
+            NSPredicate(format: "label == 'Open navigation'")).firstMatch
+        var navFound = navTrigger2.waitForExistence(timeout: 15)
+        if !navFound {
+            // Still deep in the stack: try a second pop.
+            let back2 = app.navigationBars.buttons.firstMatch
+            if back2.exists && back2.isHittable {
+                back2.tap()
+                Thread.sleep(forTimeInterval: 2)
+            }
+            navFound = navTrigger2.waitForExistence(timeout: 10)
+        }
+        XCTAssertTrue(navFound, "nav trigger missing post-connect")
+        navTrigger2.tap()
+        Thread.sleep(forTimeInterval: 1)
+        let agentsRow = app.buttons["Agents"].firstMatch
+        XCTAssertTrue(agentsRow.waitForExistence(timeout: 8), "Agents row missing from drawer")
+        agentsRow.tap()
+        Thread.sleep(forTimeInterval: 4)
+        // The Agents page's agent ROWS: hittable buttons whose label names
+        // the agent (the row layout renders workspace/agent/directory).
+        // Never fall back to an arbitrary hittable button — that taps
+        // search fields and New Agent instead of an agent.
+        let row = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'status'"))
+            .allElementsBoundByIndex.first(where: { $0.isHittable })
+        XCTAssertTrue(row?.waitForExistence(timeout: 20) == true, "no agent row after connect")
+        row?.tap()
+        Thread.sleep(forTimeInterval: 12)
         screenshot("live-agent-open")
         // THE THREE-DOT ENTRY on the chat surface.
         let menu = app.buttons.matching(
             NSPredicate(format: "label CONTAINS 'Agent options'")).firstMatch
-        XCTAssertTrue(menu.waitForExistence(timeout: 8), "three-dot entry missing on chat surface")
+        var menuFound = menu.waitForExistence(timeout: 12)
+        if !menuFound {
+            // The opened pane may still be mid-connect; give the broker
+            // store's phase one more window before concluding.
+            Thread.sleep(forTimeInterval: 8)
+            menuFound = menu.waitForExistence(timeout: 10)
+        }
+        if !menuFound {
+            try? app.debugDescription.write(
+                to: URL(fileURLWithPath: "/tmp/v2-live-a11y-dump.txt"),
+                atomically: true, encoding: .utf8)
+        }
+        XCTAssertTrue(menuFound, "three-dot entry missing on chat surface")
         screenshot("live-entry-chat-surface")
         menu.tap()
         Thread.sleep(forTimeInterval: 1)
@@ -888,7 +1092,8 @@ extension CaptureUITests {
             if entry2.waitForExistence(timeout: 5) {
                 entry2.tap()
                 Thread.sleep(forTimeInterval: 2)
-                let modelRow = app.buttons["Model"].firstMatch
+                let modelRow = app.buttons.matching(
+                    NSPredicate(format: "label BEGINSWITH 'Model'")).firstMatch
                 if modelRow.waitForExistence(timeout: 6) {
                     modelRow.tap()
                     Thread.sleep(forTimeInterval: 5)
@@ -931,7 +1136,8 @@ extension CaptureUITests {
             if entry3.waitForExistence(timeout: 5) {
                 entry3.tap()
                 Thread.sleep(forTimeInterval: 2)
-                let compactions = app.buttons["Compactions"].firstMatch
+                let compactions = app.buttons.matching(
+                    NSPredicate(format: "label BEGINSWITH 'Compactions'")).firstMatch
                 if compactions.waitForExistence(timeout: 6) {
                     compactions.tap()
                     Thread.sleep(forTimeInterval: 3)
