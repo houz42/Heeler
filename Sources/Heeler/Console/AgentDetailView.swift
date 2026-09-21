@@ -407,6 +407,7 @@ struct AgentDetailView: View {
         case .ready, .disconnected:
             ChatScreen(
                 paneID: agent.agent.paneID,
+                hostID: agent.hostID,
                 agentName: agent.tabLabel ?? agent.agent.displayName,
                 state: brokerAgentState,
                 content: brokerContent,

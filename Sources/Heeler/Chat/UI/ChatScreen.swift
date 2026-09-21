@@ -33,7 +33,13 @@ internal struct ChatContent: Sendable, Equatable {
 /// LazyVStack anchors the visible row instead of jumping.
 struct ChatScreen: View {
     /// Pane identifier (one window = one agent); keys the level persistence.
+    /// Pane ids are HOST-LOCAL: two hosts can each have a pane "w1:p1".
     let paneID: String
+    /// The pane's Host — draft persistence is keyed by the HOST-QUALIFIED
+    /// identity (hostID + paneID); a bare pane id would collide across
+    /// hosts (the review's cross-host draft bleed). Level persistence
+    /// stays keyed by the pane id alone (its own store contract).
+    var hostID: Host.ID? = nil
     let agentName: String
     let state: ChatAgentState
     let content: ChatContent
@@ -68,6 +74,7 @@ struct ChatScreen: View {
     @State private var level: DetailLevel
     init(
         paneID: String,
+        hostID: Host.ID? = nil,
         agentName: String,
         state: ChatAgentState,
         content: ChatContent,
@@ -88,6 +95,7 @@ struct ChatScreen: View {
         fetch: RemoteFileFetcher? = nil
     ) {
         self.paneID = paneID
+        self.hostID = hostID
         self.agentName = agentName
         self.state = state
         self.content = content
@@ -106,6 +114,16 @@ struct ChatScreen: View {
         self.imageFetcher = imageFetcher
         self.fetch = fetch
         self._level = State(initialValue: initialLevel)
+    }
+
+    /// The HOST-QUALIFIED draft identity (item 18 + review): pane ids
+    /// are host-local, so a bare pane id would let two hosts' panes
+    /// named "w1:p1" share one draft (text + attachment paths). The
+    /// draft store keys on this; level persistence keeps its own
+    /// pane-keyed store contract.
+    private var draftKey: String {
+        guard let hostID else { return paneID }
+        return "\(hostID.uuidString)#\(paneID)"
     }
 
     /// The pane's link-open router (Phase 4 openers): every detected
@@ -232,13 +250,19 @@ struct ChatScreen: View {
         .padding(.bottom, keyboardInset.height)
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .chatKeyboardInsetWindow(keyboardInset)
-        // Item 18: the pane's draft loads once per pane identity (a
-        // half-typed message survives surface switches), and every
-        // draft/item change persists immediately.
+        // Item 18: the identity's draft loads on appear and on any
+        // identity change (host or pane — keyed by draftKey), and
+        // every draft/item/caret change persists immediately.
         .onAppear { loadPersistedDraft() }
-        .onChange(of: paneID, initial: false) { _, _ in loadPersistedDraft() }
+        .onChange(of: draftKey, initial: false) { _, _ in
+            loadPersistedDraft()
+        }
         .onChange(of: draft) { _, _ in persistDraft() }
         .onChange(of: draftItems) { _, _ in persistDraft() }
+        // A caret move WITHOUT typing must persist too (the review's
+        // case: move-caret → leave → reopen lands the caret where it
+        // was, not at the last typed position).
+        .onChange(of: draftCaret) { _, _ in persistDraft() }
 
         // The +N collection sheet: every draft item, removable there.
         .sheet(isPresented: $showsDraftCollection) {
@@ -1084,16 +1108,25 @@ struct ChatScreen: View {
     private func clearDraftAfterSend() {
         draft = ""
         draftItems = []
-        draftStore.clear(paneID: paneID)
+        draftStore.clear(paneID: draftKey)
     }
 
-    /// The pane's persisted draft (item 18): loaded on appear so a
-    /// half-typed message survives leaving and returning to the chat
-    /// (surface switches, agent switches, background/foreground). The
-    /// caret rides the draft via a one-shot placement so the restore
-    /// never fights an in-progress selection.
+    /// The pane's persisted draft (item 18): loaded on appear (and on
+    /// identity change) so a half-typed message survives leaving and
+    /// returning to the chat. A MISSING entry installs the EMPTY
+    /// state — the review's case: switching identities in the same
+    /// view must not leave the previous identity's text/items/caret on
+    /// screen. The caret rides the draft via a one-shot placement so
+    /// the restore never fights an in-progress selection.
     private func loadPersistedDraft() {
-        guard let saved = draftStore.draft(paneID: paneID) else { return }
+        guard let saved = draftStore.draft(paneID: draftKey) else {
+            // No draft for THIS identity: empty composer, no stale
+            // caret request from the previous identity.
+            draft = ""
+            draftItems = []
+            draftCaret = 0
+            return
+        }
         draft = saved.text
         draftItems = saved.items.map(ChatDraftItem.init)
         draftCaret = saved.caretLocation
@@ -1103,13 +1136,15 @@ struct ChatScreen: View {
     /// Persists the live draft per edit (item 18). An EMPTY draft clears
     /// the entry — cheap enough to run on every keystroke (the encode is
     /// a small Codable; image preview BYTES never persist by design).
+    /// Keyed by the HOST-QUALIFIED identity (draftKey): two hosts' same-
+    /// named panes keep independent drafts.
     private func persistDraft() {
         draftStore.save(
             ChatPaneDraft(
                 text: draft,
                 caretLocation: draftCaret,
                 items: draftItems.map(\.paneDraftItem)),
-            paneID: paneID)
+            paneID: draftKey)
     }
 
     private func removeDraftItem(_ id: String) {
