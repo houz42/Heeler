@@ -921,6 +921,55 @@ struct AgentChatSubmissionRaceTests {
     }
 }
 
+// MARK: - Resolved-event outcome gating (v2 review round 2)
+
+/// The resolved handler respects the event's AUTHORITATIVE
+/// outcome+source: an in-flight submission only records OUR labels
+/// when the settle shape is answered+remote (the only shape this
+/// store's own submission produces — the adapter's first-claim-wins
+/// settle); cancelled/expired/terminal settle overrides the stash;
+/// answered+remote with NO stash is another device.
+@Suite("Resolved-event outcome gating")
+struct AgentChatResolvedOutcomeGatingTests {
+    private func wireResolution(
+        outcome: String, source: String
+    ) -> AgentChatInteractionResolution {
+        AgentChatInteractionResolution(
+            requestId: "r-gate", wireOutcome: outcome, wireSource: source)
+    }
+
+    @Test("a competing terminal answer beats our in-flight submission — never our labels")
+    func terminalOutcomeOverridesStash() {
+        let wire = wireResolution(outcome: "answered", source: "terminal")
+        #expect(wire.kind == .answeredInTerminal)
+        #expect(wire.transcriptBody == "Answered in the agent's terminal.")
+    }
+
+    @Test("cancelled/expired settles override an in-flight submission")
+    func cancelledExpiredOverride() {
+        #expect(
+            wireResolution(outcome: "cancelled", source: "remote").kind
+                == .cancelled)
+        #expect(
+            wireResolution(outcome: "expired", source: "terminal").kind
+                == .expired)
+    }
+
+    @Test("answered+remote with NO local submission is another device")
+    func unsubmittedAnsweredRemoteIsAnotherDevice() {
+        let wire = wireResolution(outcome: "answered", source: "remote")
+        #expect(wire.kind == .answeredFromAnotherDevice)
+        #expect(wire.transcriptBody == "Answered from another device.")
+    }
+
+    @Test("an unknown outcome+source never fabricates a specific result")
+    func unknownOutcomeIsSettledElsewhere() {
+        #expect(
+            wireResolution(outcome: "unknown", source: "remote").kind
+                == .settledElsewhere)
+    }
+}
+
 // MARK: - Resolved-ask rows in the transcript flow (v2)
 
 struct ChatResolvedAskRowTests {
@@ -1064,5 +1113,31 @@ struct AgentChatResolutionPersistenceTests {
         #expect(
             store3.interactionResolutions.isEmpty,
             "a different session must not see another session's history")
+
+        // INIT-ORDER: the reconstructed history's requestIds are
+        // tombstoned BEFORE the new store's first interactions
+        // snapshot — a stale pending entry for an archived resolution
+        // can never resurrect the card. This is exactly the
+        // composition start() performs (archive load, then tombstone
+        // derivation, then the snapshot install consults it).
+        let snapshot = [
+            AgentChatTestVectors.pendingInteraction(requestId: "r-1"),
+            AgentChatTestVectors.pendingInteraction(requestId: "r-live"),
+        ]
+        let merged = AgentChatInteractionMerge.install(
+            snapshot: snapshot,
+            live: [],
+            tombstones: Set(store2.interactionResolutions.map(\.requestId)))
+        #expect(
+            merged.map(\.requestId) == ["r-live"],
+            "a stale snapshot must not resurrect an archived resolution's card")
+    }
+
+    private enum AgentChatTestVectors {
+        static func pendingInteraction(requestId: String) -> AgentChatInteraction {
+            let json = #"{"requestId":"\#(requestId)","generation":1,"kind":"question","questions":[{"id":"q1","text":"Ship it?","multi":false,"options":[],"allowCustom":true}]}"#
+            return try! JSONDecoder().decode(
+                AgentChatInteraction.self, from: Data(json.utf8))
+        }
     }
 }

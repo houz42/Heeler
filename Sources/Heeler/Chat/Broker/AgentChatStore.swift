@@ -132,12 +132,7 @@ final class AgentChatStore {
         registration = nil
         capabilities = nil
         bufferedEvents = []
-        // Resolutions PERSIST across reconnects/reopen (they are the
-        // conversation's rendered history, not connection state). The
-        // tombstones re-arm from the kept list so a snapshot racing a
-        // previously-recorded resolution can never resurrect its card.
-        resolvedInteractionTombstones = Set(
-            interactionResolutions.map(\.requestId))
+        submittedAnswers = [:]
         subscribed = false
         reconnectTask?.cancel()
         reconnectTask = nil
@@ -158,6 +153,10 @@ final class AgentChatStore {
         // loads from the archive (a NEW store — the detail reopen
         // path — reconstructs its history here; later start()s keep
         // the in-memory list, which is never behind the archive).
+        // ORDER: the load precedes the tombstone derivation below —
+        // a new store must have BOTH its rendered history AND the
+        // tombstones before its first interactions snapshot, or a
+        // stale pending entry could resurrect an answered card.
         archiveIdentity = (socketPath: socketPath, sessionFile: pane.sessionFilePath)
         if !didLoadArchivedResolutions {
             didLoadArchivedResolutions = true
@@ -167,6 +166,14 @@ final class AgentChatStore {
                 interactionResolutions = archived
             }
         }
+        // Resolutions PERSIST across reconnects/reopen (they are the
+        // conversation's rendered history, not connection state). The
+        // tombstones re-arm from the (now archive-backed) list so a
+        // snapshot racing a previously-recorded resolution — including
+        // a NEW store's very first interactions.list — can never
+        // resurrect an answered card.
+        resolvedInteractionTombstones = Set(
+            interactionResolutions.map(\.requestId))
         phase = .connecting
         lifecycleTask = Task { [weak self] in
             await self?.run(
@@ -509,16 +516,14 @@ final class AgentChatStore {
             resolvedInteractionTombstones.insert(interaction.requestId)
             recordResolution(submission)
         } catch let error as AgentChatError {
-            // Not settled by this submit (refused or transport blip):
-            // the stash must not survive into a later foreign
-            // resolution for the same id.
-            submittedAnswers[interaction.requestId] = nil
             if staleAnswerKind(error) != nil {
-                // The broker refused the answer: the ask is no longer
-                // pending (answered/cancelled/expired elsewhere while
-                // the card was up). Self-heal: the card is DEAD,
-                // drop it, record the honest note the refusal's real
-                // code implies, re-list for the truth.
+                // The broker REFUSED: the ask settled, expired, or never
+                // existed — this submission is definitively NOT the
+                // winner. Clear the stash (it must not survive into a
+                // later foreign resolution for the same id), self-heal:
+                // the card is DEAD, record the honest note the
+                // refusal's real code implies, re-list for the truth.
+                submittedAnswers[interaction.requestId] = nil
                 interactions.removeAll {
                     $0.requestId == interaction.requestId
                 }
@@ -527,6 +532,14 @@ final class AgentChatStore {
                     staleRequestId: interaction.requestId,
                     generationInvalidated: error.isStaleGeneration))
                 try? await refreshInteractions()
+            } else {
+                // A transport error (lost connection, timeout) is
+                // UNCERTAIN, not proof of rejection: the broker may
+                // have accepted and already emitted interaction.resolved
+                // (which can also be lost). The stash STAYS so a later
+                // resolved event — on this connection or a reconnect —
+                // can still correlate OUR answer; the user retries and
+                // the duplicate claim settles honestly broker-side.
             }
             throw error
         }
@@ -658,14 +671,32 @@ final class AgentChatStore {
             // resolution racing interactions.list can never resurrect.
             resolvedInteractionTombstones.insert(requestId)
             interactions.removeAll { $0.requestId == requestId }
-            // An in-flight submission: this device's OWN answer — the
-            // broker emits the resolved event synchronously with
-            // accepting, so it can beat the submit's reply. The
-            // stashed resolution (with labels) is the record; the
-            // ack path dedups by requestId when it lands.
+            // The event's outcome+source are AUTHORITATIVE — an
+            // in-flight submission is only proof OUR request was
+            // sent, never that it WON: the terminal can answer or
+            // the ask can be cancelled/expired while our request is
+            // in flight, and even answered+remote cannot say WHICH
+            // remote client won. Only the adapter's own settle for a
+            // THIS-store submit carries answered+remote (ask.ts
+            // settle(entry, "answered", "remote")); a competing
+            // terminal/remote settle emits answered+terminal,
+            // cancelled/*, or expired/* and must override the stash.
             if let submission = submittedAnswers[requestId] {
+                if outcome == "answered" && source == "remote" {
+                    // OUR answer won (the only settle shape this
+                    // store's own submission produces). The stashed
+                    // resolution carries the resolved labels; the ack
+                    // path dedups by requestId when it lands.
+                    submittedAnswers[requestId] = nil
+                    recordResolution(submission)
+                    return
+                }
+                // A competing outcome settled first: our submission
+                // LOST. Clear the stash and record what actually
+                // happened — never our labels.
                 submittedAnswers[requestId] = nil
-                recordResolution(submission)
+                recordResolution(AgentChatInteractionResolution(
+                    requestId: requestId, wireOutcome: outcome, wireSource: source))
                 return
             }
             // Already recorded (the answer ack beat the event): the
