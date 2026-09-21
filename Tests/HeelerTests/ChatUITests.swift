@@ -130,6 +130,17 @@ struct ChatUITests {
         #expect(calls.count == 1)
         #expect(calls.first?.name == "read")
         #expect(calls.first?.result?.toolCallId == call.id)
+
+        // The summary row's AX label is singular/plural correct — the
+        // round-4 fix corrected the VISIBLE text; this pins the
+        // accessibility copy too (an AX-walk review caught the stale
+        // plural there).
+        #expect(
+            ChatWorkEntry.accessibilitySummaryLabel(count: 1)
+                == "Work summary: 1 tool call, opens details")
+        #expect(
+            ChatWorkEntry.accessibilitySummaryLabel(count: 2)
+                == "Work summary: 2 tool calls, opens details")
     }
 
     @Test func l2PairsToolResultByToolCallId() {

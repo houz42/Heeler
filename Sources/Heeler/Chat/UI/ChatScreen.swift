@@ -442,7 +442,8 @@ struct ChatScreen: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Work summary: \(names.count) tool calls, opens details")
+            .accessibilityLabel(
+                ChatWorkEntry.accessibilitySummaryLabel(count: names.count))
         }
     }
 
