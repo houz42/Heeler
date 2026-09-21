@@ -81,6 +81,9 @@ enum UITestFixtures {
     /// The chat-bearing agent's row (tap target for chat proofs).
     static let chatAgentRow = "Polish the Attach experience"
 
+    /// The nav v2 heading trigger (hamburger) label.
+    static let navigationTrigger = "Open navigation"
+
     /// A row-title static text, matched by CONTAINS (the redesigned
     /// row titles carry a "π > " terminal prefix).
     static func agentRowText(

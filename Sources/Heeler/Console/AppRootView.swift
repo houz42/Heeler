@@ -2,46 +2,51 @@ import SwiftUI
 
 // SPDX-License-Identifier: Apache-2.0
 
-/// The adaptive top-level destination container (#A). Narrow windows switch
-/// between the three pages behind the compact `AppDestinationMenu`; wide
-/// windows (≥900 pt available width, matching the approved preview's 900 px
-/// container breakpoint) get the collapsible `AppDestinationSidebar` beside
-/// the pages instead — a RESERVED column, never an overlay, so page content
-/// reflows rather than being covered.
+/// The adaptive top-level destination container (#A, narrow-sidebar
+/// revision). Root pages carry a small hamburger trigger beside their
+/// plain titles: narrow windows open a 184 pt drawer OVERLAY (the page
+/// viewport never changes); wide windows (≥900 pt) show the same
+/// destinations in a collapsible 184 pt reserved sidebar, and the same
+/// trigger toggles the fold — collapsed state persists.
 ///
-/// Destination chrome disappears entirely while a page's own navigation
-/// holds the window (an Agent detail pushed in the Console): no sidebar, no
-/// in-page menu — nothing destination-shaped competes inside chat,
-/// terminal, or detail screens.
+/// ALL global destination chrome — trigger, drawer, sidebar — hides while
+/// any page's own navigation covers the window (chat/terminal, host or
+/// route details, file reader): Back/Close restores the originating page
+/// and its prior sidebar state untouched.
 ///
 /// Page state preservation is structural, not snapshot-based: all three
-/// pages stay mounted and only the hidden ones stop hit-testing, so Console
-/// list scroll/selection, the Hosts stack path, and Settings scroll each
-/// survive a round trip exactly as they were.
+/// pages stay mounted and only the hidden ones stop hit-testing, and the
+/// drawer is an overlay — so query/filter/scroll state survives every
+/// open/close and switch exactly as it was.
 struct AppRootView: View {
     @State private var destination: AppDestination = .agents
-    /// Wide layouts only: the destination sidebar's fold. Sticky per window
-    /// session, matching the approved preview's collapsible behavior.
+    /// Wide layouts only: the destination sidebar's fold. Sticky per
+    /// window session — a pushed detail that hides the chrome restores
+    /// the same fold on Back (#A).
     @State private var isSidebarCollapsed = false
+    /// Phone drawer presentation. An overlay, never a viewport change.
+    @State private var isDrawerOpen = false
+    /// Focus return (#A): the trigger that opened the drawer receives
+    /// focus back on dismissal.
+    @FocusState private var isTriggerFocused: Bool
+    /// VoiceOver/switch-control focus (review rounds): focus moves INTO
+    /// the drawer on open and back to the TRIGGER on dismissal — the
+    /// trigger itself is the assistive-focus target.
+    @AccessibilityFocusState private var isDrawerAXFocused: Bool
     /// Which pages currently cover the window with their OWN navigation
-    /// (a pushed Agent detail, a pushed Host detail, a pushed Settings
-    /// page) — reported upward through `AppDestinationPageFocusKey`. Any
-    /// page being unfocused steps the destination chrome aside (#A: no
-    /// destination navigation competes inside chat/terminal/details).
+    /// — reported upward through `AppDestinationPageFocusKey`.
     @State private var unfocusedPages: Set<AppDestination> = []
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-
     let agents: AnyView
     let hosts: AnyView
     let settings: AnyView
     /// Legacy single-signal focus (the Console's pushed detail, provided
-    /// by the production/demo roots). Combined with the per-page focus
-    /// reports below — the Console could not report through the preference
-    /// without an extra wrapper, and this closure was already wired.
+    /// by the production/demo roots), combined with the per-page focus
+    /// reports.
     private let isAgentsPageFocused: () -> Bool
 
-    /// The width at which the destination sidebar takes over from the
-    /// compact menu — the preview's `@container (min-width:900px)` rule.
+    /// The width at which the reserved sidebar takes over from the
+    /// drawer — the preview's `@container (min-width:900px)` rule.
     private static let sidebarMinimumWidth: CGFloat = 900
     init(
         agents: some View,
@@ -56,7 +61,8 @@ struct AppRootView: View {
     }
 
     /// The page views, one per destination. Kept alive across switches by
-    /// the mounted stack below; the menu/sidebar only changes `destination`.
+    /// the mounted stack below; the trigger/drawer/sidebar only change
+    /// `destination`.
     @ViewBuilder
     private func page(_ destination: AppDestination) -> some View {
         switch destination {
@@ -66,47 +72,83 @@ struct AppRootView: View {
         }
     }
 
+    /// True while a top-level page owns the window — no pushed detail on
+    /// any page. ALL destination chrome is visible only in this state.
+    private var isPageFocused: Bool {
+        isAgentsPageFocused() && unfocusedPages.isEmpty
+    }
+
     var body: some View {
         GeometryReader { geometry in
-            let isPageFocused =
-                isAgentsPageFocused() && unfocusedPages.isEmpty
-            let showsSidebar =
-                sidebarWanted(width: geometry.size.width, isPageFocused: isPageFocused)
+            let isWide = geometry.size.width >= Self.sidebarMinimumWidth
+            let showsSidebar = isWide && !isSidebarCollapsed && isPageFocused
             HStack(spacing: 0) {
                 if showsSidebar {
                     // A reserved column: page content reflows beside it.
-                    AppDestinationSidebar(
-                        selection: $destination, isCollapsed: $isSidebarCollapsed)
+                    AppDestinationSidebar(selection: $destination)
                 }
                 pages
             }
-            // The collapsed state's expand control rides in the header band
-            // (the preview's ☰ at the top of the screen), never a mid-content
-            // tab — and only while a top-level page owns the window.
-            .overlay(alignment: .topTrailing) {
-                if sidebarCollapsedWanted(
-                    width: geometry.size.width, isPageFocused: isPageFocused)
-                {
-                    AppDestinationSidebarHandle {
-                        withAnimation(.snappy) { isSidebarCollapsed = false }
+            // The phone drawer: an overlay; the page viewport is untouched
+            // behind it. On open: assistive focus moves INTO the drawer;
+            // on dismissal it returns to the trigger (review finding 3).
+            .overlay {
+                if isDrawerOpen {
+                    AppDestinationDrawer(
+                        selection: $destination,
+                        close: { restoreFocus in
+                            withAnimation(.snappy) { isDrawerOpen = false }
+                            isDrawerAXFocused = false
+                            if restoreFocus {
+                                // Keyboard focus returns to the trigger.
+                                isTriggerFocused = true
+                                // Assistive focus returns to the trigger
+                                // too (review round): the trigger is the
+                                // page's FIRST accessible element
+                                // (topBarLeading), so a .screenChanged
+                                // post lands VoiceOver on it — binding an
+                                // AccessibilityFocusState through env
+                                // into the toolbar suppresses the item's
+                                // rendering (verified), so the
+                                // notification is the mechanism.
+                                UIAccessibility.post(
+                                    notification: .screenChanged,
+                                    argument: nil)
+                            }
+                        })
+                        .accessibilityFocused($isDrawerAXFocused)
+                }
+            }
+            .onChange(of: isDrawerOpen) { _, open in
+                if open {
+                    // Move assistive focus into the drawer once it lands.
+                    // GUARD (review round): a fast scrim-dismiss inside
+                    // the delay must not steal focus back onto an
+                    // already-dismissed drawer.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        if isDrawerOpen {
+                            isDrawerAXFocused = true
+                        }
                     }
-                    .padding(.trailing, 16)
-                    .padding(.top, 4)
                 }
             }
             .environment(\.appDestination, $destination)
-            // The in-page menus render inert ONLY while the reserved
-            // sidebar column is in this frame's layout (the preview's
-            // pointer-events:none), or while ANY page's pushed detail owns
-            // the window (no destination chrome inside chat/terminal/
-            // details — the Console's path, a Host detail, a pushed
-            // Settings page alike). Computed from the same geometry that
-            // drew the sidebar, so a phone window never inerts its menu.
+            .environment(\.appNavigationTrigger, triggerContext(isWide: isWide))
+            .environment(\.appNavigationTriggerFocus, $isTriggerFocused)
+            // Direct focus reports: preferences do not reliably cross
+            // navigationDestination boundaries, so pages ALSO report
+            // their pushed state through this closure (onChange-driven).
             .environment(
-                \.appDestinationMenuInert,
-                !isPageFocused || showsSidebar)
-            // A pushed detail (any page) suppresses the in-page
-            // destination menus entirely: plain title, no Menu semantics.
+                \.appNavigationFocusReport,
+                AppNavigationFocusReport { page, isPushed in
+                    if isPushed {
+                        unfocusedPages.insert(page)
+                    } else {
+                        unfocusedPages.remove(page)
+                    }
+                })
+            // ALL global destination chrome — trigger included — hides
+            // while any page's pushed detail owns the window (#A).
             .environment(
                 \.appDestinationMenuSuppressed, !isPageFocused)
             // Pages report their own pushed-navigation state upward; the
@@ -117,15 +159,43 @@ struct AppRootView: View {
         }
     }
 
+    /// The trigger's identity + action for the CURRENT width: fold toggle
+    /// on wide layouts, drawer toggle on narrow ones. A width change
+    /// simply recomputes this — never a page rebuild.
+    private func triggerContext(isWide: Bool) -> AppNavigationTriggerContext? {
+        guard isPageFocused else { return nil }
+        if isWide {
+            return AppNavigationTriggerContext(
+                accessibilityLabel: isSidebarCollapsed
+                    ? "Expand navigation sidebar"
+                    : "Collapse navigation sidebar",
+                accessibilityValue: isSidebarCollapsed ? "Collapsed" : "Expanded",
+                action: {
+                    withAnimation(.snappy) { isSidebarCollapsed.toggle() }
+                })
+        }
+        return AppNavigationTriggerContext(
+            accessibilityLabel: "Open navigation",
+            accessibilityValue: isDrawerOpen ? "Open" : "Closed",
+            action: { withAnimation(.snappy) { isDrawerOpen.toggle() } }
+        )
+    }
+
 
     /// All three pages stay mounted; only the selected one is on stage.
+    /// While the drawer is open, the on-stage page is excluded from AX
+    /// AND hit-testing too (review finding 3): a modal must contain the
+    /// user — the scrim blocks sighted touches, but VoiceOver/switch
+    /// control would still reach the page without this.
     private var pages: some View {
         ZStack {
             ForEach(AppDestination.allCases) { candidate in
                 page(candidate)
                     .opacity(candidate == destination ? 1 : 0)
-                    .allowsHitTesting(candidate == destination)
-                    .accessibilityHidden(candidate != destination)
+                    .allowsHitTesting(
+                        candidate == destination && !isDrawerOpen)
+                    .accessibilityHidden(
+                        candidate != destination || isDrawerOpen)
             }
         }
     }
@@ -163,6 +233,16 @@ private struct AppDestinationPageFocusKey: PreferenceKey {
 /// The modifier a page applies to report pushed-navigation state upward.
 /// Applied INSIDE the page (on the NavigationStack's content), so hidden
 /// pages report too — their detail is real state even while not visible.
+/// A page's direct focus report to the root. Preferences do not cross
+/// navigationDestination boundaries; this closure does.
+struct AppNavigationFocusReport {
+    var report: (AppDestination, Bool) -> Void
+
+    func callAsFunction(_ page: AppDestination, _ isPushed: Bool) {
+        report(page, isPushed)
+    }
+}
+
 struct AppDestinationPageFocusModifier: ViewModifier {
     let destination: AppDestination
     let isContentPushed: Bool
@@ -176,21 +256,42 @@ struct AppDestinationPageFocusModifier: ViewModifier {
 
 
 extension EnvironmentValues {
-    /// The root destination switcher, so any page's toolbar can host the
-    /// compact `AppDestinationMenu` without threading a binding through
-    /// every initializer (ConsoleView's and HostListView's signatures stay
-    /// untouched; both read this instead). Nil outside `AppRootView`.
+    /// The root destination switcher, so any page's toolbar can host its
+    /// destination chrome without threading a binding through every
+    /// initializer. Nil outside `AppRootView`.
     @Entry var appDestination: Binding<AppDestination>? = nil
-    /// True while the in-page destination menus must render inert (the
-    /// sidebar carries the destinations, or a pushed detail owns the
-    /// window) — `AppRootView` sets it; pages render their menu
-    /// non-hit-testable when set.
+    /// The hamburger trigger's identity + action for the current width
+    /// (drawer toggle on phone, sidebar fold on wide layouts). Nil while a
+    /// pushed detail owns the window — ALL destination chrome hides.
+    @Entry var appNavigationTrigger: AppNavigationTriggerContext? = nil
+    /// True while the in-page destination menus must render inert.
     @Entry var appDestinationMenuInert: Bool = false
-    /// True while a page's pushed detail owns the window — the in-page
-    /// destination menus then render as PLAIN titles: no chevron, no
-    /// capsule, no Menu semantics (#A: no destination chrome at all
-    /// inside chat/terminal/details).
+    /// True while a page's pushed detail owns the window — ALL global
+    /// destination chrome (trigger, drawer, sidebar) hides (#A).
     @Entry var appDestinationMenuSuppressed: Bool = false
+    /// Direct per-page focus reporting: pages call this when their own
+    /// pushed-navigation state changes. `isPushed` true = the page's
+    /// detail owns the window.
+    @Entry var appNavigationFocusReport:
+        AppNavigationFocusReport? = nil
+    /// The shared reading-text-size store (#A settings revision): the
+    /// Settings page and the chat reading text consume ONE instance.
+    /// Nil outside the roots that inject it.
+    @Entry var appReadingTextSize: ReadingTextSizeSettings? = nil
+    /// Focus return (#A): the drawer hands focus back to the trigger on
+    /// dismissal. Optional — nil outside `AppRootView`, where the heading
+    /// simply does not participate in focus return.
+    var appNavigationTriggerFocus: FocusState<Bool>.Binding? {
+        get { self[AppNavigationTriggerFocusKey.self] }
+        set { self[AppNavigationTriggerFocusKey.self] = newValue }
+    }
+}
+
+/// The absent key-focus default. A computed `static var` — unlike a
+/// stored `let`, it is not shared mutable state, so the concurrency check
+/// passes for the non-Sendable `FocusState.Binding`.
+private struct AppNavigationTriggerFocusKey: EnvironmentKey {
+    static var defaultValue: FocusState<Bool>.Binding? { nil }
 }
 
 #Preview {

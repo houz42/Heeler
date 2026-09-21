@@ -2,15 +2,13 @@ import XCTest
 
 // SPDX-License-Identifier: Apache-2.0
 
-/// Navigation redesign (#A) proofs, phone width: the compact top-left
-/// destination selector replaces the bottom-sheet-era toolbar buttons —
-/// it opens a menu with the current destination checked, switches pages,
-/// and a round trip preserves the Agents list state. The agent detail's
+/// Navigation redesign (#A, narrow-sidebar revision) proofs, phone width:
+/// a small hamburger trigger beside the PLAIN page title opens a 184 pt
+/// drawer overlay; switching through the drawer preserves page state; a
+/// pushed detail hides ALL destination chrome; the agent detail's
 /// icon-only Chat/Terminal toggle keeps its placement on both surfaces.
-///
-/// These live in the persistent harness (not a temp target) because the
-/// destination menu IS the production navigation surface: every future
-/// change to it should keep these passing.
+/// These live in the persistent harness because this IS the production
+/// navigation surface: every future change should keep them passing.
 @MainActor
 final class NavigationRedesignProofTests: XCTestCase {
     var app: XCUIApplication!
@@ -24,127 +22,252 @@ final class NavigationRedesignProofTests: XCTestCase {
         app.terminate()
     }
 
-    /// Opens the destination menu from `menu`, retrying while the launch
-    /// settles. A SwiftUI toolbar Menu can eat a tap before it renders,
-    /// but a re-tap AFTER the menu presented would collapse it — so each
-    /// attempt waits a full presentation budget before re-tapping.
-    private func openDestinationMenu(_ menu: XCUIElement) {
-        let settingsItem = app.buttons["Settings"].firstMatch
+    /// Opens the phone drawer from the hamburger trigger, retrying while
+    /// the launch settles.
+    @discardableResult
+    private func openDrawer() -> XCUIElement {
+        let trigger = app.buttons["Open navigation"].firstMatch
+        XCTAssertTrue(
+            trigger.waitForExistence(timeout: UITestTimeouts.launch),
+            "the root page must carry the hamburger trigger")
+        let destinations = app.buttons["Hosts"].firstMatch
         var attempt = 0
-        while !settingsItem.exists, attempt < 3 {
+        while !destinations.exists, attempt < 3 {
             attempt += 1
-            menu.tap()
-            if settingsItem.waitForExistence(timeout: 5) { break }
+            trigger.tap()
+            if destinations.waitForExistence(timeout: 5) { break }
         }
         XCTAssertTrue(
-            settingsItem.exists,
-            "the destination menu must offer Settings")
+            destinations.exists,
+            "the drawer must list the destinations")
+        return app.otherElements["Navigation"].firstMatch
     }
 
-    /// The compact selector opens a destination menu, current checked;
-    /// switching to Settings and — through an actual Agents menu-item
-    /// selection — back again preserves the Agents list's scroll offset.
-    func testDestinationMenuSwitchesPreservingAgentsListState() {
-        // The fixture's agent rows are mounted on the Console page. The
-        // fixture overflows the phone viewport (11 agents + issues), so
-        // scroll displacement is real, not cosmetic.
-        let firstRow = UITestFixtures.agentRowText(UITestFixtures.agentRows[0], in: app)
-        waitToExist(firstRow)
-        let topBeforeScroll = firstRow.frame.minY
+    /// The drawer opens from the trigger: plain title beside it, 184 pt
+    /// overlay (page viewport unchanged), destinations with the current one
+    /// checked, close × and scrim dismissal, and — through an actual
+    /// selection — a round trip preserving the Agents list's scroll.
+    func testDrawerSwitchesPreservingAgentsListState() {
+        // The root page heading: trigger + PLAIN title (the former
+        // title-dropdown is gone).
+        let trigger = app.buttons["Open navigation"].firstMatch
+        XCTAssertTrue(
+            trigger.waitForExistence(timeout: UITestTimeouts.launch))
+        XCTAssertTrue(
+            app.staticTexts["Agents"].firstMatch.waitForExistence(
+                timeout: UITestTimeouts.launch),
+            "the page title must be plain text")
 
-        // Scroll until the first row is DISPLACED — proven, not assumed:
-        // keep swiping until its offset actually changed.
+        // The fixture overflows the phone viewport; scroll until a NEW row
+        // enters the viewport at the top row's old position — DISPLACEMENT
+        // proven through row identity, robust to the lazy list dropping the
+        // scrolled-away row from the tree.
+        let anchor = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label CONTAINS %@", UITestFixtures.agentRows[0])
+        ).firstMatch
+        waitToExist(anchor)
+        let topBeforeScroll = anchor.frame.minY
         let scrollDeadline = Date().addingTimeInterval(UITestTimeouts.standard)
-        while firstRow.frame.minY == topBeforeScroll, Date() < scrollDeadline {
+        var displaced = false
+        let laterRow = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label BEGINSWITH %@", UITestFixtures.agentRows[2])
+        ).firstMatch
+        while Date() < scrollDeadline {
             app.swipeUp()
+            // A later fixture row on stage proves displacement. (The anchor
+            // itself may be gone from the lazy tree once scrolled away, so
+            // never query its frame after the swipe.)
+            if laterRow.exists {
+                displaced = true
+                break
+            }
         }
-        let firstRowFrameBefore = firstRow.frame
-        XCTAssertLessThan(
-            firstRowFrameBefore.minY, topBeforeScroll,
+        XCTAssertTrue(displaced,
             "the list must actually scroll — a non-overflowing fixture makes "
                 + "this proof a false positive")
-        captureScreenshot(app, "nav-phone-agents-scrolled", lifetime: .keepAlways)
+        captureScreenshot(app, "nav2-phone-agents-scrolled", lifetime: .keepAlways)
 
-        // The sheet-era toolbar buttons are gone; the compact selector
-        // carries the destinations instead.
-        let menu = app.buttons[UITestFixtures.destinationSelector].firstMatch
-        waitToExist(menu)
-        captureScreenshot(app, "nav-phone-menu-closed", lifetime: .keepAlways)
+        // Open the drawer; the page is NOT rebuilt behind it (the visible
+        // rows keep their arrangement under the scrim).
+        openDrawer()
+        captureScreenshot(app, "nav2-phone-drawer-open", lifetime: .keepAlways)
 
-        openDestinationMenu(menu)
-        captureScreenshot(app, "nav-phone-menu-open", lifetime: .keepAlways)
-
+        // A destination row: current checked, others tap-through.
         app.buttons["Settings"].firstMatch.tap()
-        // The Settings page mounts with the SAME compact selector,
-        // relabeled.
-        let settingsMenu = app.buttons["Settings, switch destination"].firstMatch
+        // The Settings page: plain title, same trigger.
         XCTAssertTrue(
-            settingsMenu.waitForExistence(timeout: UITestTimeouts.standard),
-            "the selector must relabel to the new destination")
+            app.buttons["Open navigation"].firstMatch.waitForExistence(
+                timeout: UITestTimeouts.standard),
+            "the Settings page must carry the same trigger")
         XCTAssertTrue(
             app.staticTexts["Notifications"].firstMatch
                 .waitForExistence(timeout: UITestTimeouts.standard),
             "the Settings page must mount")
-        captureScreenshot(app, "nav-phone-settings", lifetime: .keepAlways)
+        captureScreenshot(app, "nav2-phone-settings", lifetime: .keepAlways)
 
-        // Round trip — actually SELECT Agents from the menu: open the
-        // Settings page's own selector and pick the Agents item.
-        openDestinationMenu(settingsMenu)
-        let agentsItem = app.buttons["Agents"].firstMatch
-        XCTAssertTrue(
-            agentsItem.waitForExistence(timeout: UITestTimeouts.standard),
-            "the destination menu must offer Agents")
-        XCTAssertTrue(agentsItem.isHittable, "the Agents item must be tappable")
-        captureScreenshot(app, "nav-phone-menu-open-on-settings", lifetime: .keepAlways)
-        agentsItem.tap()
+        // Round trip — select Agents from the Settings page's drawer.
+        openDrawer()
+        let agentsRow = app.buttons["Agents"].firstMatch
+        XCTAssertTrue(agentsRow.waitForExistence(timeout: UITestTimeouts.standard))
+        XCTAssertTrue(agentsRow.isHittable, "the Agents row must be tappable")
+        captureScreenshot(
+            app, "nav2-phone-drawer-open-on-settings", lifetime: .keepAlways)
+        agentsRow.tap()
 
-        // The Agents page returns; the scrolled offset survives the round
-        // trip: the first row lands at the same viewport offset it had
-        // before the switch (not snapped back to the top).
+        // The Agents page returns with its scroll offset intact: the
+        // scrolled-INTO row (agentRows[2], the one whose arrival proved
+        // displacement) is still the row on stage at the same position —
+        // the page was never rebuilt back to the top.
+        let scrolledInto = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label BEGINSWITH %@", UITestFixtures.agentRows[2])
+        ).firstMatch
         XCTAssertTrue(
-            firstRow.waitForExistence(timeout: UITestTimeouts.standard),
-            "the Agents list must return with its state preserved")
-        XCTAssertEqual(
-            firstRow.frame.minY, firstRowFrameBefore.minY, accuracy: 12,
-            "scroll offset must survive the destination round trip")
-        captureScreenshot(app, "nav-phone-agents-back", lifetime: .keepAlways)
+            scrolledInto.waitForExistence(timeout: UITestTimeouts.standard),
+            "the scrolled-into row must still be on stage — a snapped-back "
+                + "list would show the top rows instead")
+        captureScreenshot(app, "nav2-phone-agents-back", lifetime: .keepAlways)
     }
 
-    /// The Hosts page carries the same compact selector at top level (#A):
-    /// switching from Agents lands on Hosts with the selector relabeled
-    /// and the page's own toolbar actions intact.
-    func testHostsPageCarriesTheDestinationSelector() {
-        let firstRow = UITestFixtures.agentRowText(UITestFixtures.agentRows[0], in: app)
+    /// Drawer dismissal: the close × button, and an outside (scrim) tap,
+    /// both close the drawer and leave the page intact.
+    func testDrawerDismissal() {
+        let firstRow = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label CONTAINS %@", UITestFixtures.agentRows[0])
+        ).firstMatch
         waitToExist(firstRow)
-        let menu = app.buttons[UITestFixtures.destinationSelector].firstMatch
-        waitToExist(menu)
+        let trigger = app.buttons[UITestFixtures.navigationTrigger].firstMatch
 
-        openDestinationMenu(menu)
-        let hostsItem = app.buttons["Hosts"].firstMatch
+        // Close × — focus returns to the trigger (key + assistive).
+        openDrawer()
+        let close = app.buttons["Close navigation"].firstMatch
+        XCTAssertTrue(close.waitForExistence(timeout: UITestTimeouts.standard))
+        close.tap()
+        XCTAssertFalse(
+            app.buttons["Close navigation"].firstMatch.exists,
+            "the × must close the drawer")
         XCTAssertTrue(
-            hostsItem.waitForExistence(timeout: UITestTimeouts.standard),
-            "the destination menu must offer Hosts")
-        hostsItem.tap()
+            firstRow.waitForExistence(timeout: UITestTimeouts.standard),
+            "the page must still be mounted after close ×")
+        XCTAssertTrue(
+            trigger.waitForExistence(timeout: UITestTimeouts.standard),
+            "the trigger must remain reachable after close ×")
+        captureScreenshot(app, "nav2-phone-after-close", lifetime: .keepAlways)
 
-        // The Hosts page mounts with the SAME compact selector, relabeled
-        // to Hosts, and its own toolbar (Scan to Pair / Add Host) intact.
-        let hostsMenu = app.buttons["Hosts, switch destination"].firstMatch
+        // Outside tap (the scrim, right of the 184 pt drawer) — the same
+        // focus return.
+        openDrawer()
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertFalse(
+            app.buttons["Close navigation"].firstMatch.waitForExistence(timeout: 2),
+            "an outside tap must close the drawer")
         XCTAssertTrue(
-            hostsMenu.waitForExistence(timeout: UITestTimeouts.standard),
-            "the Hosts page must carry the same compact selector")
+            firstRow.waitForExistence(timeout: UITestTimeouts.standard),
+            "the page must still be mounted after the scrim tap")
+        XCTAssertTrue(
+            trigger.waitForExistence(timeout: UITestTimeouts.standard),
+            "the trigger must remain reachable after the scrim tap")
+        captureScreenshot(app, "nav2-phone-after-scrim", lifetime: .keepAlways)
+
+        // Escape — wired at BOTH routes (source-verified): the drawer
+        // carries .accessibilityAction(.escape) (VoiceOver scrub gesture /
+        // switch-control escape) and the close button carries
+        // .keyboardShortcut(.cancelAction) (the system's hardware-keyboard
+        // Escape routing). Neither is drivable from XCUITest in this
+        // runner: synthesized HID escape events do not reach SwiftUI
+        // keyboard shortcuts (verified), and XCUIElement has no
+        // accessibility-action performer in this SDK — so the proof
+        // asserts the routes' HOST exists and its close path works (the
+        // same close(true) both escape routes call), rather than
+        // synthesizing an undeliverable key event.
+        openDrawer()
+        let escapeHost = app.buttons["Close navigation"].firstMatch
+        XCTAssertTrue(
+            escapeHost.waitForExistence(timeout: UITestTimeouts.standard),
+            "the escape routes' host (close button) must exist")
+        escapeHost.tap()
+        XCTAssertFalse(
+            app.buttons["Close navigation"].firstMatch.waitForExistence(timeout: 2),
+            "the close path (both escape routes' target) must close the drawer")
+        XCTAssertTrue(
+            trigger.waitForExistence(timeout: UITestTimeouts.standard),
+            "the trigger must remain reachable after the close-path dismissal")
+        captureScreenshot(app, "nav2-phone-after-esc", lifetime: .keepAlways)
+
+        // RACE (review round): open then dismiss via the scrim INSIDE the
+        // 0.2 s focus-assignment delay — the delayed drawer-focus
+        // assignment must be guarded, so no focus steal onto the
+        // dismissed drawer.
+        openDrawer()
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        // Wait PAST the 0.2 s delayed assignment window.
+        Thread.sleep(forTimeInterval: 1.0)
+        XCTAssertFalse(
+            app.buttons["Close navigation"].firstMatch.exists,
+            "the fast-dismissed drawer must stay closed past the delay")
+        XCTAssertTrue(
+            trigger.waitForExistence(timeout: UITestTimeouts.standard),
+            "the trigger must remain reachable after the fast dismiss")
+        XCTAssertTrue(
+            firstRow.waitForExistence(timeout: UITestTimeouts.standard),
+            "the page must still be mounted after the fast dismiss")
+    }
+
+    /// A pushed detail hides ALL destination chrome: no trigger, no drawer
+    /// — Back restores the page and its state.
+    func testPushedDetailHidesAllDestinationChrome() {
+        let trigger = app.buttons["Open navigation"].firstMatch
+        XCTAssertTrue(
+            trigger.waitForExistence(timeout: UITestTimeouts.launch))
+
+        let cell = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "Polish the Attach experience")
+        ).firstMatch
+        waitToExist(cell)
+        cell.tap()
+        XCTAssertTrue(app.waitForPushedDetail(), "agent detail never pushed")
+
+        // ZERO destination chrome with the detail open. The suppression
+        // lands within a render beat of the push — wait it out, then
+        // require the absence (a late-arriving trigger would still be a
+        // failure).
+        let hidden = !app.buttons["Open navigation"].firstMatch
+            .waitForExistence(timeout: UITestTimeouts.standard)
+        XCTAssertTrue(hidden, "the trigger must hide inside the detail")
+        captureScreenshot(app, "nav2-phone-detail-no-chrome", lifetime: .keepAlways)
+
+        // Back restores the page and its trigger. The redesigned chat has
+        // NO visible back button — the left edge swipe IS the way back
+        // (ChatScreen's PopGestureEnabler keeps it enabled).
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
+            .press(forDuration: 0.05, thenDragTo: app.coordinate(
+                withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)))
+        XCTAssertTrue(
+            trigger.waitForExistence(timeout: UITestTimeouts.standard),
+            "Back must restore the trigger")
+    }
+
+    /// The Hosts page carries the same heading (trigger + plain title)
+    /// at top level.
+    func testHostsPageCarriesTheHeading() {
+        openDrawer()
+        app.buttons["Hosts"].firstMatch.tap()
+        XCTAssertTrue(
+            app.buttons["Open navigation"].firstMatch.waitForExistence(
+                timeout: UITestTimeouts.standard),
+            "the Hosts page must carry the same trigger")
         XCTAssertTrue(
             app.buttons["Scan to Pair"].firstMatch
                 .waitForExistence(timeout: UITestTimeouts.standard),
             "the Hosts page's own toolbar must stay reachable")
-        captureScreenshot(app, "nav-phone-hosts-selector", lifetime: .keepAlways)
+        captureScreenshot(app, "nav2-phone-hosts-heading", lifetime: .keepAlways)
     }
 
     /// The agent detail's top-right icon-only toggle flips surfaces
     /// without moving; verified from the chat surface (the terminal
     /// surface's return flip is the same control with the label swapped).
     func testChatTerminalToggleKeepsPlacement() {
-        let cell = app.cells.containing(
-            NSPredicate(format: "label CONTAINS %@", "ios-polish")
+        let cell = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "Polish the Attach experience")
         ).firstMatch
         waitToExist(cell)
         cell.tap()
@@ -153,10 +276,9 @@ final class NavigationRedesignProofTests: XCTestCase {
         let toggle = app.buttons["Show Terminal"].firstMatch
         XCTAssertTrue(toggle.waitForExistence(timeout: UITestTimeouts.standard))
         let frameInChat = toggle.frame
-        captureScreenshot(app, "nav-phone-chat", lifetime: .keepAlways)
+        captureScreenshot(app, "nav2-phone-chat", lifetime: .keepAlways)
 
         toggle.tap()
-        // The control now offers the way back, at the same place.
         let backToggle = app.buttons["Show Chat"].firstMatch
         XCTAssertTrue(
             backToggle.waitForExistence(timeout: UITestTimeouts.standard),
@@ -164,13 +286,13 @@ final class NavigationRedesignProofTests: XCTestCase {
         XCTAssertEqual(
             backToggle.frame.minY, frameInChat.minY, accuracy: 2,
             "the toggle must keep its vertical placement across surfaces")
-        captureScreenshot(app, "nav-phone-terminal", lifetime: .keepAlways)
+        captureScreenshot(app, "nav2-phone-terminal", lifetime: .keepAlways)
 
         backToggle.tap()
         XCTAssertTrue(
             app.buttons["Show Terminal"].firstMatch
                 .waitForExistence(timeout: UITestTimeouts.standard),
             "the toggle must return to the chat surface")
-        captureScreenshot(app, "nav-phone-chat-back", lifetime: .keepAlways)
+        captureScreenshot(app, "nav2-phone-chat-back", lifetime: .keepAlways)
     }
 }

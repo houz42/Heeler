@@ -26,11 +26,29 @@ struct ChatDetailLevelStore: @unchecked Sendable {
         self.defaults = defaults
     }
 
-    /// The saved level for `paneID`, falling back to the contract default L0
-    /// when the pane has no saved value or the stored value is out of range
-    /// (defensive against hand-edited defaults).
+    /// The saved level for `paneID` with the settings-driven default
+    /// fallback (#A settings revision): a pane WITHOUT an explicit
+    /// saved value falls back to the persisted default (the
+    /// "default" pseudo-pane the Settings page writes), then to the
+    /// contract default L0. A pane WITH an explicit save always wins —
+    /// including an explicit L0 over a default L2.
     func level(paneID: String) -> DetailLevel {
-        let raw = defaults.integer(forKey: Self.key(paneID: paneID))
+        let key = Self.key(paneID: paneID)
+        // `object(forKey:)` distinguishes an EXPLICIT 0 (saved L0) from
+        // a missing key — `integer(forKey:)` collapses both to 0.
+        if defaults.object(forKey: key) != nil {
+            let raw = defaults.integer(forKey: key)
+            return DetailLevel(rawValue: raw) ?? defaultFallback
+        }
+        // No per-pane value: the user's chosen default, else L0.
+        return defaultFallback
+    }
+
+    /// The user's default conversation detail (Settings → Default
+    /// Conversation Detail), L0 when never set. Defensive against
+    /// hand-edited out-of-range values.
+    private var defaultFallback: DetailLevel {
+        let raw = defaults.integer(forKey: Self.defaultKey)
         return DetailLevel(rawValue: raw) ?? .l0
     }
 

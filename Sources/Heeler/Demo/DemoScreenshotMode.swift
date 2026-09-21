@@ -146,8 +146,10 @@
         }
 
         private var consoleRoot: some View {
-            // The production navigation surface, so headless captures see
-            // the same destination menu/sidebar chrome the app ships.
+            // The production navigation surface (#A v2): the demo root
+            // mounts the AppRootView so captures and UI proofs exercise
+            // the real destination chrome — trigger + plain title,
+            // drawer on phone, reserved sidebar on wide.
             AppRootView(
                 agents: ConsoleView(
                     hosts: hosts,
@@ -166,6 +168,12 @@
                 ),
                 hosts: HostListView(
                     store: hosts,
+                    connectionStatuses: console.hostStatuses,
+                    standingFailures: console.hostStandingFailures,
+                    latencies: console.hostLatencies,
+                    connectedAddresses: console.hostConnectedAddresses,
+                    manualReconnectInFlightHostIDs: [],
+                    retryConnection: { _ in },
                     discovery: SessionDiscoveryStore(
                         listSessions: { hostID in
                             try await console.listSessions(on: hostID)
@@ -178,7 +186,14 @@
                     relaySettings: relaySettings,
                     liveActivities: liveActivities,
                     console: console,
-                    hosts: hosts.hosts))
+                    hosts: hosts.hosts),
+                // Same focus gating as the production root (#A): the
+                // destination chrome hides while a detail is pushed.
+                isPageContentFocused: { notificationRouter.path.isEmpty }
+            )
+            // The shared reading-size store for the demo's chat reading
+            // text (#A settings revision).
+            .environment(\.appReadingTextSize, ReadingTextSizeSettings.shared)
             .preferredColorScheme(appearance.preferredColorScheme)
             .task {
                 console.setHosts(hosts.hosts)
