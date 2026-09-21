@@ -67,14 +67,38 @@ struct SettingsView: View {
     /// "Settings" title and Done button.
     @Environment(\.appDestination) private var appDestination
     @Environment(\.appDestinationMenuSuppressed) private var isMenuSuppressed
-    /// Reading & appearance (#A settings revision): text size and the
-    /// default conversation detail level.
-    @State private var readingTextSize = ReadingTextSizeSettings()
+    /// Reading & appearance (#A settings revision): the SHARED text-size
+    /// store (review finding 4: one observable store — the same
+    /// instance the reading views consume, injected by the roots; the
+    /// demo root injects its own) and the default detail level.
+    let readingTextSize: ReadingTextSizeSettings
     @State private var defaultDetailLevel = DefaultDetailLevelSettings()
     /// Direct focus report to the root (see AppNavigationFocusReport):
     /// fired on path changes; the root suppresses ALL destination chrome
     /// while any page's sub-page is pushed.
     @Environment(\.appNavigationFocusReport) private var focusReport
+
+    init(
+        terminal: TerminalSettings,
+        appearance: AppAppearanceSettings,
+        pushRegistration: PushRegistrationStore,
+        notificationPreferences: NotificationPreferencesStore,
+        relaySettings: NotificationRelaySettings,
+        liveActivities: HostLiveActivityCoordinator,
+        console: ConsoleStore,
+        hosts: [Host],
+        readingTextSize: ReadingTextSizeSettings = .shared
+    ) {
+        self.terminal = terminal
+        self.appearance = appearance
+        self.pushRegistration = pushRegistration
+        self.notificationPreferences = notificationPreferences
+        self.relaySettings = relaySettings
+        self.liveActivities = liveActivities
+        self.console = console
+        self.hosts = hosts
+        self.readingTextSize = readingTextSize
+    }
 
     static let agentListDestination = SettingsAgentListDestination.fields
     static let headerLayoutDestination = SettingsHeaderLayoutDestination.header

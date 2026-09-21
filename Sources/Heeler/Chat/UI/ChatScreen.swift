@@ -124,7 +124,11 @@ struct ChatScreen: View {
     /// newest-end button.
     @State private var bottomSentinelVisible = false
 
-    @Environment(\.openURL) private var openURL
+    /// The shared reading-size choice (#A settings revision, review
+    /// finding 4): applied to the TRANSCRIPT content only — reading
+    /// text, never the chrome (status strip, composer, nav bar keep
+    /// the design's scale).
+    @Environment(\.appReadingTextSize) private var readingTextSize
 
     var body: some View {
         VStack(spacing: 0) {
@@ -139,6 +143,11 @@ struct ChatScreen: View {
                         bottomSentinel
                     }
                     .padding(.vertical, 10)
+                    // Reading-size applies here: the transcript's reading
+                    // text only (review finding 4) — the chrome (status
+                    // strip, composer, nav bar) keeps the design's scale.
+                    .modifier(ReadingTextSizeModifier(
+                        size: readingTextSize?.readingSize))
                 }
                 // A transcript that parsed to zero rows (metadata-only session
                 // file, or a resumed session writing elsewhere) must not render

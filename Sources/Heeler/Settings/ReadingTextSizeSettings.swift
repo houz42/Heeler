@@ -29,17 +29,19 @@ enum ReadingTextSize: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// The dynamic-type clamp the app renders text at. nil = no override:
-    /// the system setting flows through untouched. An upper clamp, never a
-    /// chrome rescale — reading text only.
-    var dynamicTypeSizeClamp: PartialRangeThrough<DynamicTypeSize>? {
+    /// The EXACT dynamic-type size reading views render at (review
+    /// finding 4: an upper-bound clamp cannot ENLARGE a system-large
+    /// text to a chosen XL — the explicit choice pins the size
+    /// directly). nil = System: no override, the device setting flows
+    /// through.
+    var readingSize: DynamicTypeSize? {
         switch self {
         case .system: nil
-        case .small: ...DynamicTypeSize.small
-        case .medium: ...DynamicTypeSize.medium
-        case .large: ...DynamicTypeSize.large
-        case .xLarge: ...DynamicTypeSize.xLarge
-        case .xxLarge: ...DynamicTypeSize.xLarge
+        case .small: .small
+        case .medium: .medium
+        case .large: .large
+        case .xLarge: .xLarge
+        case .xxLarge: .xxLarge
         }
     }
 }
@@ -61,8 +63,14 @@ final class ReadingTextSizeSettings {
             .flatMap(ReadingTextSize.init(rawValue:)) ?? .system
     }
 
-    var dynamicTypeSizeClamp: PartialRangeThrough<DynamicTypeSize>? {
-        selection.dynamicTypeSizeClamp
+    /// The process-wide instance the roots and the Settings page share
+    /// (review finding 4: ONE store; the demo root injects its own
+    /// through the SettingsView initializer instead).
+    static let shared = ReadingTextSizeSettings()
+
+    /// nil when following the system: the reading views apply nothing.
+    var readingSize: DynamicTypeSize? {
+        selection.readingSize
     }
 
     func select(_ size: ReadingTextSize) {
@@ -94,16 +102,16 @@ final class DefaultDetailLevelSettings {
         set { store.setLevel(newValue, paneID: "default") }
     }
 }
-
-/// Applies the reading-text-size clamp at a view root: nothing when the
-/// choice is System (the device's Dynamic Type flows through), the clamp
-/// otherwise.
+/// Applies the reading-text-size to READING views (review finding 4:
+/// chat/reading text only — never the window root, so the compact
+/// chrome's semantic fonts keep the design's scale). Nothing when the
+/// choice is System: the device's Dynamic Type flows through.
 struct ReadingTextSizeModifier: ViewModifier {
-    let clamp: PartialRangeThrough<DynamicTypeSize>?
+    let size: DynamicTypeSize?
 
     func body(content: Content) -> some View {
-        if let clamp {
-            content.dynamicTypeSize(clamp)
+        if let size {
+            content.dynamicTypeSize(size)
         } else {
             content
         }

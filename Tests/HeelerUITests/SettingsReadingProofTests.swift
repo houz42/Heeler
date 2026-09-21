@@ -121,4 +121,90 @@ final class SettingsReadingProofTests: XCTestCase {
         l1.tap()
         captureScreenshot(app, "settings-default-detail", lifetime: .keepAlways)
     }
+
+    /// Review finding 4's proof: the text-size choice must change the
+    /// RENDERED reading text — an actual measured sample, not a picker
+    /// checkmark. Measure a chat message's height at System, pick XXL,
+    /// re-measure: the reading text must grow.
+    func testTextSizeChangesRenderedReadingText() {
+        // Clean slate FIRST: a previous run's choice persists in
+        // UserDefaults(.standard) — select System explicitly so the
+        // System measurement is actually System, then relaunch and
+        // measure; then pick XXL, relaunch, and measure again.
+        openSettings()
+        let cleanRow = app.buttons["Text Size"].firstMatch
+        waitToExist(cleanRow)
+        cleanRow.tap()
+        let systemChoice = app.buttons["System"].firstMatch
+        XCTAssertTrue(
+            systemChoice.waitForExistence(timeout: UITestTimeouts.standard),
+            "the System choice must render")
+        systemChoice.tap()
+        app.terminate()
+        app = UITestApp.launchDemo(.console)
+
+        // The demo fixture's chat-bearing agent, with its transcript.
+        let cell = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "Polish the Attach experience")
+        ).firstMatch
+        waitToExist(cell)
+        cell.tap()
+        XCTAssertTrue(app.waitForPushedDetail(), "agent detail never pushed")
+
+        // A rendered reading line: the fixture's long assistant message
+        // (visible at the chat's bottom anchor on open, both passes).
+        let message = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "Long-run verification notes")
+        ).firstMatch
+        XCTAssertTrue(
+            message.waitForExistence(timeout: UITestTimeouts.standard),
+            "the sample reading text must render")
+        // Settle: the transcript's layout must finish before measuring.
+        Thread.sleep(forTimeInterval: 2)
+        let messageHeightAtSystem = message.frame.height
+
+        // Edge-swipe back to the list, into Settings → Text Size → XXL.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
+            .press(forDuration: 0.05, thenDragTo: app.coordinate(
+                withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)))
+        openSettings()
+        let textRow = app.buttons["Text Size"].firstMatch
+        waitToExist(textRow)
+        textRow.tap()
+        let xxl = app.buttons["Extra Extra Large"].firstMatch
+        XCTAssertTrue(
+            xxl.waitForExistence(timeout: UITestTimeouts.standard),
+            "the XXL choice must render on the Text Size page")
+        xxl.tap()
+        captureScreenshot(app, "settings-text-size-xxl", lifetime: .keepAlways)
+
+        // The shared store is already updated (ONE store — the write is
+        // live), so relaunch to the Agents root and re-measure the same
+        // chat: the choice must persist across the relaunch AND grow the
+        // reading text. (Relaunch instead of navigating back keeps this
+        // proof about the size contract, not the back-button mechanics.)
+        app.terminate()
+        app = UITestApp.launchDemo(.console)
+
+        // Reopen the chat and re-measure: reading text grows.
+        let cellAgain = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "Polish the Attach experience")
+        ).firstMatch
+        waitToExist(cellAgain)
+        cellAgain.tap()
+        XCTAssertTrue(app.waitForPushedDetail(), "agent detail never re-pushed")
+        let messageAgain = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "Long-run verification notes")
+        ).firstMatch
+        XCTAssertTrue(
+            messageAgain.waitForExistence(timeout: UITestTimeouts.standard),
+            "the sample reading text must render after the size change")
+        Thread.sleep(forTimeInterval: 2)
+        let messageHeightAtXXL = messageAgain.frame.height
+        XCTAssertGreaterThan(
+            messageHeightAtXXL, messageHeightAtSystem * 1.3,
+            "the reading text must measurably grow at XXL (System "
+                + "\\(messageHeightAtSystem) → XXL \\(messageHeightAtXXL))")
+        captureScreenshot(app, "chat-reading-xxl", lifetime: .keepAlways)
+    }
 }

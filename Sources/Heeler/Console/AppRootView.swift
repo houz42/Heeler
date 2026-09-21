@@ -254,6 +254,10 @@ extension EnvironmentValues {
     /// detail owns the window.
     @Entry var appNavigationFocusReport:
         AppNavigationFocusReport? = nil
+    /// The shared reading-text-size store (#A settings revision): the
+    /// Settings page and the chat reading text consume ONE instance.
+    /// Nil outside the roots that inject it.
+    @Entry var appReadingTextSize: ReadingTextSizeSettings? = nil
     /// Focus return (#A): the drawer hands focus back to the trigger on
     /// dismissal. Optional — nil outside `AppRootView`, where the heading
     /// simply does not participate in focus return.

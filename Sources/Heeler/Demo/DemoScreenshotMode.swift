@@ -146,21 +146,54 @@
         }
 
         private var consoleRoot: some View {
-            ConsoleView(
-                hosts: hosts,
-                console: console,
-                terminal: terminal,
-                inputMode: inputMode,
-                appearance: appearance,
-                pushRegistration: pushRegistration,
-                notificationPreferences: notificationPreferences,
-                relaySettings: relaySettings,
-                notificationRouter: notificationRouter,
-                bannerStore: bannerStore,
-                presentsSettingsOnAppear: DemoScreenshotMode.presentsSettings,
-                liveActivities: liveActivities,
-                activity: activity
+            // The production navigation surface (#A v2): the demo root
+            // mounts the AppRootView so captures and UI proofs exercise
+            // the real destination chrome — trigger + plain title,
+            // drawer on phone, reserved sidebar on wide.
+            AppRootView(
+                agents: ConsoleView(
+                    hosts: hosts,
+                    console: console,
+                    terminal: terminal,
+                    inputMode: inputMode,
+                    appearance: appearance,
+                    pushRegistration: pushRegistration,
+                    notificationPreferences: notificationPreferences,
+                    relaySettings: relaySettings,
+                    notificationRouter: notificationRouter,
+                    bannerStore: bannerStore,
+                    presentsSettingsOnAppear: DemoScreenshotMode.presentsSettings,
+                    liveActivities: liveActivities,
+                    activity: activity
+                ),
+                hosts: HostListView(
+                    store: hosts,
+                    connectionStatuses: console.hostStatuses,
+                    standingFailures: console.hostStandingFailures,
+                    latencies: console.hostLatencies,
+                    connectedAddresses: console.hostConnectedAddresses,
+                    manualReconnectInFlightHostIDs: [],
+                    retryConnection: { _ in },
+                    discovery: SessionDiscoveryStore(
+                        listSessions: { hostID in
+                            try await console.listSessions(on: hostID)
+                        })),
+                settings: SettingsView(
+                    terminal: terminal,
+                    appearance: appearance,
+                    pushRegistration: pushRegistration,
+                    notificationPreferences: notificationPreferences,
+                    relaySettings: relaySettings,
+                    liveActivities: liveActivities,
+                    console: console,
+                    hosts: hosts.hosts),
+                // Same focus gating as the production root (#A): the
+                // destination chrome hides while a detail is pushed.
+                isPageContentFocused: { notificationRouter.path.isEmpty }
             )
+            // The shared reading-size store for the demo's chat reading
+            // text (#A settings revision).
+            .environment(\.appReadingTextSize, ReadingTextSizeSettings.shared)
             .preferredColorScheme(appearance.preferredColorScheme)
             .task {
                 console.setHosts(hosts.hosts)
