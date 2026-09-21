@@ -67,17 +67,54 @@ final class SettingsReadingProofTests: XCTestCase {
             app.buttons["Default Conversation Detail"].firstMatch.exists,
             "the designed Default Conversation Detail row must be present")
 
-        // EVERY pre-existing row stays (#A: keep all existing items).
+        // EVERY pre-existing row stays (#A: keep all existing items),
+        // and the three surface-appearance rows now live INSIDE the
+        // Reading & Appearance group (device-feedback refinement): the
+        // six-row order is Appearance, Text Size, Default Conversation
+        // Detail, Agent List Fields, In-Agent Header, Terminal
+        // Appearance. Membership is asserted by reading order + row
+        // contiguity: a section boundary between the designed and legacy
+        // rows would break the frame sequence.
+        // The Appearance row is a picker whose label reads
+        // "Appearance, System" — match by prefix. The rest are links.
+        let readingRows: [(label: String, prefix: Bool)] = [
+            ("Appearance", true),
+            ("Text Size", false),
+            ("Default Conversation Detail", false),
+            ("Agent List Fields", false),
+            ("In-Agent Header", false),
+            ("Terminal Appearance", false),
+        ]
+        var ys: [CGFloat] = []
+        for entry in readingRows {
+            let row = entry.prefix
+                ? app.buttons.matching(
+                    NSPredicate(format: "label BEGINSWITH %@", entry.label)
+                ).firstMatch
+                : app.buttons[entry.label].firstMatch
+            XCTAssertTrue(
+                row.waitForExistence(timeout: UITestTimeouts.standard),
+                "\(entry.label) must remain (moved, not removed)")
+            ys.append(row.frame.minY)
+        }
+        XCTAssertEqual(
+            ys, ys.sorted(), "the six reading rows must appear in the "
+                + "approved order in ONE group")
+        // Contiguity: successive gaps stay row-height sized — a section
+        // break between the designed and legacy rows would show a much
+        // larger gap.
+        for index in 1..<ys.count {
+            XCTAssertLessThan(
+                ys[index] - ys[index - 1], 90,
+                "rows must sit in the same group (gap too large for one "
+                    + "section)")
+        }
         XCTAssertTrue(
-            app.buttons["Agent List Fields"].firstMatch.exists)
+            app.buttons["Notifications"].firstMatch.exists,
+            "Notifications must remain (its own section)")
         XCTAssertTrue(
-            app.buttons["In-Agent Header"].firstMatch.exists)
-        XCTAssertTrue(
-            app.buttons["Notifications"].firstMatch.exists)
-        XCTAssertTrue(
-            app.buttons["Terminal Appearance"].firstMatch.exists)
-        XCTAssertTrue(
-            app.staticTexts["About"].firstMatch.exists)
+            app.staticTexts["About"].firstMatch.exists,
+            "About must remain its own section")
         captureScreenshot(app, "settings-reading-section", lifetime: .keepAlways)
     }
 
