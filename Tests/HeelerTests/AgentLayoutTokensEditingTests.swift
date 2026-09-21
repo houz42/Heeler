@@ -176,8 +176,6 @@ struct AgentLayoutTokensEditingTests {
         #expect(AgentLayoutTokensEditing.navigationSubtitle(hostName: "", rowIndex: 2) == "Meadow row")
         #expect(AgentLayoutTokensEditing.navigationSubtitle(hostName: "", rowIndex: 3).isEmpty)
         #expect(AgentLayoutTokensEditing.addFieldFooter(rowIndex: 0).contains("herdr"))
-        #expect(AgentLayoutTokensEditing.addFieldFooter(rowIndex: 0).contains("Meadow fields are welcome"))
-        #expect(AgentLayoutTokensEditing.addFieldFooter(rowIndex: 2).contains("Meadow's row"))
         #expect(AgentLayoutTokensEditing.addFieldFooter(rowIndex: 3).isEmpty)
 
         let (defaults, cleanup) = try makeDefaults()

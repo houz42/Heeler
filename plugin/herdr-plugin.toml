@@ -2,7 +2,7 @@ id = "heeler"
 name = "heeler"
 version = "0.4.0"
 min_herdr_version = "0.7.5"
-description = "Pair a Heeler device by scanning a QR Pairing Code"
+description = "Pair a Meadow device by scanning a QR Pairing Code"
 platforms = ["linux", "macos"]
 
 [[build]]
@@ -14,7 +14,7 @@ command = ["node", "src/sidebar-hook.js"]
 [[actions]]
 id = "pair"
 title = "Pair a mobile device"
-description = "Show a Pairing Code QR for the Heeler app"
+description = "Show a Pairing Code QR for the Meadow app"
 contexts = ["global"]
 command = ["node", "src/pair-action.js"]
 

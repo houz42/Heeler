@@ -228,10 +228,10 @@ struct AgentActivityPresentationTests {
         var agent = agentDetail(paneID: "w1:p1", status: "blocked")
         agent.rows = [
             [.init(text: "**Task**"), .init(text: " · "), .init(text: "feature/one")],
-            [.init(text: "/src/Heeler")],
+            [.init(text: "/src/Meadow")],
         ]
         #expect(AgentActivityNarration.rowLabel(for: agent)
-            == "**Task** · feature/one, /src/Heeler, blocked")
+            == "**Task** · feature/one, /src/Meadow, blocked")
         #expect(String(AgentActivityFields.attributedText(
             agent.rows?[0] ?? [], rowIndex: 0, surface: .lockScreen).characters)
             == "**Task** · feature/one")
@@ -346,7 +346,7 @@ struct AgentActivityPresentationTests {
             agent.rows = [
                  [.init(text: "Meadow · Claude", bold: true)],
                 [.init(text: "Fix the sidebar")],
-                [.init(text: "/Users/developer/Heeler", dim: true)],
+                [.init(text: "/Users/developer/Meadow", dim: true)],
             ]
             return agent
         }
