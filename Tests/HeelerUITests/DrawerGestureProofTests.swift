@@ -267,6 +267,55 @@ final class DrawerGestureProofTests: XCTestCase {
             waitOpen(), "the trigger must still open after drag-to-close")
     }
 
+    /// DISMISSAL CONTINUITY + containment ordering (review round v2):
+    /// the × dismissal is a SLIDE, not a vanish — a background capture
+    /// inside the 0.5 s exit-settle window catches the drawer mid
+    /// slide-out; and containment releases only WITH the unmount: the
+    /// scrim (the drawer layer's own AX identity) disappears no later
+    /// than the page returns, never earlier — a page exposed under a
+    /// still-mounted drawer is the containment bug the shared
+    /// `drawerIsPresented` predicate exists to make impossible.
+    func testDismissalSlidesOutAndContainmentReleasesWithUnmount() {
+        XCTAssertTrue(
+            trigger.waitForExistence(timeout: UITestTimeouts.launch))
+
+        // Open from the trigger, wait for the settled state.
+        trigger.tap()
+        XCTAssertTrue(waitOpen(), "the trigger must open the drawer")
+
+        // The mid-settle capture: the × dismissal's exit spring runs
+        // ~0.5 s; capture at 0.15 s in — the drawer part-way out,
+        // scrim part-way faded.
+        let box = CaptureBox()
+        box.schedule(at: .now() + 0.15)
+        app.buttons["Close navigation"].firstMatch.tap()
+
+        // Containment ordering: once the dismissal COMPLETES, the page
+        // is reachable again AND the drawer layer is gone. Poll until
+        // the trigger (the page's first element) returns, then require
+        // the layer's scrim to be gone in the SAME settled state.
+        XCTAssertTrue(
+            app.buttons[UITestFixtures.navigationTrigger].firstMatch
+                .waitForExistence(timeout: UITestTimeouts.standard),
+            "the page must return after the dismissal completes")
+        XCTAssertFalse(
+            app.buttons["Dismiss navigation"].firstMatch.waitForExistence(
+                timeout: 1),
+            "the drawer layer must be gone once the page is back — "
+                + "containment releases with the unmount, never before")
+
+        // The mid-settle capture landed — the exit is a slide.
+        let png = box.take()
+        XCTAssertNotNil(png, "the mid-settle capture must have fired")
+        let attachment = XCTAttachment(
+            uniformTypeIdentifier: "public.png",
+            name: "drawer-v2-dismiss-slide-out",
+            payload: png,
+            userInfo: nil)
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     /// MID-DRAG capture (the animation proof): a slow edge drag HELD at
     /// a partial reveal — the drawer visibly part-way across the screen
     /// with the scrim proportionally faded — captured while the finger

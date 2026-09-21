@@ -158,6 +158,23 @@ struct AppRootView: View {
                     }
                 }
             }
+            // A width crossing RESETS the compact presentation (review
+            // round v2): an open narrow drawer must not survive the
+            // transition to the wide layout — the reserved sidebar owns
+            // destinations there, and a leftover modal drawer (with its
+            // scrim and AX containment) would cover it. The drawer is
+            // dropped WITHOUT the exit settle: the window is resizing
+            // under it, and the wide layout's sidebar slide-in is the
+            // transition the user sees.
+            .onChange(of: isWide) { _, wide in
+                if wide, drawerIsPresented {
+                    isDrawerOpen = false
+                    isTrackingDrawer = false
+                    isSettlingDrawer = false
+                    drawerReveal = 0
+                    isDrawerAXFocused = false
+                }
+            }
             .environment(\.appDestination, $destination)
             .environment(\.appNavigationTrigger, triggerContext(isWide: isWide))
             .environment(\.appNavigationTriggerFocus, $isTriggerFocused)
@@ -303,9 +320,7 @@ struct AppRootView: View {
     /// reproduce (verified: the offscreen × stayed resolvable through
     /// all of them; XCUITest kept matching it minutes after close).
     private var drawerOverlay: some View {
-        let presented =
-            isDrawerOpen || isTrackingDrawer || isSettlingDrawer
-            || drawerReveal > 0
+        let presented = drawerIsPresented
         return ZStack(alignment: .leading) {
             if presented {
                 // The scrim: reveal-proportional (v2), outside-tap
@@ -348,21 +363,37 @@ struct AppRootView: View {
         .allowsHitTesting(presented)
     }
 
+    /// ONE presentation predicate for the drawer's whole lifecycle
+    /// (review round v2): mounting, the pages' AX/hit-test exclusion,
+    /// and the overlay's modal containment all read THIS — resting
+    /// open, finger-tracked, mid-settle, or any live reveal. Containment
+    /// ends exactly when the mount drops (dismissal complete), never
+    /// earlier.
+    private var drawerIsPresented: Bool {
+        isDrawerOpen || isTrackingDrawer || isSettlingDrawer
+            || drawerReveal > 0
+    }
+
     /// All three pages stay mounted; only the selected one is on stage.
-    /// While the drawer is presented — resting open OR mid-gesture, i.e.
-    /// reveal > 0 (v2) — the on-stage page is excluded from AX AND
-    /// hit-testing (review finding 3): a modal must contain the user —
-    /// the scrim blocks sighted touches, but VoiceOver/switch control
-    /// would still reach the page without this.
+    /// While the drawer is presented — resting open, finger-tracked, OR
+    /// MID-SETTLE (review round v2: the pages' exclusion must read the
+    /// SAME lifecycle predicate as the drawer's MOUNT, not the raw
+    /// reveal — settleClosed() zeroes `drawerReveal` at once while the
+    /// exit spring is still sliding and `isSettlingDrawer` holds the
+    /// mount 0.5 s, so a reveal-only gate re-exposed the page to AX
+    /// under the still-mounted drawer mid-exit) — the on-stage page is
+    /// excluded from AX AND hit-testing (review finding 3): a modal
+    /// must contain the user; containment releases only when the
+    /// dismissal completes (the mount drops).
     private var pages: some View {
         ZStack {
             ForEach(AppDestination.allCases) { candidate in
                 page(candidate)
                     .opacity(candidate == destination ? 1 : 0)
                     .allowsHitTesting(
-                        candidate == destination && drawerReveal <= 0)
+                        candidate == destination && !drawerIsPresented)
                     .accessibilityHidden(
-                        candidate != destination || drawerReveal > 0)
+                        candidate != destination || drawerIsPresented)
             }
         }
     }
