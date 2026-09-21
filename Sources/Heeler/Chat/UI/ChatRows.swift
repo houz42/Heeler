@@ -882,6 +882,23 @@ private func optionIsCompact(_ label: String) -> Bool {
     label.count <= 24 && !label.contains("\n")
 }
 
+/// Ink that clears the ACCENT FILL in both appearances: white on the
+/// dark light-mode accent (#22644D, 7.0:1), the prototype's dark ink
+/// #17251D on the light mint dark accent (#9ACFB2, 9.06:1) — white on
+/// #9ACFB2 measures 1.76:1 (illegible; v2 accent review finding). The
+/// prototype pairs its dark accent with `--primary` #17251d
+/// (`.dark .primary,.dark .send{color:#17251d}`). One production
+/// definition: the pending card's Confirm renders this, and the
+/// contrast regression test resolves the SAME token — reverting the
+/// foreground to white would fail the test.
+enum ChatAccentInk {
+    static let color = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0x17 / 255, green: 0x25 / 255, blue: 0x1D / 255, alpha: 1)
+            : .white
+    })
+}
+
 /// The redesigned pending-question card: border + paper + eyebrow with
 /// step dots + question + quiet instruction + adaptive options. Short
 /// labels flow compactly; descriptive labels stack full-width.
@@ -915,18 +932,11 @@ struct AgentPendingQuestionCard: View {
     private var accent: Color {
         Color.accentColor
     }
-    /// Ink that clears the ACCENT FILL in both appearances: white on
-    /// the dark light-mode accent (#22644D), the prototype's dark ink
-    /// #17251D on the light mint dark accent (#9ACFB2) — white on
-    /// #9ACFB2 measures 1.76:1 (illegible; review finding). The
-    /// prototype pairs its dark accent with `--primary` #17251d
-    /// (`.dark .primary,.dark .send{color:#17251d}`).
+    /// Ink that clears the ACCENT FILL in both appearances — see
+    /// `ChatAccentInk` (the one production definition, also what the
+    /// contrast regression test resolves).
     private var onAccentInk: Color {
-        Color(UIColor { traits in
-            traits.userInterfaceStyle == .dark
-                ? UIColor(red: 0x17 / 255, green: 0x25 / 255, blue: 0x1D / 255, alpha: 1)
-                : .white
-        })
+        ChatAccentInk.color
     }
     /// The selected option's fill: the soft accent wash with PRIMARY
     /// ink (the prototype's `.option.selected` — background var(--soft),

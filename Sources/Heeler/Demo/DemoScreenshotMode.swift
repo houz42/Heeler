@@ -45,6 +45,7 @@
             static func fromArguments() -> Route {
                 let arguments = ProcessInfo.processInfo.arguments
                 if arguments.contains(chatPendingAskLaunchArgument) { return .chatPendingAsk }
+                if arguments.contains(hostListLaunchArgument) { return .hostList }
                 if arguments.contains(hostDetailProbingLaunchArgument) { return .hostDetailProbing }
                 if arguments.contains(hostFormLaunchArgument) { return .hostForm }
                 return .none
