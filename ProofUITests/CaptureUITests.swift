@@ -457,8 +457,6 @@ extension CaptureUITests {
             row.tap()
             opened = true
         } else {
-            // Fall back to any row that renders the host metadata;
-            // scroll first if the keyboard obscured things.
             app.swipeDown()
             Thread.sleep(forTimeInterval: 1)
             let anyRow = app.buttons.matching(
@@ -476,9 +474,7 @@ extension CaptureUITests {
             "persistent composer missing on the proof agent")
         // HOLD: >90s idle-and-subscribed on the same channel.
         Thread.sleep(forTimeInterval: 100)
-        // REQUEST on the (same, un-reconnected) channel — the unique
-        // marker is run-scoped so the broker record is independently
-        // matchable to THIS evidence file.
+        // REQUEST on the held channel — the marker is run-scoped.
         let marker = "channel-continuity \(runID)"
         field.tap()
         Thread.sleep(forTimeInterval: 1)
@@ -486,14 +482,85 @@ extension CaptureUITests {
         let send = app.buttons["Send"].firstMatch
         XCTAssertTrue(send.waitForExistence(timeout: 5), "send button")
         send.tap()
-        Thread.sleep(forTimeInterval: 12)
-        // The reply must render in the transcript.
-        let reply = app.staticTexts.matching(
-            NSPredicate(format: "label CONTAINS 'channel-continuity'")).firstMatch
-        XCTAssertTrue(reply.waitForExistence(timeout: 10), "reply missing")
-        // The durable per-run artifact IS the isolated /tmp evidence
-        // file (the committed evidence/a1-continuity/ set is copied by
-        // the runner); the rolling xcresult Logs are not relied on.
+        // The ASSISTANT reply — the user's sent text carries the
+        // 'Reply exactly:' prefix; the assistant's reply does NOT.
+        let assistantReply = app.staticTexts.matching(
+            NSPredicate(
+                format: "label CONTAINS %@ AND NOT label CONTAINS 'Reply exactly'",
+                marker)).firstMatch
+        XCTAssertTrue(
+            assistantReply.waitForExistence(timeout: 150),
+            "assistant reply missing (the user echo is not a reply)")
+        Thread.sleep(forTimeInterval: 2)
+
+        // THE ASSERTION, read from the evidence file: the prompt left
+        // on the HELD channel and NO connect/finish/close occurred
+        // between the request and its response completion.
+        let lines = (try? String(
+            contentsOfFile: evidencePath, encoding: .utf8)) ?? ""
+        let events = lines.split(separator: "\n").compactMap {
+            try? JSONSerialization.jsonObject(with: Data($0.utf8))
+                as? [String: Any]
+        }
+        XCTAssertFalse(events.isEmpty, "no evidence events recorded")
+
+        func detail(_ e: [String: Any]) -> String { e["detail"] as? String ?? "" }
+        func kind(_ e: [String: Any]) -> String { e["event"] as? String ?? "" }
+        func chan(_ e: [String: Any]) -> String { e["channel"] as? String ?? "" }
+
+        // All channels that completed setup (history.open on them).
+        let setupChannels = Set(events.filter {
+            kind($0) == "channel.request" && detail($0).hasPrefix("history.open")
+        }.map(chan))
+        XCTAssertFalse(setupChannels.isEmpty, "no negotiated channel")
+        let heldChannel = setupChannels.sorted().first!
+
+        // The prompt.send + its response.
+        let promptLines = events.filter {
+            kind($0) == "channel.request" && detail($0).hasPrefix("prompt.send")
+        }
+        XCTAssertFalse(promptLines.isEmpty, "no prompt.send recorded")
+        let promptChannel = chan(promptLines[0])
+        let promptIndex = events.firstIndex {
+            ($0["seq"] as? Int ?? -1) == (promptLines[0]["seq"] as? Int ?? -1)
+        } ?? 0
+        let responseLines = events.filter {
+            kind($0) == "channel.request.responseComplete"
+                && detail($0).hasPrefix("prompt.send")
+        }
+        XCTAssertFalse(
+            responseLines.isEmpty, "prompt.send never completed a response")
+
+        // NO teardown events on ANY channel from the held channel's
+        // negotiated-ready (its setup completion) through the prompt
+        // response — the FULL continuity assertion (hold + send).
+        let responseIndex = events.firstIndex {
+            kind($0) == "channel.request.responseComplete"
+                && detail($0).hasPrefix("prompt.send")
+        } ?? events.count - 1
+        let setupIndex = events.lastIndex {
+            kind($0) == "channel.request.responseComplete"
+                && detail($0).hasPrefix("history.open")
+                && chan($0) == heldChannel
+        } ?? 0
+        let window = events[setupIndex...responseIndex]
+        let teardownInWindow = window.filter {
+            kind($0) == "channel.connect" || kind($0) == "channel.close"
+                || kind($0) == "channel.finish"
+        }
+        XCTAssertTrue(
+            teardownInWindow.isEmpty,
+            "channel teardown inside the continuity window: \(teardownInWindow)")
+
+        // The request went out on the HELD channel.
+        XCTAssertEqual(
+            promptChannel, heldChannel,
+            "the prompt left on a different channel than the held one")
+
+        // Harness teardown: the app terminates AFTER the assertions —
+        // any later file lines are teardown-era and clearly outside
+        // this window by sequence number.
+        app.terminate()
     }
 }
 

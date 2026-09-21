@@ -63,7 +63,8 @@ actor AgentChatChannel {
     /// hello; anything but a matching welcome fails closed
     /// (unsupportedProtocol) — no legacy arm.
     func connect() async throws {
-        AgentChatChannelEvidence.connect()
+        AgentChatChannelEvidence.record(
+            channel: evidenceChannelID, event: "channel.connect")
         let slot = WelcomeSlot()
         welcomeSlot = slot
         startReader()
@@ -221,6 +222,21 @@ actor AgentChatChannel {
     }
 
     private func finish(_ event: AgentChatChannelEvent.kind) {
+        // TEMP audit: every finish cause is a first-class evidence
+        // event (close/EOF/error/cancel/protocol, with the reason).
+        let cause: String
+        switch event {
+        case .disconnected(let reason):
+            cause = "disconnected | \(reason ?? "<nil>")"
+        case .protocolError(let detail):
+            cause = "protocolError | \(detail)"
+        default:
+            cause = "\(event)"
+        }
+        AgentChatChannelEvidence.record(
+            channel: evidenceChannelID,
+            event: "channel.finish",
+            detail: cause)
         // Temporary capture diagnostics (runtime root-cause audit): the
         // raw disconnect reason + teardown caller, written to the
         // signal file (UI-test app stdout is not passthrough).
@@ -249,15 +265,21 @@ actor AgentChatChannel {
         continuation.finish()
     }
 
+    /// TEMP audit: this channel instance's id (reconnects are
+    /// distinguishable in the evidence trace).
+    let evidenceChannelID = UUID().uuidString
+
     // MARK: Requests
 
     /// Sends one request and awaits its result value.
     func request(_ request: AgentChatRequest) async throws -> JSONValue {
-        AgentChatChannelEvidence.request(
-            request.method,
-            params: (try? String(
-                data: JSONEncoder().encode(request),
-                encoding: .utf8)) ?? nil)
+        let paramsJSON = (try? String(
+            data: JSONEncoder().encode(request.params ?? .object([:])),
+            encoding: .utf8)) ?? "{}"
+        AgentChatChannelEvidence.record(
+            channel: evidenceChannelID,
+            event: "channel.request",
+            detail: "\(request.method) | \(paramsJSON)")
         guard !closed else { throw AgentChatError.connectionClosed }
         let id = "c\(nextID)"
         nextID &+= 1
@@ -287,8 +309,33 @@ actor AgentChatChannel {
             timer.cancel()
             if pending[id] === slot { pending[id] = nil }
         }
-        try await send(bytes)
-        return try await slot.awaitResult()
+        do {
+            try await send(bytes)
+            AgentChatChannelEvidence.record(
+                channel: evidenceChannelID,
+                event: "channel.request.writeSuccess",
+                detail: request.method)
+        } catch {
+            AgentChatChannelEvidence.record(
+                channel: evidenceChannelID,
+                event: "channel.request.writeFailed",
+                detail: "\(request.method) | \(String(describing: error))")
+            throw error
+        }
+        do {
+            let result = try await slot.awaitResult()
+            AgentChatChannelEvidence.record(
+                channel: evidenceChannelID,
+                event: "channel.request.responseComplete",
+                detail: request.method)
+            return result
+        } catch {
+            AgentChatChannelEvidence.record(
+                channel: evidenceChannelID,
+                event: "channel.request.responseFailed",
+                detail: "\(request.method) | \(String(describing: error))")
+            throw error
+        }
     }
 
     private final class PendingSlot: @unchecked Sendable {
@@ -352,7 +399,10 @@ actor AgentChatChannel {
 
     func close() async {
         guard !closed else { return }
-        AgentChatChannelEvidence.close(reason: "closed by client")
+        AgentChatChannelEvidence.record(
+            channel: evidenceChannelID,
+            event: "channel.close",
+            detail: "closed by client")
         closed = true
         readerTask?.cancel()
         try? await pipe.close(timeout: .seconds(2))
