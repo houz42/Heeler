@@ -177,4 +177,61 @@ struct AgentStatusPaletteTests {
             "Color.accentColor must resolve to #22644D in light mode")
     }
 
+    /// Review finding (v2 accent round 1): white on the DARK-mode accent
+    /// #9ACFB2 measures 1.76:1 — illegible. The pending card's Confirm
+    /// button must therefore pair the accent fill with an ADAPTIVE ink:
+    /// white on the light-mode accent (#22644D, 7.0:1), the prototype's
+    /// dark ink #17251D on the dark-mode accent (9.06:1). Selected
+    /// options use the WASH fill with primary ink (10.8:1 dark,
+    /// 13.97:1 light), never white-on-accent.
+    @Test func onAccentInkStaysLegibleOnBothAccents() throws {
+        let accent = try #require(UIColor(named: "AccentColor"))
+        let wash = try #require(UIColor(named: "AccentWash"))
+        let darkInk = UIColor(red: 0x17 / 255, green: 0x25 / 255, blue: 0x1D / 255, alpha: 1)
+        let white = UIColor.white
+
+        func rgba(_ color: UIColor, _ style: UIUserInterfaceStyle) -> [CGFloat] {
+            var r: CGFloat = 0; var g: CGFloat = 0; var b: CGFloat = 0; var a: CGFloat = 0
+            color.resolvedColor(with: UITraitCollection(userInterfaceStyle: style))
+                .getRed(&r, green: &g, blue: &b, alpha: &a)
+            return [r, g, b, a]
+        }
+
+        // Confirm's fill/ink pairing, both appearances.
+        #expect(
+            Self.contrastRatio(rgba(white, .light), rgba(accent, .light)) >= 4.5,
+            "white must clear 4.5:1 on the light accent #22644D")
+        #expect(
+            Self.contrastRatio(rgba(darkInk, .dark), rgba(accent, .dark)) >= 4.5,
+            "the dark ink #17251D must clear 4.5:1 on the dark accent #9ACFB2")
+        // The regression this test exists for: white on the dark accent.
+        #expect(
+            Self.contrastRatio(rgba(white, .dark), rgba(accent, .dark)) < 4.5,
+            "white on #9ACFB2 must be recognized as illegible (1.76:1)")
+
+        // Selected options: primary ink (white in dark, black in light)
+        // on the WASH fill, both appearances.
+        #expect(
+            Self.contrastRatio(rgba(white, .dark), rgba(wash, .dark)) >= 4.5,
+            "white must clear 4.5:1 on the dark wash #2D4236")
+        #expect(
+            Self.contrastRatio(
+                rgba(UIColor.black, .light), rgba(wash, .light)) >= 4.5,
+            "black must clear 4.5:1 on the light wash #EAF2ED")
+    }
+
+    private static func contrastRatio(_ a: [CGFloat], _ b: [CGFloat]) -> CGFloat {
+        let (lighter, darker) = luminance(a) > luminance(b)
+            ? (luminance(a), luminance(b)) : (luminance(b), luminance(a))
+        return (lighter + 0.05) / (darker + 0.05)
+    }
+
+    private static func luminance(_ components: [CGFloat]) -> CGFloat {
+        let linear = components.prefix(3).map { channel in
+            channel <= 0.04045
+                ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+    }
+
 }

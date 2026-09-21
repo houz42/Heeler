@@ -36,30 +36,37 @@ final class AccentProofTests: XCTestCase {
 
     // MARK: Chat (author line + composer affordances)
 
-    func testChatAccentSurfaces() {
-        let app = UITestApp.launchDemo(.console)
-        let cell = app.buttons.matching(
-            NSPredicate(format: "label CONTAINS %@", UITestFixtures.chatAgentRow)
-        ).firstMatch
-        XCTAssertTrue(
-            cell.waitForExistence(timeout: UITestTimeouts.standard),
-            "the chat-bearing agent row must be tappable")
-        cell.tap()
+    func testChatPendingAskAccentSurfaces() {
+        // The demo chat on this tip is honestly broker-only ("No
+        // Transcript"); the pending-ask demo route mounts the real
+        // ChatScreen with a multi-select ask, so the accent-bearing
+        // chat chrome (author line, Confirm, selected chip) is
+        // capturable without a backend. Real user flow: tap an option
+        // (Confirm enables), then capture.
+        let app = UITestApp.launchDemo(.chatPendingAsk)
 
+        // The assistant article's author line (accent chrome).
+        let author = app.staticTexts["Heeler · omp"].firstMatch
         XCTAssertTrue(
-            app.waitForPushedDetail(),
-            "tapping the chat-bearing row must open the pushed detail")
-        // The transcript's known fixture line (the same one the reading
-        // proofs wait on) proves the chat surface mounted; the assistant
-        // articles' accent author lines ride the screenshot.
-        let message = app.staticTexts.matching(
-            NSPredicate(format: "label CONTAINS %@", "Long-run verification notes")
-        ).firstMatch
+            author.waitForExistence(timeout: UITestTimeouts.standard),
+            "the author line must render on the pending-ask chat surface")
+
+        // Select an option — a real tap through the real store path.
+        let option = app.buttons["Answer: Unit suite"].firstMatch
         XCTAssertTrue(
-            message.waitForExistence(timeout: UITestTimeouts.standard),
-            "the demo transcript must render on the chat surface")
+            option.waitForExistence(timeout: UITestTimeouts.standard),
+            "the pending ask's option must be tappable")
+        option.tap()
+
+        // Confirm must now exist and be ENABLED (selection present).
+        let confirm = app.buttons["Confirm answers"].firstMatch
+        XCTAssertTrue(
+            confirm.waitForExistence(timeout: UITestTimeouts.standard),
+            "Confirm must render once an option is selected")
+        XCTAssertTrue(confirm.isEnabled, "Confirm must be enabled with a selection")
+
         captureScreenshot(
-            app, "accent-chat-\(Self.appearance)", lifetime: .keepAlways)
+            app, "accent-chat-pending-\(Self.appearance)", lifetime: .keepAlways)
     }
 
     // MARK: Settings (picker + link rows)

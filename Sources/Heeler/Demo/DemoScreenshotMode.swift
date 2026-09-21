@@ -37,11 +37,15 @@
             /// The Host detail page stopped on the pick between two
             /// reachable addresses.
             case hostDetailPick
+            /// The chat surface with a pending multi-select ask — the
+            /// accent-bearing pending-card capture surface (Confirm
+            /// button + selected-option chip). v2 accent proofs.
+            case chatPendingAsk
 
             static func fromArguments() -> Route {
                 let arguments = ProcessInfo.processInfo.arguments
+                if arguments.contains(chatPendingAskLaunchArgument) { return .chatPendingAsk }
                 if arguments.contains(hostDetailProbingLaunchArgument) { return .hostDetailProbing }
-                if arguments.contains(hostListLaunchArgument) { return .hostList }
                 if arguments.contains(hostFormLaunchArgument) { return .hostForm }
                 return .none
             }
@@ -50,6 +54,7 @@
         static let hostFormLaunchArgument = "--demo-host-form"
         static let hostListLaunchArgument = "--demo-host-list"
         static let hostDetailProbingLaunchArgument = "--demo-host-detail-probing"
+        static let chatPendingAskLaunchArgument = "--demo-chat-pending-ask"
         static let hostDetailPickLaunchArgument = "--demo-host-detail-pick"
 
         /// The multi-path demo Host: the same machine over LAN and VPN.
@@ -142,7 +147,63 @@
                 multipathDetail(midProbe: true)
             case .hostDetailPick:
                 multipathDetail(midProbe: false)
+            case .chatPendingAsk:
+                chatPendingAskSurface
             }
+        }
+
+        /// The pending-ask capture surface: ChatScreen with a blocked
+        /// agent, one assistant article (the accent author line), and
+        /// a multi-select pending interaction — the v2 accent
+        /// proofs tap an option and capture Confirm + the selected
+        /// chip in BOTH appearances. The composer's deliver/onAsk
+        /// callbacks are wired so the surface is interactive (a tap
+        /// really selects; Confirm really fires) without any backend.
+        private var chatPendingAskSurface: some View {
+            ChatScreen(
+                paneID: "demo:pending",
+                agentName: "ios-polish",
+                state: .blocked,
+                content: ChatContent(
+                    messages: [
+                        ChatMessage(
+                            id: UUID(),
+                            role: .assistant,
+                            blocks: [
+                                .text(
+                                    """
+                                    I found two candidate fixes for the \
+                                    attach retry path. I need your call on \
+                                    which risks to take before I continue.
+                                    """)
+                            ])
+                    ],
+                    pending: [
+                        PendingInteraction(
+                            id: "demo-ask",
+                            question: "",
+                            options: [],
+                            questions: [
+                                PendingAskQuestion(
+                                    id: "q0",
+                                    text: "Which checks should run before the retry lands?",
+                                    multi: true,
+                                    options: [
+                                        PendingAskQuestion.Option(
+                                            id: "o0", label: "Unit suite"),
+                                        PendingAskQuestion.Option(
+                                            id: "o1", label: "UI smoke"),
+                                        PendingAskQuestion.Option(
+                                            id: "o2", label: "Device build"),
+                                    ])
+                            ])
+                    ]),
+                initialLevel: .l0,
+                changeLevel: { _, _ in },
+                deliver: { _ in },
+                authorLabel: "Heeler · omp",
+                onAskAnswer: { _, _ in },
+                onAskCancel: { _ in })
         }
 
         private var consoleRoot: some View {

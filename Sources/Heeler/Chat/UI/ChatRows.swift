@@ -915,6 +915,25 @@ struct AgentPendingQuestionCard: View {
     private var accent: Color {
         Color.accentColor
     }
+    /// Ink that clears the ACCENT FILL in both appearances: white on
+    /// the dark light-mode accent (#22644D), the prototype's dark ink
+    /// #17251D on the light mint dark accent (#9ACFB2) — white on
+    /// #9ACFB2 measures 1.76:1 (illegible; review finding). The
+    /// prototype pairs its dark accent with `--primary` #17251d
+    /// (`.dark .primary,.dark .send{color:#17251d}`).
+    private var onAccentInk: Color {
+        Color(UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0x17 / 255, green: 0x25 / 255, blue: 0x1D / 255, alpha: 1)
+                : .white
+        })
+    }
+    /// The selected option's fill: the soft accent wash with PRIMARY
+    /// ink (the prototype's `.option.selected` — background var(--soft),
+    /// never white-on-accent).
+    private var accentWash: Color {
+        Color("AccentWash")
+    }
     private var cardBorder: Color {
         Color(red: 0xC4 / 255.0, green: 0xD5 / 255.0, blue: 0xCB / 255.0)
     }
@@ -981,7 +1000,7 @@ struct AgentPendingQuestionCard: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 11)
                         .background(accent, in: RoundedRectangle(cornerRadius: 9))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(onAccentInk)
                 }
                 .disabled(selectedOptionIds.isEmpty)
                 .accessibilityLabel("Confirm answers")
@@ -1020,9 +1039,9 @@ struct AgentPendingQuestionCard: View {
                 .multilineTextAlignment(.leading)
                 .padding(.horizontal, 11)
                 .frame(maxWidth: fullWidth ? .infinity : nil, minHeight: 44, alignment: .leading)
-                .background(selected ? accent : Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
-                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(optionBorder, lineWidth: 1))
-                .foregroundStyle(selected ? .white : .primary)
+                .background(selected ? accentWash : Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(selected ? accent : optionBorder, lineWidth: 1))
+                .foregroundStyle(.primary)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Answer: \(label)")
