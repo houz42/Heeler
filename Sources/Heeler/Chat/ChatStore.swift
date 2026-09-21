@@ -39,6 +39,45 @@ struct ChatTranscriptReader: Sendable {
     let readChunk: @Sendable (_ path: String, _ offset: UInt64, _ length: Int)
         async throws -> Data
 
+    /// Reads the LAST up-to-`tailBytes` of the transcript, plus the
+    /// remote byte offset the returned data begins at (0 for files
+    /// smaller than the tail). The transport exposes no stat, so the
+    /// EOF is located with bounded 1-byte probes (doubling then
+    /// binary) — a file at or under the tail size costs one read and
+    /// no probes. Replaces the old read-whole-on-start, which blocked
+    /// on the ENTIRE transcript over the wire before anything
+    /// rendered (the long-session hang the user hit).
+    func readTail(
+        _ path: String, tailBytes: Int
+    ) async throws -> (data: Data, remoteStart: UInt64) {
+        // Small file? One bounded read settles it (and gives the size).
+        let first = try await readChunk(path, 0, tailBytes + 1)
+        if first.count <= tailBytes {
+            return (first, 0)
+        }
+        // The file is bigger than the tail: locate the exact size by
+        // doubling, then binary — each probe is a 1-byte read.
+        var low = UInt64(tailBytes)   // known non-empty offset
+        var high = low * 2            // first candidate unknown
+        while try await !readChunk(path, high, 1).isEmpty {
+            low = high
+            high = high * 2
+        }
+        // Binary search in (low, high].
+        while low + 1 < high {
+            let mid = (low + high) / 2
+            if try await !readChunk(path, mid, 1).isEmpty {
+                low = mid
+            } else {
+                high = mid
+            }
+        }
+        let size = high
+        let start = size - UInt64(tailBytes)
+        let data = try await readChunk(path, start, tailBytes)
+        return (data, start)
+    }
+
     init(
         readWhole: @escaping @Sendable (_ path: String) async throws -> Data,
         readChunk: @escaping @Sendable (
@@ -150,6 +189,11 @@ final class ChatStore {
     private(set) var content = ChatContent()
     /// True while the window has older pages the user has not loaded.
     private(set) var hasOlder = false
+    /// The remote byte offset the cache file's FIRST byte maps to (the
+    /// tail-window seed): >0 means older history exists remotely
+    /// beyond the cache's top, and loadOlder extends the cache
+    /// backwards before paging.
+    private(set) var cachedRemoteStart: UInt64 = 0
     /// True while a `loadOlder()` fetch is in flight.
     private(set) var isLoadingOlder = false
 
@@ -211,6 +255,7 @@ final class ChatStore {
         hasOlder = false
         isLoadingOlder = false
         cachedBytes = 0
+        cachedRemoteStart = 0
 
         self.statusUpdates = statusUpdates
 
@@ -225,8 +270,12 @@ final class ChatStore {
         phase = .loading
 
         do {
-            let data = try await reader.readWhole(agentSession.value)
-            try seedCache(with: data)
+            // Tail-window load (the long-session fix): bounded bytes on
+            // the wire — the last windowBytes, not the whole transcript.
+            let tail = try await reader.readTail(
+                agentSession.value, tailBytes: jsonlTranscriptWindowBytes)
+            cachedRemoteStart = tail.remoteStart
+            try seedCache(with: tail.data)
             try openWindowAndParse()
             phase = .ready
             armPoll()
@@ -242,15 +291,42 @@ final class ChatStore {
     /// already reaches byte 0.
     @discardableResult
     func loadOlder() async -> [String]? {
-        guard let window, phase == .ready, window.hasOlder else { return nil }
+        guard let window, phase == .ready else { return nil }
         isLoadingOlder = true
         defer { isLoadingOlder = false }
         do {
-            guard let older = try window.loadOlder() else {
-                hasOlder = false
+            if !window.hasOlder {
+                // The cache's top is the window's top: either the remote
+                // file's start (nothing older exists) or the tail-seed's
+                // start (older history is REMOTE). Extend the cache
+                // backwards by one window, reopen, and let the NEXT
+                // loadOlder page through the extended cache — no
+                // inventing history when the remote start is byte 0.
+                guard cachedRemoteStart > 0, let transcriptPath else {
+                    hasOlder = false
+                    return nil
+                }
+                let fetchStart = max(0, cachedRemoteStart - UInt64(jsonlTranscriptWindowBytes))
+                let fetchLength = Int(cachedRemoteStart - fetchStart)
+                guard fetchLength > 0 else { hasOlder = false; return nil }
+                let olderBytes = try await reader.readChunk(
+                    transcriptPath, fetchStart, fetchLength)
+                guard !olderBytes.isEmpty else {
+                    cachedRemoteStart = 0
+                    hasOlder = false
+                    return nil
+                }
+                try prependCache(with: olderBytes)
+                cachedRemoteStart = fetchStart
+                try openWindowAndParse()
+                hasOlder = window.hasOlder || cachedRemoteStart > 0
                 return nil
             }
-            hasOlder = window.hasOlder
+            guard let older = try window.loadOlder() else {
+                hasOlder = cachedRemoteStart > 0
+                return nil
+            }
+            hasOlder = window.hasOlder || cachedRemoteStart > 0
             content = Self.mergeOlderLines(older, into: content)
             return older
         } catch {
@@ -258,6 +334,19 @@ final class ChatStore {
             // state and the next call retries.
             return nil
         }
+    }
+
+    /// Prepend `data` to the cache file (the backwards extension of
+    /// the tail window): rewrite as new+existing so the window,
+    /// reopened over the cache, sees the longer file. Idempotent
+    /// merges keep the content correct across the reopen.
+    private func prependCache(with data: Data) throws {
+        let url = Self.cacheURL(hostID: hostID, paneID: paneID, base: cachesDirectory())
+        let existing = try Data(contentsOf: url)
+        var combined = data
+        combined.append(existing)
+        try combined.write(to: url, options: .atomic)
+        cachedBytes = UInt64(combined.count)
     }
 
     // MARK: Internals

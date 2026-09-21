@@ -706,3 +706,76 @@ extension CaptureUITests {
         }
     }
 }
+
+extension CaptureUITests {
+    /// Device-crash reproduction (Copy / photo-picker completion /
+    /// file-import completion all crash on the phone at the same
+    /// boundary). Drives all three on the REAL proof host from the
+    /// sim: if the sim reproduces, the crash log lands in the Mac's
+    /// DiagnosticReports; if not, we fall back to instrumentation.
+    func testDeviceCrashReproduction() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["HEELER_AGENT_CHAT_PROOF_SESSION_FILE"]
+            = "/Users/jhou/.cache/agent-chat-ui-proof/history.jsonl"
+        app.launch()
+        Thread.sleep(forTimeInterval: 14)
+        let row = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'Tailscale'")).firstMatch
+        var opened = false
+        if row.waitForExistence(timeout: 8), row.isHittable {
+            row.tap()
+            opened = true
+        } else {
+            let anyRow = app.buttons.matching(
+                NSPredicate(format: "label CONTAINS 'Mac Proof'")).firstMatch
+            XCTAssertTrue(anyRow.waitForExistence(timeout: 10), "agent row missing")
+            anyRow.tap()
+        }
+        Thread.sleep(forTimeInterval: 4)
+        _ = opened
+        let field = app.textViews.firstMatch
+        XCTAssertTrue(
+            field.waitForExistence(timeout: 25),
+            "persistent composer missing on the proof agent")
+
+        // 1. COPY via the message-actions rail on a REAL message.
+        let article = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS 'Native chat stream verified'")).firstMatch
+        if article.exists {
+            article.tap()
+            Thread.sleep(forTimeInterval: 1)
+            let copy = app.buttons["Copy"].firstMatch
+            if copy.waitForExistence(timeout: 5) {
+                copy.tap()
+                Thread.sleep(forTimeInterval: 3)
+                // Alive after the copy?
+                XCTAssertTrue(field.exists, "app crashed on Copy (article)")
+                screenshot("crash-after-copy-alive")
+            }
+        }
+
+        // 2. PHOTO PICKER completion via the + menu.
+        let add = app.buttons["Add"].firstMatch
+        if add.waitForExistence(timeout: 5) {
+            add.tap()
+            Thread.sleep(forTimeInterval: 1)
+            screenshot("crash-add-menu")
+            let addImage = app.buttons.matching(
+                NSPredicate(format: "label CONTAINS 'image' OR label CONTAINS 'Image'")).firstMatch
+            if addImage.waitForExistence(timeout: 4) {
+                addImage.tap()
+                Thread.sleep(forTimeInterval: 3)
+                screenshot("crash-photos-picker")
+                // The system photo picker: tap the first cell.
+                let firstPhoto = app.cells.firstMatch
+                if firstPhoto.waitForExistence(timeout: 5) {
+                    firstPhoto.tap()
+                    Thread.sleep(forTimeInterval: 7)
+                }
+                Thread.sleep(forTimeInterval: 3)
+                XCTAssertTrue(field.exists, "app crashed on photo completion")
+                screenshot("crash-after-picker")
+            }
+        }
+    }
+}
