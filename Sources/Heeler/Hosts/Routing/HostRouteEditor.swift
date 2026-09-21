@@ -141,6 +141,12 @@ struct HostRouteEditorView: View {
         updated.routeEligibility = draft.makeEligibility()
         do {
             try catalog.update(updated)
+            // ADOPTION: saving priority/eligibility is the moment the
+            // Host becomes v2. Any legacy v1 preferred pick is cleared
+            // ONCE, here — from now on the SAVED ORDER governs, so a
+            // stale pick can never dial a lower row first and contradict
+            // the order the user just dragged.
+            PreferredAddressStore(hostID: host.id).clear()
             dismiss()
         } catch {
             saveFailed = true

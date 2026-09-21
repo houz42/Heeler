@@ -43,9 +43,20 @@
             /// The Host detail page with the v2 route surface pinned
             /// manually after a reach failure.
             case hostRoutesPinnedFailed
+            /// The Host detail page with the v2 route surface pinned to
+            /// a HEALTHY route (visible Return-to-automatic, no offer).
+            case hostRoutesPinnedHealthy
+            /// The v2 priority/eligibility editor.
+            case hostRouteEditor
 
             static func fromArguments() -> Route {
                 let arguments = ProcessInfo.processInfo.arguments
+                if arguments.contains(hostRouteEditorLaunchArgument) {
+                    return .hostRouteEditor
+                }
+                if arguments.contains(hostRoutesPinnedHealthyLaunchArgument) {
+                    return .hostRoutesPinnedHealthy
+                }
                 if arguments.contains(hostRoutesPinnedFailedLaunchArgument) {
                     return .hostRoutesPinnedFailed
                 }
@@ -64,6 +75,32 @@
         static let hostRoutesLaunchArgument = "--demo-host-routes"
         static let hostRoutesPinnedFailedLaunchArgument =
             "--demo-host-routes-pinned-failed"
+        static let hostRoutesPinnedHealthyLaunchArgument =
+            "--demo-host-routes-pinned-healthy"
+        static let hostRouteEditorLaunchArgument = "--demo-host-route-editor"
+
+        /// MainActor holder for the pinned-healthy route demo's
+        /// process-lifetime state: the host fixture and the catalog are
+        /// created ONCE so every body evaluation of the demo root hands
+        /// the wrapper and the route store the SAME catalog instance —
+        /// pin/unpin round-trips through one catalog, exactly like
+        /// production.
+        @MainActor
+        enum RoutedPinnedHealthyDemo {
+            /// Multipath Host pinned to its Bonjour path with a
+            /// Wi-Fi-only gate on the VPN path — a genuine v2 Host for
+            /// the capture and the unpin proof.
+            static let host: Host = {
+                var host = multipathHost
+                host.routeSelection = .manual(address: "CMF79KM7YF.local")
+                host.routeEligibility = ["studio.vpn.example": .wifiOnly]
+                return host
+            }()
+
+            /// The catalog containing the demo Hosts plus this one.
+            static let catalog: HostStore = HostStore(
+                volatileHosts: DemoScreenshotFixture.hosts + [host])
+        }
 
         /// The multi-path demo Host: the same machine over LAN and VPN.
         static let multipathHost = Host(
@@ -159,6 +196,32 @@
                 routedDetail(pinnedFailed: false)
             case .hostRoutesPinnedFailed:
                 routedDetail(pinnedFailed: true)
+            case .hostRoutesPinnedHealthy:
+                routedDetailPinnedHealthy()
+            case .hostRouteEditor:
+                NavigationStack {
+                    HostRouteEditorView(
+                        host: DemoScreenshotMode.multipathHost,
+                        catalog: hosts)
+                }
+            }
+        }
+
+        /// The healthy-pinned v2 surface: the pin's route is reachable
+        /// and in use, Return to automatic visible, no failure offer.
+        /// The multipath Host is ADDED to a PROCESS-LIFETIME demo
+        /// catalog (created once — a body re-eval must never hand the
+        /// wrapper a fresh catalog while the store still holds the old
+        /// one) so pin / unpin round-trips exactly like production: the
+        /// wrapper re-reads the catalog on every store change and
+        /// re-keys the detail view by the CURRENT host value — the same
+        /// `.id(host)` pattern ConsoleView uses for catalog edits.
+        private func routedDetailPinnedHealthy() -> some View {
+            let catalog = DemoScreenshotMode.RoutedPinnedHealthyDemo.catalog
+            return NavigationStack {
+                DemoCatalogRoutedDetail(
+                    catalog: catalog,
+                    hostID: DemoScreenshotMode.RoutedPinnedHealthyDemo.host.id)
             }
         }
 
@@ -309,6 +372,45 @@
             }
         }
     }
+
+        /// Catalog-driven host detail for the v2 route captures: reads
+        /// the CURRENT host from the catalog on every store change and
+        /// re-keys the detail by the host VALUE — the production
+        /// `.id(host)` pattern — so a pin / unpin round-trips through
+        /// the catalog and the surface re-renders from the saved state.
+        private struct DemoCatalogRoutedDetail: View {
+            let catalog: HostStore
+            let hostID: Host.ID
+
+            var body: some View {
+                if let host = catalog.hosts.first(where: { $0.id == hostID }) {
+                    HostOnboardingView(
+                        host: host,
+                        catalog: catalog,
+                        connectedAddress:
+                            host.pinnedRouteAddress == "CMF79KM7YF.local"
+                                ? "CMF79KM7YF.local"
+                                : nil,
+                        store: HostOnboardingStore(
+                            host: host,
+                            connector: DemoMultipathConnector(),
+                            preferredAddresses: PreferredAddressStore(
+                                defaults: DemoScreenshotFixture.makeDefaults(),
+                                hostID: host.id)),
+                        routeStatusStore: HostRouteStatusStore(
+                            host: host,
+                            network: .wifi,
+                            prober: HostRouteProber(
+                                connector: DemoMultipathConnector(),
+                                credentials: HostCredentialsProvider(
+                                    deviceKeys: DeviceKeyStore(secrets: DemoSecretStore()),
+                                    secrets: DemoSecretStore()),
+                                knownHosts: InMemoryKnownHostsStore()),
+                            catalog: catalog))
+                        .id(host)
+                }
+            }
+        }
 
     private struct DemoMultipathConnector: TransportConnector {
         func connect(settings: SSHTransportSettings) async throws -> any Transport {

@@ -68,30 +68,33 @@ struct HostOnboardingView: View {
                     value: store.host.authMethod == .deviceKey ? "Device Key" : "Password")
             }
 
-            // Every way this Host can be reached — one line per address
-            // with its probe state. When the Host has v2 route settings,
-            // the Routes section below owns SELECTION and the inline Use
-            // control here exists only for the probe sweep's own
-            // question (several paths answered — which one to connect
-            // through now), never as a second standing selector. A Host
-            // saved before route settings existed keeps its v1
-            // selector here, migration-honest: one selection source
-            // per Host, chosen by what that Host actually carries.
-            Section {
-                ForEach(store.orderedCandidates, id: \.self) { address in
-                    candidateRow(address)
+            // Every way this Host can be reached — the v1 address list.
+            // A Host that has NOT adopted v2 route settings keeps this
+            // list with its standing selector, migration-honest. A v2
+            // Host does NOT show it at all: the Routes section below is
+            // the single authority and single readout (per-address probe
+            // states render there, on the selection rows). The ONLY
+            // surviving fragment is the preflight sweep's own pending
+            // question — when several paths answered during onboarding,
+            // that pick must stay answerable wherever it appears; it
+            // renders inside the Routes section for v2 Hosts.
+            if !hostHasV2RouteSettings {
+                Section {
+                    ForEach(store.orderedCandidates, id: \.self) { address in
+                        candidateRow(address)
+                    }
+                    if store.pendingAddressChoice != nil {
+                        Text(
+                            "Several paths answered. Use the one you want — "
+                                + "it becomes this Host's preferred path.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Addresses")
+                } footer: {
+                    Text(addressSectionFooter)
                 }
-                if store.pendingAddressChoice != nil {
-                    Text(
-                        "Several paths answered. Use the one you want — "
-                            + "it becomes this Host's preferred path.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            } header: {
-                Text("Addresses")
-            } footer: {
-                Text(addressSectionFooter)
             }
 
             // The design contract's failure offer: on a connect failure
@@ -103,7 +106,7 @@ struct HostOnboardingView: View {
             // the offer is the most important state on the page.
             if showsRouteFailureOffer {
                 Section {
-                    if store.host.isManuallyRouted {
+                    if liveRouteHost.isManuallyRouted {
                         Button {
                             returnToAutomatic()
                         } label: {
@@ -115,7 +118,7 @@ struct HostOnboardingView: View {
                             Task { await tryRoute(address) }
                         } label: {
                             Label(
-                                "Try \(store.host.routeName(for: address))",
+                                "Try \(liveRouteHost.routeName(for: address))",
                                 systemImage: "arrow.triangle.branch")
                         }
                     }
@@ -292,26 +295,37 @@ struct HostOnboardingView: View {
         }
         .task {
             // The route surface renders its statuses from the store's
-            // probe results; build it on arrival so the section is live
-            // (and the foreground recheck has something to refresh)
-            // rather than waiting for the first Check routes press.
-            _ = ensureRouteStore()
+            // probe results; build it on arrival, sync the CURRENT
+            // network hint, and observe the shared monitor's coalesced
+            // path changes (unconnected re-evaluation with the policy's
+            // cooldown backoff — the recovery path for the
+            // all-ineligible off-Wi-Fi state).
+            let routeStore = ensureRouteStore()
+            routeStore.syncNetworkFromMonitor()
+            routeStore.observePathChanges { [connectionStatus] in
+                connectionStatus == .connected
+            }
             if store.phase == .idle {
                 await store.runChecks()
             }
         }
         // The design contract's recheck on foreground: when the app
-        // returns, re-run one bounded sweep of the configured routes so
-        // the statuses on screen are current. No continuous background
-        // promises — this fires because the user came back.
+        // returns, re-run one bounded evaluation — sweep, cooldown
+        // backoff, and (when unconnected and a route answers) a redial
+        // through the same dial plan every real dial uses. No
+        // continuous background promises — this fires because the user
+        // came back.
         .onChange(of: scenePhase, { previous, phase in
             // A real foreground return only: the launch transition into
             // active is not a recheck trigger.
             guard previous != .active, phase == .active, let routeStore,
                 !routeStore.isProbing
             else { return }
-            let isConnected = connectionStatus == .connected
-            Task { await routeStore.recheckOnForeground(isConnected: isConnected) }
+            Task {
+                await routeStore.evaluateAndMaybeRedial { [connectionStatus] in
+                    connectionStatus == .connected
+                }
+            }
         })
     }
 
@@ -423,7 +437,7 @@ struct HostOnboardingView: View {
             // route with a visible way back to Automatic. A pin is a
             // first-class state the user can see and change — never a
             // hidden swipe.
-            if store.host.isManuallyRouted {
+            if liveRouteHost.isManuallyRouted {
                 Button {
                     returnToAutomatic()
                 } label: {
@@ -439,6 +453,33 @@ struct HostOnboardingView: View {
                 .foregroundStyle(.secondary)
             ForEach(routeAddresses, id: \.self) { address in
                 routeRow(address)
+            }
+            // The preflight sweep's own question, rendered here for v2
+            // Hosts (the Addresses list is gone): when several paths
+            // answered, the pick stays answerable on the route rows
+            // themselves.
+            if store.pendingAddressChoice != nil {
+                Text(
+                    "Several paths answered. Use the one you want — "
+                        + "it becomes this Host's preferred path.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            // The all-ineligible waiting state: every route is gated
+            // out under the CURRENT network hint (e.g. Wi-Fi-only
+            // routes while off Wi-Fi) — nothing dials until the network
+            // changes; the surface says so instead of failing silently.
+            if routeAddresses.allSatisfy({ address in
+                !HostRoutePolicy.isEligible(
+                    liveRouteHost.routeEligibility(for: address),
+                    network: routeNetwork)
+            }) {
+                Label(
+                    "No route is eligible under the current network. "
+                        + "Nothing dials until the network changes.",
+                    systemImage: "wifi.slash")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
             }
 
             Button {
@@ -483,18 +524,28 @@ struct HostOnboardingView: View {
     /// owns the page. Hosts saved before route settings existed keep
     /// the v1 selector, migration-honest.
     private var hostHasV2RouteSettings: Bool {
-        !store.host.routeEligibility.isEmpty || store.host.isManuallyRouted
+        !liveRouteHost.routeEligibility.isEmpty || liveRouteHost.isManuallyRouted
+    }
+
+    /// The CURRENT catalog host for route metadata: route selection,
+    /// eligibility, and pinned state are catalog state — a pin or unpin
+    /// saved through the catalog is visible on the very next render,
+    /// without waiting for the view's host value to be rebuilt. Falls
+    /// back to the view's own host for previews and hosts not in a
+    /// catalog.
+    private var liveRouteHost: Host {
+        catalog.hosts.first(where: { $0.id == store.host.id }) ?? store.host
     }
 
     /// The saved routes in priority order: the Host's candidate addresses,
     /// presented under their labels.
     private var routeAddresses: [String] {
-        store.host.candidateAddresses
+        liveRouteHost.candidateAddresses
     }
 
     private var routeSelectionTitle: String {
-        if let pinned = store.host.pinnedRouteAddress {
-            return store.host.routeName(for: pinned)
+        if let pinned = liveRouteHost.pinnedRouteAddress {
+            return liveRouteHost.routeName(for: pinned)
         }
         return "Automatic"
     }
@@ -524,7 +575,7 @@ struct HostOnboardingView: View {
         }
         guard standingFailure.isReachFailure else { return false }
         let routeCount = routeAddresses.count
-        return routeCount > 1 || (routeCount == 1 && store.host.isManuallyRouted)
+        return routeCount > 1 || (routeCount == 1 && liveRouteHost.isManuallyRouted)
     }
 
     /// The store's explanation when a check could not even start.
@@ -536,7 +587,7 @@ struct HostOnboardingView: View {
     /// route the failed dial went through (the pinned route, or the
     /// live/last-tried address), in priority order.
     private var tryAnotherRouteChoices: [String] {
-        let failedAddress = store.host.pinnedRouteAddress ?? connectedAddress
+        let failedAddress = liveRouteHost.pinnedRouteAddress ?? connectedAddress
         return routeAddresses.filter { $0 != failedAddress }
     }
 
@@ -567,29 +618,32 @@ struct HostOnboardingView: View {
             Image(systemName: routeIcon(address))
                 .foregroundStyle(routeIconTint(address))
             VStack(alignment: .leading, spacing: 2) {
-                Text(store.host.routeName(for: address))
+                Text(liveRouteHost.routeName(for: address))
                     .font(.subheadline)
                 Text(address)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                // When this route's verdict was checked — the honest
+                // freshness readout; absent until a probe runs.
+                if let checkedAt = routeProbeResults[address]?.checkedAt {
+                    Text("Checked \(checkedAt.formatted(date: .omitted, time: .shortened))")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
             }
             Spacer()
             Text(routeStatus(for: address))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             // The visible selection control (not swipe-only): Use pins
-            // this route; the pinned row offers Use elsewhere / back to
-            // Automatic instead of a dead Use on itself.
-            if store.host.pinnedRouteAddress == address {
-                Menu {
-                    Button("Return to automatic") {
-                        returnToAutomatic()
-                    }
-                } label: {
-                    Image(systemName: "pin.fill")
-                        .foregroundStyle(.blue)
-                }
-                .accessibilityLabel("Pinned to \(store.host.routeName(for: address))")
+            // The pinned row shows its pin; the section-top control
+            // owns unpin. (No Menu here: a menu's options surface as
+            // buttons in the accessibility tree and would shadow the
+            // section-top unpin control for UI tests and VoiceOver.)
+            if liveRouteHost.pinnedRouteAddress == address {
+                Image(systemName: "pin.fill")
+                    .foregroundStyle(.blue)
+                    .accessibilityLabel("Pinned to \(liveRouteHost.routeName(for: address))")
             } else {
                 Button("Use") {
                     pinRoute(address)
@@ -601,7 +655,7 @@ struct HostOnboardingView: View {
     }
 
     private func routeIcon(_ address: String) -> String {
-        if store.host.pinnedRouteAddress == address {
+        if liveRouteHost.pinnedRouteAddress == address {
             return "pin.fill"
         }
         if connectedAddress == address {
@@ -616,7 +670,7 @@ struct HostOnboardingView: View {
     }
 
     private func routeIconTint(_ address: String) -> Color {
-        if store.host.pinnedRouteAddress == address {
+        if liveRouteHost.pinnedRouteAddress == address {
             return .blue
         }
         if connectedAddress == address {
@@ -667,6 +721,7 @@ struct HostOnboardingView: View {
     /// "Choose manually": pins a route — the pin is never silently
     /// overridden; a pinned dial never fails over.
     private func pinRoute(_ address: String) {
+        routeError = nil
         do {
             try ensureRouteStore().pin(address)
         } catch {
@@ -676,10 +731,11 @@ struct HostOnboardingView: View {
 
     /// "Return to automatic": drops the pin.
     private func returnToAutomatic() {
+        routeError = nil
         do {
             try ensureRouteStore().returnToAutomatic()
         } catch {
-            routeError = "The route selection could not be saved."
+            routeError = "The route selection could not be saved. (\(error))"
         }
     }
 

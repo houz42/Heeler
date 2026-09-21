@@ -41,9 +41,12 @@ enum UITestApp {
         /// The Host detail page with the v2 route surface (Automatic,
         /// probed statuses).
         case hostRoutes
-        /// The Host detail page with the v2 route surface pinned manually
-        /// after a reach failure.
         case hostRoutesPinnedFailed
+        /// The Host detail page with the v2 route surface pinned to a
+        /// HEALTHY route (visible Return-to-automatic, no offer).
+        case hostRoutesPinnedHealthy
+        /// The v2 priority/eligibility editor.
+        case hostRouteEditor
         /// Console + Settings sheet presented on launch.
         case settings
 
@@ -60,6 +63,10 @@ enum UITestApp {
                 return ["--demo-screenshots", "--demo-host-routes"]
             case .hostRoutesPinnedFailed:
                 return ["--demo-screenshots", "--demo-host-routes-pinned-failed"]
+            case .hostRoutesPinnedHealthy:
+                return ["--demo-screenshots", "--demo-host-routes-pinned-healthy"]
+            case .hostRouteEditor:
+                return ["--demo-screenshots", "--demo-host-route-editor"]
             case .settings:
                 return ["--demo-screenshots", "--demo-screenshots-settings"]
             }

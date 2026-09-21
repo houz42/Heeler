@@ -500,7 +500,102 @@ struct HostRouteSelectionTests {
                 isConnected: false, network: .nonWiFi))
     }
 
+    @Test func allIneligibleMeansZeroDialsNeverAResurrection() async throws {
+        // The critical finding: EVERY route Wi-Fi-only, off Wi-Fi — the
+        // plan is empty and the dial path makes ZERO connector calls.
+        // The excluded primary is never resurrected.
+        HostRouteNetworkSnapshot.update(.nonWiFi)
+        defer { HostRouteNetworkSnapshot.update(.offline) }
+        let host = makeHost(
+            eligibility: [
+                "lan.example": .wifiOnly,
+                "tailnet.example": .wifiOnly,
+                "vpn.example": .wifiOnly,
+            ])
+        let connector = DialRecordingConnector(reachable: ["lan.example"])
+
+        let settings = SSHTransportSettings(
+            host: host,
+            credentials: .password("pw"),
+            hostKeyPolicy: HostKeyPolicy(knownHosts: InMemoryKnownHostsStore()) { _ in false })
+        await #expect(throws: TransportError.self) {
+            _ = try await SSHTransportConnector.dialFirstReachable(
+                settings: settings,
+                perCandidateTimeout: .seconds(4),
+                dialOne: { try await connector.connect(settings: $0) },
+                onCandidate: nil)
+        }
+
+        // ZERO dials: nothing was resurrected, nothing was attempted.
+        #expect(await connector.dialed == [])
+        // The empty plan itself, at the seam.
+        #expect(settings.dialCandidates.isEmpty)
+    }
+
+    @Test func adoptedV2SavedOrderBeatsALegacyPreferredPick() throws {
+        // The reviewer's precedence finding: a stale v1 preferred pick
+        // must NOT override the SAVED priority of an adopted-v2 Host.
+        // Adoption (editor save / pin) cleared the pick; the dial plan
+        // for a v2 Host reads the saved order only.
+        let suiteName = "HostRouteSelectionTests.v2order.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let host = makeHost(
+            eligibility: ["lan.example": .wifiOnly],
+            selection: .automatic)
+        // A stale v1 pick for the LAST route somehow survived adoption.
+        PreferredAddressStore(defaults: defaults, hostID: host.id)
+            .prefer("vpn.example", candidates: host.candidateAddresses)
+
+        // Adopted v2: the saved order governs regardless of the pick.
+        let plan = HostRoutePolicy.dialPlan(host: host, network: .wifi)
+        #expect(plan == ["lan.example", "tailnet.example", "vpn.example"])
+
+        // And at the real dial seam, the same precedence: build the
+        // settings for the adopted host and check the dial candidates
+        // follow the SAVED order, not the stale pick.
+        HostRouteNetworkSnapshot.update(.wifi)
+        defer { HostRouteNetworkSnapshot.update(.offline) }
+        let settings = SSHTransportSettings(
+            host: host,
+            credentials: .password("pw"),
+            hostKeyPolicy: HostKeyPolicy(knownHosts: InMemoryKnownHostsStore()) { _ in false })
+        #expect(
+            settings.dialCandidates
+                == ["lan.example", "tailnet.example", "vpn.example"])
+    }
+
     // MARK: Support
+
+    // MARK: Unpin round-trip probe (view-side control backing)
+
+    @Test func unpinRoundTripsThroughTheCatalog() throws {
+        let host = makeHost(selection: .manual(address: "tailnet.example"))
+        let catalog = HostStore(volatileHosts: [host])
+        let store = HostRouteStatusStore(
+            host: host,
+            network: .wifi,
+            prober: HostRouteProber(
+                connector: UnreachableProbeConnector(),
+                credentials: HostCredentialsProvider(
+                    deviceKeys: DeviceKeyStore(secrets: InMemorySecretStore()),
+                    secrets: InMemorySecretStore()),
+                knownHosts: InMemoryKnownHostsStore()),
+            catalog: catalog)
+
+        try store.returnToAutomatic()
+
+        let updated = try #require(
+            catalog.hosts.first(where: { $0.id == host.id }))
+        #expect(updated.routeSelection == .automatic)
+    }
+
+    private struct UnreachableProbeConnector: TransportConnector {
+        func connect(settings: SSHTransportSettings) async throws -> any Transport {
+            throw TransportError.sshUnreachable(detail: "never dials")
+        }
+    }
 
     private func makeDefaults() throws -> (UserDefaults, cleanup: () -> Void) {
         let suiteName = "hm-route-selection-\(UUID().uuidString)"

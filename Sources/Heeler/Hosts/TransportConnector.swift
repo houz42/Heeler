@@ -169,20 +169,35 @@ extension SSHTransportSettings {
     /// a manual pin narrows the dial to exactly the pinned address
     /// (honored VERBATIM, never silently overridden; its failure is the
     /// pinned route's failure, surfaced as Try another route / Return to
-    /// automatic, never a failover); under Automatic the dialing order is
-    /// the saved priority (the v1 preferred pick still leads it) with
-    /// eligibility gates applied against the CURRENT network hint — a
-    /// Wi-Fi-only route is skipped while the path does not classify as
-    /// Wi-Fi. The hint is a gate, not a proof; the dial remains the real
-    /// proof.
+    /// automatic, never a failover). Under Automatic the dialing order is
+    /// the SAVED PRIORITY (see below) with eligibility gates applied
+    /// against the CURRENT network hint — a Wi-Fi-only route is skipped
+    /// while the path does not classify as Wi-Fi. The hint is a gate, not
+    /// a proof; the dial remains the real proof.
+    ///
+    /// All-ineligible means NO DIAL: the empty plan yields zero dial
+    /// candidates, so `dialFirstReachable` fails before a single
+    /// connector call — a route the user gated out is never silently
+    /// resurrected. The route surface shows the waiting state.
+    ///
+    /// Legacy precedence: a Host that has NOT adopted v2 route settings
+    /// keeps the v1 preferred-pick lead (v1 semantics unchanged); an
+    /// adopted-v2 Host's SAVED ORDER governs — the legacy pick was
+    /// cleared once, at adoption (editor save / pin), so a stale pick
+    /// can never contradict the user's drag order.
     init(host: Host, credentials: SSHCredentials, hostKeyPolicy: HostKeyPolicy) {
-        let preferred = PreferredAddressStore(hostID: host.id)
         let network = HostRouteNetworkSnapshot.current
-        // Automatic's order: the v1 preferred pick leads the saved
-        // priority; eligibility prunes. A pin replaces the whole list.
-        let automaticOrder = preferred
-            .preferredOrder(
-                forCandidates: host.candidateAddresses, pinnedAddress: nil)
+        let adoptedV2 = !host.routeEligibility.isEmpty || host.isManuallyRouted
+        let savedPriority =
+            if adoptedV2 {
+                host.candidateAddresses
+            } else {
+                PreferredAddressStore(hostID: host.id)
+                    .preferredOrder(
+                        forCandidates: host.candidateAddresses,
+                        pinnedAddress: nil)
+            }
+        let automaticOrder = savedPriority
             .filter { address in
                 HostRoutePolicy.isEligible(
                     host.routeEligibility(for: address), network: network)
@@ -194,7 +209,8 @@ extension SSHTransportSettings {
                 automaticOrder
             }
         self.init(
-            host: order.first ?? host.address,
+            // Empty stays empty: the all-ineligible plan dials nothing.
+            host: order.first ?? "",
             candidateAddresses: Array(order.dropFirst()),
             port: host.port,
             username: host.username,
