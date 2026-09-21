@@ -105,15 +105,16 @@ struct AgentDetailsRootView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            if let context = store.context,
-                let window = context.contextWindow, window > 0 {
+            switch (store.context, store.context?.contextWindow, store.context?.tokens) {
+            case (.some(let context), .some(let window), .some(let tokens))
+                where window > 0:
                 VStack(alignment: .leading, spacing: 4) {
-                    (Text(CompactTokenNumber.format(context.tokens ?? 0))
+                    (Text(CompactTokenNumber.format(tokens))
                         .font(.system(.title2, design: .rounded).weight(.semibold))
                         + Text("  /  \(CompactTokenNumber.format(window)) tokens")
                             .font(.caption)
                             .foregroundStyle(.secondary))
-                    ProgressView(value: Double(context.tokens ?? 0), total: Double(window))
+                    ProgressView(value: Double(tokens), total: Double(window))
                         .tint(.accentColor)
                     HStack {
                         Text(remaining)
@@ -123,7 +124,20 @@ struct AgentDetailsRootView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 }
-            } else {
+            case (.some(let context), .some(let window), _) where window > 0:
+                // The window is reported but the USED count is not: show
+                // the window, with usage honestly unknown — never 0.
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Usage not reported")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Window: \(CompactTokenNumber.format(window)) tokens")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(freshness)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            default:
                 AgentDetailsNotice(
                     "This agent does not expose context usage. Transcript length is not a substitute.",
                     style: .neutral)
@@ -153,8 +167,12 @@ struct AgentDetailsRootView: View {
     }
 
     private var freshness: String {
-        if isOffline { return "Last known · offline" }
-        return "Updated on last response"
+        switch (store.freshness, isOffline) {
+        case (.unknown, _): return "Not reported"
+        case (_, true): return "Last known · offline"
+        case (.stale, _): return "Last known · refresh unavailable"
+        case (.live, _): return "Updated on last response"
+        }
     }
 
     // MARK: Facts
@@ -435,8 +453,18 @@ struct AgentModelRow: View {
     }
 
     private var capabilities: String {
-        let input = model.supportsImages ? "Text + images" : "Text only"
-        let reasoning = model.reasoning == true ? "Reasoning" : "No reasoning"
+        let input: String
+        if let kinds = model.input {
+            input = kinds.contains("image") ? "Text + images" : "Text only"
+        } else {
+            input = "Input not reported"
+        }
+        let reasoning: String
+        switch model.reasoning {
+        case .some(true): reasoning = "Reasoning"
+        case .some(false): reasoning = "No reasoning"
+        case .none: reasoning = "Reasoning unknown"
+        }
         return "\(input) · \(reasoning)"
     }
 
@@ -575,8 +603,14 @@ struct AgentModelDetailsCard: View {
             row("Context window", model.contextWindow.map { "\(CompactTokenNumber.format($0)) tokens" } ?? "Not reported")
             row("Maximum output", model.maxTokens.map { "\(CompactTokenNumber.format($0)) tokens" } ?? "Not reported")
             row("Input", model.input?.joined(separator: ", ") ?? "Not reported")
-            row("Reasoning", model.reasoning == true ? "Supported" : "Not supported")
-            row("Tool calling", model.supportsComputerUse == true ? "Supported" : "Not reported")
+            row(
+                "Reasoning",
+                model.reasoning == true ? "Supported"
+                    : model.reasoning == false ? "Not supported" : "Not reported")
+            row(
+                "Tool calling",
+                model.supportsTools == true ? "Supported"
+                    : model.supportsTools == false ? "Not supported" : "Not reported")
             row(
                 "Input / output",
                 model.cost.flatMap { c in
@@ -653,7 +687,15 @@ struct AgentCompactionHistoryView: View {
 
     var body: some View {
         List {
-            if store.compactions.isEmpty {
+            if !store.compactionsQueried {
+                Section {
+                    AgentDetailsNotice(
+                        "The compaction history has not been read yet for this agent.",
+                        style: .neutral)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                }
+            } else if store.compactions.isEmpty {
                 Section {
                     AgentDetailsNotice(
                         "No compactions recorded for this agent.",
@@ -811,13 +853,13 @@ enum AgentDetailsPreviewFixture {
                     id: "balanced", provider: "example", name: "Balanced model",
                     contextWindow: 200_000, maxTokens: 32_000,
                     input: ["text", "image"], reasoning: true,
-                    supportsComputerUse: false,
+                    supportsTools: true,
                     cost: .init(input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75)),
                 workingDirectory: "/home/developer/work/heeler",
                 compactions: [
                     AgentCompactionEvent(
                         id: "c3", time: Date(),
-                        trigger: "Automatic · snapcompact",
+                        trigger: "snapcompact",
                         tokensBefore: 171_200, tokensAfter: 58_300,
                         summary: "## Goal\nRedesign the agent conversation while preserving native runtime behavior."),
                 ])

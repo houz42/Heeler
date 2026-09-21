@@ -36,7 +36,9 @@ struct AgentCatalogModel: Decodable, Sendable, Equatable, Identifiable {
     var maxTokens: Int?
     var input: [String]?
     var reasoning: Bool?
-    var supportsComputerUse: Bool?
+    /// Tool-calling support — only present when the catalog reports it;
+    /// absent renders Not reported (never guessed).
+    var supportsTools: Bool?
     var cost: Cost?
 
     struct Cost: Decodable, Sendable, Equatable {
@@ -54,6 +56,8 @@ struct AgentCatalogModel: Decodable, Sendable, Equatable, Identifiable {
 
     var supportsImages: Bool { input?.contains("image") == true }
 
+    /// Identifiable uses the COMPOSITE provider/id — the raw id alone
+    /// collides across providers and would merge picker rows.
     var identity: String { wireID }
 }
 
@@ -110,6 +114,8 @@ enum AgentIso8601: @unchecked Sendable {
 struct AgentCompactionEvent: Sendable, Equatable, Identifiable {
     let id: String
     var time: Date?
+    /// The trigger as actually recorded (e.g. the compaction method) —
+    /// never prefixed with a guessed "Automatic".
     var trigger: String?
     var tokensBefore: Int?
     var tokensAfter: Int?
@@ -132,7 +138,9 @@ enum AgentChatCompactionCollector: Sendable {
             var event = AgentCompactionEvent(id: id)
             if let occurredAt { event.time = AgentIso8601.parse(occurredAt) }
             if let trigger, !trigger.isEmpty {
-                event.trigger = "Automatic · \(trigger)"
+                // The recorded method is the actual trigger; no invented
+                // Automatic/Manual classification.
+                event.trigger = trigger
             }
             event.tokensBefore = before
             event.tokensAfter = after

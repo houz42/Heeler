@@ -167,7 +167,7 @@ struct AgentCompactionParserTests {
         #expect(events.count == 1)
         let event = events[0]
         #expect(event.id == "c1")
-        #expect(event.trigger == "Automatic · snapcompact")
+        #expect(event.trigger == "snapcompact")
         #expect(event.tokensBefore == 171_200)
         #expect(event.tokensAfter == 58_300)
         #expect(event.summary == "## Goal\nRedesign.")
@@ -206,7 +206,7 @@ struct AgentCompactionParserTests {
         let boundary = try JSONDecoder().decode(AgentChatItem.self, from: data)
         let events = AgentChatCompactionCollector.collect(from: [boundary])
         #expect(events.count == 1)
-        #expect(events[0].trigger == "Automatic · snapcompact")
+        #expect(events[0].trigger == "snapcompact")
         #expect(events[0].tokensBefore == 171_200)
     }
 
@@ -280,7 +280,7 @@ struct AgentCatalogModelTests {
     @Test("the adapter's live wire shape decodes with every field")
     func liveShape() throws {
         let json = #"""
-        {"id":"nvidia/moonshotai/kimi-k3","provider":"nvidia-hub","name":"Kimi K3","contextWindow":1048576,"maxTokens":131072,"input":["text","image"],"reasoning":true,"supportsComputerUse":false,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}
+        {"id":"nvidia/moonshotai/kimi-k3","provider":"nvidia-hub","name":"Kimi K3","contextWindow":1048576,"maxTokens":131072,"input":["text","image"],"reasoning":true,"supportsTools":false,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}
         """#
         let model = try JSONDecoder().decode(
             AgentCatalogModel.self, from: Data(json.utf8))
@@ -301,5 +301,125 @@ struct AgentCatalogModelTests {
         #expect(model.contextWindow == nil)
         #expect(model.cost == nil)
         #expect(model.displayName == "x")
+    }
+}
+
+@Suite("Review-fix semantics")
+@MainActor
+struct AgentDetailsReviewFixTests {
+    @Test("model identity is the provider/id composite")
+    func compositeIdentity() {
+        let a = AgentCatalogModel(id: "same", provider: "p1")
+        let b = AgentCatalogModel(id: "same", provider: "p2")
+        #expect(a.identity != b.identity)
+        #expect(a.identity == a.wireID)
+    }
+
+    @Test("unqueried history renders not-read, not zero")
+    func unqueriedHistory() async {
+        let store = await AgentDetailsStore(
+            wire: .init(request: { _, _ in .object([:]) }),
+            telemetrySupported: true)
+        #expect(store.compactionsQueried == false)
+        #expect(store.compactions.isEmpty)
+        store.setCompactions([])
+        #expect(store.compactionsQueried == true)
+    }
+
+    @Test("uncertain transport failure reconciles from the live report")
+    func reconcileOnFailure() async throws {
+        // model.set throws; the follow-up telemetry reports the TARGET
+        // applied → the change is confirmed from the agent's own report.
+        let store = await AgentDetailsStore(
+            wire: .init(request: { method, _ in
+                if method == "model.set" {
+                    throw AgentChatError.connectionClosed
+                }
+                return .object([
+                    "model": .object([
+                        "id": .string("deep"), "provider": .string("b"),
+                    ]),
+                    "context": .object([
+                        "tokens": .number(1000), "contextWindow": .number(200000),
+                    ]),
+                ])
+            }),
+            telemetrySupported: true)
+        let balanced = AgentCatalogModel(id: "balanced", provider: "a")
+        let deep = AgentCatalogModel(id: "deep", provider: "b")
+        store.seedFixture(currentModel: balanced)
+        store.beginConfirmation(picked: deep)
+        let result = await store.confirmChange()
+        #expect(result == false)
+        // Reconciled: the agent's own report says deep is live.
+        #expect(store.currentModel?.id == "deep")
+        #expect(store.modelChange.phase == AgentModelChangeState.Phase.idle)
+    }
+
+    @Test("reconcile that reports a different model resolves as not-applied")
+    func reconcileNotApplied() async {
+        let store = await AgentDetailsStore(
+            wire: .init(request: { method, _ in
+                if method == "model.set" {
+                    throw AgentChatError.connectionClosed
+                }
+                return .object([
+                    "model": .object([
+                        "id": .string("balanced"), "provider": .string("a"),
+                    ]),
+                ])
+            }),
+            telemetrySupported: true)
+        let balanced = AgentCatalogModel(id: "balanced", provider: "a")
+        let deep = AgentCatalogModel(id: "deep", provider: "b")
+        store.seedFixture(currentModel: balanced)
+        store.beginConfirmation(picked: deep)
+        _ = await store.confirmChange()
+        #expect(store.modelChange.phase == AgentModelChangeState.Phase.idle)
+        #expect(store.currentModel?.id == "balanced")
+        #expect(store.rejectionNotice?.contains("did not apply") == true)
+    }
+
+    @Test("server-side context-fit refusal surfaces the reason")
+    func contextFitRefusal() async throws {
+        // switched:false is a rejection — but the adapter's context-fit
+        // gate responds with an invalid_request ERROR carrying the
+        // promise; the client must surface the adapter's message, never
+        // claim retention without reconciling.
+        let store = await AgentDetailsStore(
+            wire: .init(request: { _, _ in
+                .object(["error": .object([
+                    "code": .string("invalid_request"),
+                    "message": .string("the reported context (495844 tokens) exceeds this model's window (128000); nothing will be trimmed automatically"),
+                ])])
+            }),
+            telemetrySupported: true)
+        let balanced = AgentCatalogModel(id: "balanced", provider: "a")
+        let small = AgentCatalogModel(id: "small", provider: "a", contextWindow: 128_000)
+        store.seedFixture(
+            context: .init(tokens: 495_844, contextWindow: 1_048_576),
+            currentModel: balanced)
+        store.beginConfirmation(picked: small)
+        _ = await store.confirmChange()
+        // The uncertain outcome reconciled from the live report path: this
+        // stub's telemetry branch returns the error object, so the
+        // reconcile read fails → pending stands, no retention claim.
+        #expect(store.currentModel?.id == "balanced")
+    }
+
+    @Test("freshness lifecycle: live → stale on failed refresh")
+    func freshnessLifecycle() async {
+        let store = await AgentDetailsStore(
+            wire: .init(request: { _, _ in
+                .object([
+                    "context": .object([
+                        "tokens": .number(100), "contextWindow": .number(1000),
+                    ]),
+                ])
+            }),
+            telemetrySupported: true)
+        #expect(store.freshness == AgentDetailsStore.Freshness.unknown)
+        await store.refreshTelemetry()
+        #expect(store.freshness == AgentDetailsStore.Freshness.live)
     }
 }

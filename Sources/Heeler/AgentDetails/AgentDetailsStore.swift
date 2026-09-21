@@ -23,8 +23,23 @@ import Observation
 final class AgentDetailsStore {
     // MARK: Observable state
 
+    /// How the currently-shown context/model values were obtained and
+    /// when — the inspector's freshness copy is derived from THIS, never
+    /// assumed.
+    enum Freshness: Sendable, Equatable {
+        /// Nothing has been reported yet (never fetched / not exposed).
+        case unknown
+        /// Reported live on the last successful refresh.
+        case live
+        /// Reported earlier; the latest refresh failed or the host is
+        /// offline — the values are last-known, not current.
+        case stale
+    }
+
     /// The agent's last reported context usage; nil = not reported.
     private(set) var context: AgentTelemetry.Context?
+    /// Freshness of `context` + `currentModel` (see ``Freshness``).
+    private(set) var freshness: Freshness = .unknown
     /// The agent's current model; nil = not reported.
     private(set) var currentModel: AgentCatalogModel?
     /// The agent's working directory; nil = not reported.
@@ -35,6 +50,10 @@ final class AgentDetailsStore {
     private(set) var modelChange = AgentModelChangeState()
     /// The compaction events the transcript exposes (oldest→newest).
     private(set) var compactions: [AgentCompactionEvent] = []
+    /// True once ANY page has delivered its compaction inventory —
+    /// distinguishes "no compactions recorded" from "history not yet
+    /// queried".
+    private(set) var compactionsQueried = false
     /// One-shot rejection notice shown after a failed change.
     private(set) var rejectionNotice: String?
 
@@ -117,9 +136,19 @@ final class AgentDetailsStore {
             if let context = telemetry.context { self.context = context }
             if let model = telemetry.model { currentModel = model }
             if let cwd = telemetry.cwd { workingDirectory = cwd }
+            freshness = .live
+            // A pending change resolves from the live report when the
+            // agent confirms it (cancelled/unverifiable sends reconcile).
+            if case .pending(_, let to) = modelChange.phase,
+                let model = telemetry.model, model.wireID == to.wireID {
+                modelChange.phase = .idle
+                rejectionNotice = nil
+            }
         } catch is CancellationError {
         } catch {
-            // Transient: the last known state stays; the UI labels it.
+            // The last known values stay, labeled stale — never silently
+            // presented as current.
+            if freshness == .live { freshness = .stale }
         }
     }
 
@@ -160,10 +189,16 @@ final class AgentDetailsStore {
         guard case .confirming(let picked) = modelChange.phase else {
             return false
         }
+        // LIVE GATE RECHECK at the decision moment: the state may have
+        // changed between opening the card and confirming.
+        guard case .allowed = modelGate else {
+            rejectionNotice = modelGate.notice
+            modelChange.phase = .idle
+            return false
+        }
         guard let current = currentModel ?? nil else {
-            // No reported current model: still safe to attempt, but the
-            // transition card cannot render — require the agent's own
-            // report first (honest state).
+            // No reported current model: the transition card cannot render
+            // — require the agent's own report first (honest state).
             rejectionNotice = "The agent has not reported its current model."
             modelChange.phase = .idle
             return false
@@ -176,6 +211,7 @@ final class AgentDetailsStore {
             if result.switched {
                 if let model = result.model { currentModel = model }
                 else { currentModel = picked }
+                freshness = .live
                 modelChange.phase = .idle
                 return true
             }
@@ -187,14 +223,51 @@ final class AgentDetailsStore {
             return false
         } catch is CancellationError {
             // A cancelled await leaves pending — the change may still land;
-            // a later telemetry refresh reconciles. Never assume failure.
+            // reconcile() on the next refresh resolves it. Never assume
+            // failure, never assume success.
             return false
         } catch {
-            // Transport failure is NOT a provider rejection: keep pending
-            // copy honest by falling back to the last known model state.
-            modelChange.phase = .idle
-            rejectionNotice = "The change could not be delivered. The previous model is retained."
+            // Transport failure is NOT a provider rejection: the remote
+            // MAY have applied the change. Stay pending and reconcile
+            // from the agent's own report before claiming anything.
+            rejectionNotice = nil
+            await reconcilePendingChange()
             return false
+        }
+    }
+
+    /// Resolves an uncertain pending change from the agent's own current
+    /// report: if the live model IS the target, the change landed
+    /// (confirm it); otherwise the old model is retained (resolve
+    /// pending). An unreadable report leaves pending standing — the
+    /// next refresh retries.
+    func reconcilePendingChange() async {
+        guard case .pending(_, let to) = modelChange.phase else { return }
+        do {
+            let value = try await wire.request("session.telemetry", nil)
+            let telemetry = try Self.decode(AgentTelemetry.self, from: value)
+            if let model = telemetry.model {
+                if model.wireID == to.wireID {
+                    // The agent applied it — the change landed.
+                    currentModel = model
+                    freshness = .live
+                    modelChange.phase = .idle
+                    rejectionNotice = nil
+                } else {
+                    // The agent reports a different model — the target
+                    // did not apply.
+                    currentModel = model
+                    freshness = .live
+                    modelChange.phase = .idle
+                    rejectionNotice =
+                        "The change did not apply. The agent's current model is retained."
+                }
+            }
+            if let context = telemetry.context { self.context = context }
+            if let cwd = telemetry.cwd { workingDirectory = cwd }
+        } catch {
+            // Unverifiable right now: pending stays; the next refresh
+            // retries the reconciliation. No claim either way.
         }
     }
 
@@ -204,11 +277,13 @@ final class AgentDetailsStore {
         context: AgentTelemetry.Context? = nil,
         currentModel: AgentCatalogModel? = nil,
         workingDirectory: String? = nil,
-        compactions: [AgentCompactionEvent] = []
+        compactions: [AgentCompactionEvent] = [],
+        freshness: Freshness = .live
     ) {
         self.context = context
         self.currentModel = currentModel
         self.workingDirectory = workingDirectory
+        self.freshness = freshness
         setCompactions(compactions)
     }
 
@@ -220,9 +295,11 @@ final class AgentDetailsStore {
     // MARK: Compaction history
 
     /// Installs compaction events parsed from the transcript surface.
-    /// Pure seam: the parsing is testable without a store.
+    /// Any install marks the history QUERIED — zero events then means
+    /// "none recorded", not "not looked".
     func setCompactions(_ events: [AgentCompactionEvent]) {
         compactions = events
+        compactionsQueried = true
     }
 
     // MARK: Decoding
@@ -252,7 +329,9 @@ enum AgentCompactionParser {
             var event = AgentCompactionEvent(id: id)
             if let ts = record["timestamp"] as? String { event.time = AgentIso8601.parse(ts) }
             if let method = record["method"] as? String, !method.isEmpty {
-                event.trigger = "Automatic · \(method)"
+                // The recorded method is the actual trigger; no invented
+                // Automatic/Manual classification.
+                event.trigger = method
             }
             if let before = record["tokensBefore"] as? Int { event.tokensBefore = before }
             if let after = record["tokensAfter"] as? Int { event.tokensAfter = after }

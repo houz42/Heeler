@@ -629,6 +629,11 @@ final class AgentChatStore {
     /// item rather than render a partial as complete.
     private func applyPage(_ page: AgentChatPage, replaceRecent: Bool) async {
         var messages: [ChatMessage] = []
+        // The HYDRATED item list: references resolved to their full
+        /// items, everything else as delivered. Both the chat mapping and
+        /// the compaction collector consume THIS list, so a compaction
+        /// that exceeded the page budget still surfaces its measurements.
+        var hydrated: [AgentChatItem] = []
         for item in page.items {
             var mapped = item
             if case .reference(let id, _, _) = item {
@@ -638,6 +643,7 @@ final class AgentChatStore {
                     continue
                 }
             }
+            hydrated.append(mapped)
             switch AgentChatMapper.map(item: mapped) {
             case .message(let message):
                 messages.append(message)
@@ -645,19 +651,23 @@ final class AgentChatStore {
                 continue
             }
         }
-        let results = AgentChatToolResultCollector.collect(from: page.items)
-        // Compaction boundaries ride through to the agent-details
-        // inspector (v2 slice 1); the chat rows themselves still skip
-        // boundaries exactly as before.
-        let compacted = AgentChatCompactionCollector.collect(from: page.items)
+        let results = AgentChatToolResultCollector.collect(from: hydrated)
+        let compacted = AgentChatCompactionCollector.collect(from: hydrated)
         if replaceRecent {
+            // The recent page is authoritative for its OWN window: a
+            // fresh install REPLACES the collected events (older pages
+            // the user has not paged into yet are simply not here).
             compactionEvents = compacted
             NotificationCenter.default.post(name: Self.compactionUpdate, object: self)
             content = ChatContent(messages: messages, toolResults: results)
-            // Older pages arrived after the recent one; their compaction
-            // events are chronologically OLDER — insert at the front.
-            compactionEvents.insert(contentsOf: compacted, at: 0)
         } else {
+            // Older pages arrived after the recent one; their compaction
+            // events are chronologically OLDER — insert at the front,
+            // de-duplicated by id so a re-fetch never doubles a record.
+            var existing = Set(compactionEvents.map { $0.id })
+            let fresh = compacted.filter { !existing.contains($0.id) }
+            compactionEvents.insert(contentsOf: fresh, at: 0)
+            NotificationCenter.default.post(name: Self.compactionUpdate, object: self)
             content.messages.append(contentsOf: messages)
             content.toolResults.append(contentsOf: results)
         }

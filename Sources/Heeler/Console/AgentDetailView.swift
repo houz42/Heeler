@@ -313,7 +313,12 @@ struct AgentDetailView: View {
     /// broker chat store's wire seam.
     @MainActor
     private func buildDetailsIfPossible() {
-        guard details == nil, let brokerChat else { return }
+        guard details == nil else { return }
+        // A pane WITHOUT a broker still opens the inspector — the honest
+        // unsupported state (telemetrySupported false). The wire seam only
+        // works with a live broker store.
+        // LIVE gate closures: console state read at every evaluation,
+        // never a snapshot captured at construction.
         let store = AgentDetailsStore(
             wire: .init(
                 request: { [weak brokerChat] method, params in
@@ -324,10 +329,17 @@ struct AgentDetailView: View {
                         method: method, params: params)
                 },
                 readItem: nil),
-            telemetrySupported: brokerChat.capabilities?.telemetry == true,
-            isAgentWorking: { [detailsIsWorking] in detailsIsWorking },
-            isOffline: { [detailsIsOffline] in detailsIsOffline })
-        store.setCompactions(brokerChat.compactionEvents)
+            telemetrySupported: brokerChat?.capabilities?.telemetry == true,
+            isAgentWorking: { [console, agent] in
+                (console.agents.first { $0.id == agent.id }?.agent.status
+                    ?? agent.agent.status) == .working
+            },
+            isOffline: { [console, agent] in
+                console.hostStatuses[agent.hostID] != .connected
+            })
+        if let brokerChat {
+            store.setCompactions(brokerChat.compactionEvents)
+        }
         details = store
     }
 
@@ -854,6 +866,9 @@ struct AgentDetailView: View {
             Text(openTerminal.closeFailureMessage ?? "")
         }
         .sheet(isPresented: $showsAgentDetails) {
+            // ALWAYS a meaningful root: the live store when built, and an
+            // honest loading root during the one task-hop before
+            // buildDetailsIfPossible lands — never a blank sheet.
             if let details {
                 AgentDetailsRootView(
                     store: details,
@@ -862,6 +877,31 @@ struct AgentDetailView: View {
                     consoleCwd: detailsConsoleCwd,
                     isOffline: detailsIsOffline)
                 .presentationDetents([.large, .medium])
+            } else {
+                NavigationStack {
+                    VStack(spacing: 12) {
+                        ProgressView()
+                        Text("Loading agent details…")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Text(
+                            "Context, model and compaction data come from the agent's live report."
+                        )
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .navigationTitle("Agent details")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { showsAgentDetails = false }
+                        }
+                    }
+                }
+                .presentationDetents([.large, .medium])
+                .task { buildDetailsIfPossible() }
             }
         }
         .onChange(of: brokerChat?.compactionEvents) { _, events in

@@ -757,6 +757,198 @@ extension CaptureUITests {
     }
 }
 
+// TEMP V2 capture harness (review round 2): provisions a Host pointed at
+// the live v2 broker socket, opens the agent, and captures the REAL-UI
+// telemetry surfaces. Reverts with the harness at port time.
+extension CaptureUITests {
+    func testV2AgentDetailsLiveCaptures() throws {
+        let app = XCUIApplication()
+        // The proof session pin so the broker pane matches the live
+        // telemetry registration.
+        app.launchEnvironment["HEELER_AGENT_CHAT_PROOF_SESSION_FILE"]
+            = "/tmp/v2e2e-session.jsonl"
+        app.launch()
+        Thread.sleep(forTimeInterval: 10)
+        // HOSTS: add the live broker host.
+        let menuButton = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'switch destination'")).firstMatch
+        XCTAssertTrue(menuButton.waitForExistence(timeout: 10))
+        menuButton.tap()
+        Thread.sleep(forTimeInterval: 1)
+        let hosts = app.buttons["Hosts"].firstMatch
+        XCTAssertTrue(hosts.waitForExistence(timeout: 5))
+        hosts.tap()
+        Thread.sleep(forTimeInterval: 2)
+        screenshot("live-hosts-page")
+        // Add manually (reuse the established form-filling flow).
+        let manual = app.buttons.matching(NSPredicate(format: "label == 'Add Manually'"))
+            .allElementsBoundByIndex.first(where: { $0.isHittable })
+        if let manual = manual {
+            manual.tap()
+        } else {
+            let plus = app.buttons.matching(
+                NSPredicate(format: "label == 'Add Host' OR label == 'plus'")).firstMatch
+            XCTAssertTrue(plus.waitForExistence(timeout: 10), "add-host control missing")
+            plus.tap()
+        }
+        Thread.sleep(forTimeInterval: 3)
+        func field(_ prompt: String) -> XCUIElement {
+            let hit = app.textFields.matching(
+                NSPredicate(format: "placeholderValue CONTAINS %@", prompt)).firstMatch
+            XCTAssertTrue(hit.waitForExistence(timeout: 5), "field \(prompt) missing")
+            return hit
+        }
+        let name = field("Optional")
+        name.tap(); name.typeText("V2 Live Broker")
+        let user = field("user on the Host")
+        user.tap(); user.typeText("jhou")
+        let route = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'unnamed' OR label CONTAINS 'route'")).firstMatch
+        XCTAssertTrue(route.waitForExistence(timeout: 5), "route row missing")
+        route.tap()
+        Thread.sleep(forTimeInterval: 1)
+        let address = field("host.example.com")
+        address.tap(); address.typeText("192.168.31.71")
+        let routeSave = app.buttons["Save"].firstMatch
+        XCTAssertTrue(routeSave.waitForExistence(timeout: 5))
+        routeSave.tap()
+        Thread.sleep(forTimeInterval: 2)
+        app.swipeUp()
+        Thread.sleep(forTimeInterval: 1)
+        let broker = field("Chat broker socket path")
+        broker.tap(); broker.typeText("/tmp/v2e2e-broker.sock")
+        let save = app.buttons["Save"].firstMatch
+        XCTAssertTrue(save.waitForExistence(timeout: 5))
+        save.tap()
+        Thread.sleep(forTimeInterval: 4)
+        let trust = app.buttons["Trust"].firstMatch
+        if trust.waitForExistence(timeout: 8) { trust.tap() }
+        Thread.sleep(forTimeInterval: 10)
+        screenshot("live-host-connected")
+        // Open the agent (the broker pane matches the pinned session).
+        let row = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'V2 Live Broker ·'")).firstMatch
+        if !row.waitForExistence(timeout: 15) {
+            let anyRow = app.buttons.matching(
+                NSPredicate(format: "label CONTAINS '·'")).firstMatch
+            XCTAssertTrue(anyRow.waitForExistence(timeout: 10), "no agent row after connect")
+            anyRow.tap()
+        } else {
+            row.tap()
+        }
+        Thread.sleep(forTimeInterval: 8)
+        screenshot("live-agent-open")
+        // THE THREE-DOT ENTRY on the chat surface.
+        let menu = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'Agent options'")).firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 8), "three-dot entry missing on chat surface")
+        screenshot("live-entry-chat-surface")
+        menu.tap()
+        Thread.sleep(forTimeInterval: 1)
+        let entry = app.buttons["Agent details"].firstMatch
+        XCTAssertTrue(entry.waitForExistence(timeout: 5))
+        entry.tap()
+        Thread.sleep(forTimeInterval: 3)
+        // REAL-UI TELEMETRY ROOT: the live model + context numbers.
+        screenshot("live-agent-details-telemetry-root")
+        // The three-dot on the TERMINAL surface (dismiss, switch, reopen).
+        let done = app.buttons["Done"].firstMatch
+        if done.waitForExistence(timeout: 5) { done.tap() }
+        Thread.sleep(forTimeInterval: 1)
+        let toggle = app.buttons.matching(
+            NSPredicate(format: "label == 'Show Terminal'")).firstMatch
+        if toggle.waitForExistence(timeout: 5) {
+            toggle.tap()
+            Thread.sleep(forTimeInterval: 3)
+            let termMenu = app.buttons.matching(
+                NSPredicate(format: "label CONTAINS 'Agent options'")).firstMatch
+            XCTAssertTrue(termMenu.waitForExistence(timeout: 8), "three-dot entry missing on terminal surface")
+            screenshot("live-entry-terminal-surface")
+            termMenu.tap()
+            Thread.sleep(forTimeInterval: 1)
+            let termEntry = app.buttons["Agent details"].firstMatch
+            XCTAssertTrue(termEntry.waitForExistence(timeout: 5))
+            termEntry.tap()
+            Thread.sleep(forTimeInterval: 3)
+            screenshot("live-agent-details-from-terminal")
+            let done2 = app.buttons["Done"].firstMatch
+            if done2.waitForExistence(timeout: 5) { done2.tap() }
+            let back = app.buttons.matching(
+                NSPredicate(format: "label == 'Show Chat'")).firstMatch
+            if back.waitForExistence(timeout: 5) { back.tap() }
+        }
+        // MODEL PICKER: reopen, open the Model row.
+        Thread.sleep(forTimeInterval: 2)
+        let menu2 = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'Agent options'")).firstMatch
+        if menu2.waitForExistence(timeout: 8) {
+            menu2.tap()
+            Thread.sleep(forTimeInterval: 1)
+            let entry2 = app.buttons["Agent details"].firstMatch
+            if entry2.waitForExistence(timeout: 5) {
+                entry2.tap()
+                Thread.sleep(forTimeInterval: 2)
+                let modelRow = app.buttons["Model"].firstMatch
+                if modelRow.waitForExistence(timeout: 6) {
+                    modelRow.tap()
+                    Thread.sleep(forTimeInterval: 5)
+                    screenshot("live-model-list")
+                    // Search narrows the list.
+                    let search = app.textFields.firstMatch
+                    if search.waitForExistence(timeout: 5) {
+                        search.tap()
+                        search.typeText("kimi")
+                        Thread.sleep(forTimeInterval: 3)
+                        screenshot("live-model-search")
+                    }
+                    // Pick a result → confirm card.
+                    let kimi = app.buttons.matching(
+                        NSPredicate(format: "label CONTAINS 'Kimi K3'")).firstMatch
+                    if kimi.waitForExistence(timeout: 8) {
+                        kimi.tap()
+                        Thread.sleep(forTimeInterval: 3)
+                        screenshot("live-model-confirm-card")
+                        let confirm = app.buttons["Confirm change"].firstMatch
+                        if confirm.waitForExistence(timeout: 5) {
+                            confirm.tap()
+                            Thread.sleep(forTimeInterval: 3)
+                            screenshot("live-model-pending")
+                            Thread.sleep(forTimeInterval: 6)
+                            screenshot("live-model-outcome")
+                        }
+                    }
+                }
+            }
+        }
+        // Compaction history + record.
+        Thread.sleep(forTimeInterval: 2)
+        let menu3 = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'Agent options'")).firstMatch
+        if menu3.waitForExistence(timeout: 8) {
+            menu3.tap()
+            Thread.sleep(forTimeInterval: 1)
+            let entry3 = app.buttons["Agent details"].firstMatch
+            if entry3.waitForExistence(timeout: 5) {
+                entry3.tap()
+                Thread.sleep(forTimeInterval: 2)
+                let compactions = app.buttons["Compactions"].firstMatch
+                if compactions.waitForExistence(timeout: 6) {
+                    compactions.tap()
+                    Thread.sleep(forTimeInterval: 3)
+                    screenshot("live-compaction-history")
+                    let record = app.buttons.matching(
+                        NSPredicate(format: "label CONTAINS 'tokens'")).firstMatch
+                    if record.waitForExistence(timeout: 6) {
+                        record.tap()
+                        Thread.sleep(forTimeInterval: 3)
+                        screenshot("live-compaction-record")
+                    }
+                }
+            }
+        }
+    }
+}
+
 extension XCUIElement {
     /// Clears the field's text (the port prefills with 22).
     func clearText() {
