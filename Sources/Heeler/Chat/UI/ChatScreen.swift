@@ -514,7 +514,10 @@ struct ChatScreen: View {
             cancel: onAskCancel.map { cancel in
                 { Task { @MainActor in
                     do { try await cancel(interaction) }
-                    catch { askError = "Cancel failed: \(error.localizedDescription)" }
+                    catch {
+                        askError = Self.askErrorText(
+                            error, prefix: "Cancel failed")
+                    }
                 } } as () -> Void
             },
             errorMessage: askError)
@@ -568,6 +571,18 @@ struct ChatScreen: View {
         }
     }
 
+    /// An ask error's honest copy: the wire message when present (the
+    /// raw localizedDescription renders 'AgentChatError error 0' —
+    /// opaque); never a bare domain dump.
+    private static func askErrorText(
+        _ error: any Error, prefix: String
+    ) -> String {
+        if case AgentChatError.wire(_, let message, _) = error {
+            return "\(prefix): \(message)"
+        }
+        return "\(prefix): \(error.localizedDescription)"
+    }
+
     /// The final answer delivery: EVERY question must carry a choice —
     /// a partial payload is never sent (the caller's Confirm gates the
     /// last multi question; earlier single-choice steps all recorded).
@@ -586,7 +601,8 @@ struct ChatScreen: View {
                 askError = nil
             } catch {
                 // Retain every choice; the user re-submits or Backs.
-                askError = "Answer failed: \(error.localizedDescription)"
+                askError = Self.askErrorText(
+                    error, prefix: "Answer failed")
             }
         }
     }

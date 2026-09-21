@@ -55,7 +55,13 @@ enum AgentChatMapper: Sendable {
         for block in blocks {
             switch block {
             case .text(let text):
-                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let trimmed = text.trimmingCharacters(
+                    in: .whitespacesAndNewlines)
+                // omp's "." keepalive blocks are stream noise, not
+                // content (the user saw a stray dot rendering before
+                // the options card). Whitespace-only and dot-only
+                // text blocks drop.
+                if !trimmed.isEmpty, trimmed != "." {
                     chatBlocks.append(.text(text))
                 }
             case .thinking(let text):
