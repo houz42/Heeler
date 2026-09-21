@@ -413,17 +413,30 @@ struct AgentChatInteractionsResult: Decodable, Sendable, Equatable {
 
 /// One resolved ask (honest state): the card is gone but the WHY
 /// renders — answered (with where: the agent's terminal vs this
-/// client), cancelled, or expired.
+/// client), cancelled, or expired. When THIS client answered, the
+/// chosen option LABELS ride along (resolved against the interaction
+/// at capture time — the wire's option ids are `idx:<n>`, never
+/// user-facing) so the transcript row can render
+/// 'You answered: <label>'.
 struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable {
     let requestId: String
     /// The wire outcome: answered / cancelled / expired.
     let outcome: String
     /// The wire source: remote (this client) / terminal.
     let source: String
+    /// The chosen option labels, one line per answered question, when
+    /// THIS client answered (nil for terminal-side resolutions — only
+    /// the outcome is known, honestly).
+    var answeredLabels: [String]?
+    /// When this client observed the resolution (the answer submit,
+    /// the resolved event's arrival, or the stale-card self-heal) —
+    /// the transcript block's ordering point: it renders after every
+    /// message that predates it and before the agent's response that
+    /// follows. Nil only in hand-built fixtures.
+    var resolvedAt: Date?
 
     var id: String { requestId }
-
-    /// The user-facing note.
+    /// The user-facing note (the composer-adjacent state note).
     var message: String {
         switch outcome {
         case "answered":
@@ -437,6 +450,65 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable {
         default:
             "The question was resolved."
         }
+    }
+
+    /// The transcript row's body: the quiet resolved block in the
+    /// conversation flow. 'You answered: <labels>' when this client
+    /// answered and the labels are known; the honest outcome note
+    /// otherwise (answered in terminal / cancelled / expired).
+    var transcriptBody: String {
+        if let labels = answeredLabels, !labels.isEmpty {
+            return "You answered: " + labels.joined(separator: " + ")
+        }
+        return message
+    }
+
+    /// Builds the resolution for an answer submitted by THIS client,
+    /// resolving option ids to their user-facing labels against the
+    /// interaction's questions. An id with no matching option is
+    /// dropped, never rendered raw.
+    init(
+        answered interaction: AgentChatInteraction,
+        answers: [AgentChatAnswer],
+        resolvedAt: Date = Date()
+    ) {
+        self.init(
+            requestId: interaction.requestId,
+            outcome: "answered",
+            source: "remote",
+            answeredLabels: Self.answeredLabels(
+                interaction: interaction, answers: answers),
+            resolvedAt: resolvedAt)
+    }
+
+    init(
+        requestId: String, outcome: String, source: String,
+        answeredLabels: [String]? = nil,
+        resolvedAt: Date = Date()
+    ) {
+        self.requestId = requestId
+        self.outcome = outcome
+        self.source = source
+        self.answeredLabels = answeredLabels
+        self.resolvedAt = resolvedAt
+    }
+
+    private static func answeredLabels(
+        interaction: AgentChatInteraction, answers: [AgentChatAnswer]
+    ) -> [String]? {
+        var lines: [String] = []
+        for answer in answers {
+            // Match the answer's question, then its options, by the
+            // stable ids the interaction published.
+            guard let question = interaction.questions.first(where: {
+                $0.id == answer.questionId
+            }) else { continue }
+            let labels = answer.optionIds.compactMap { optionId in
+                question.options.first(where: { $0.id == optionId })?.label
+            }
+            if !labels.isEmpty { lines.append(labels.joined(separator: " + ")) }
+        }
+        return lines.isEmpty ? nil : lines
     }
 }
 

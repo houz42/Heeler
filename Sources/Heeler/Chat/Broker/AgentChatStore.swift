@@ -55,9 +55,11 @@ final class AgentChatStore {
     private(set) var capabilities: AgentChatCapabilities?
     /// Pending interactions (only when interactions:true).
     private(set) var interactions: [AgentChatInteraction] = []
-    /// Recently resolved asks (honest state notes: answered elsewhere /
-    /// cancelled / expired — the card vanishing silently is the gap
-    /// this closes). Capped; the newest resolution wins.
+    /// Resolved asks in arrival order — the transcript row payload.
+    /// A resolution is the ASK's tombstone and rendered record in one:
+    /// it stays for the chat surface's life (the card is gone; the
+    /// answer block is the trace). No cap, no reset while live — the
+    /// store's own start() reset bounds the list per connection.
     private(set) var interactionResolutions: [AgentChatInteractionResolution] = []
 
     var askSupported: Bool { capabilities?.interactions == true }
@@ -456,6 +458,14 @@ final class AgentChatStore {
                         instanceId: registration.instanceId,
                         generation: registration.generation),
                     params: params))
+            // The answer's trace: the resolved block renders in the
+            // transcript ('You answered: <labels>') even if the broker's
+            // interaction.resolved event never lands (event-queue
+            // pressure). The event, when it does arrive, replaces this
+            // with the same content (dedup by requestId below).
+            recordResolution(
+                AgentChatInteractionResolution(
+                    answered: interaction, answers: answers))
         } catch let error as AgentChatError {
             if isStaleInteractionError(error) {
                 // The broker says this requestId is no longer pending
@@ -467,10 +477,7 @@ final class AgentChatStore {
                     $0.requestId == interaction.requestId
                 }
                 resolvedInteractionTombstones.insert(interaction.requestId)
-                interactionResolutions.removeAll {
-                    $0.requestId == interaction.requestId
-                }
-                interactionResolutions.append(AgentChatInteractionResolution(
+                recordResolution(AgentChatInteractionResolution(
                     requestId: interaction.requestId,
                     outcome: "expired",
                     source: "remote"))
@@ -584,18 +591,29 @@ final class AgentChatStore {
             // resolution racing interactions.list can never resurrect.
             resolvedInteractionTombstones.insert(requestId)
             interactions.removeAll { $0.requestId == requestId }
-            // The honest resolved note replaces the vanished card.
-            let resolution = AgentChatInteractionResolution(
-                requestId: requestId, outcome: outcome, source: source)
-            interactionResolutions.removeAll {
-                $0.requestId == resolution.requestId
+            // The resolved ask renders as a transcript row. When this
+            // client already recorded the answer (the answer() path),
+            // the event is the same resolution — the recorded one
+            // keeps its labels and stays in place.
+            if interactionResolutions.contains(where: {
+                $0.requestId == requestId
+            }) {
+                return
             }
-            interactionResolutions.append(resolution)
-            if interactionResolutions.count > 4 {
-                interactionResolutions.removeFirst(
-                    interactionResolutions.count - 4)
-            }
+            recordResolution(AgentChatInteractionResolution(
+                requestId: requestId, outcome: outcome, source: source))
         }
+    }
+
+    /// One resolution, one rendered record: replaces any existing entry
+    /// for the same requestId (the recorded answer beats a later
+    /// same-id event only via explicit re-record, which never happens)
+    /// and appends in arrival order.
+    private func recordResolution(_ resolution: AgentChatInteractionResolution) {
+        interactionResolutions.removeAll {
+            $0.requestId == resolution.requestId
+        }
+        interactionResolutions.append(resolution)
     }
 
     private func upsertInteraction(_ interaction: AgentChatInteraction) {

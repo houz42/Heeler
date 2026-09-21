@@ -9,19 +9,23 @@ import SwiftUI
 // `ChatFiltering` decides, rows render.
 
 /// The data one chat pane renders: the messages and results the windowing
-/// layer holds, plus the blocked-agent pending interactions (if any).
+/// layer holds, the blocked-agent pending interactions (if any), and the
+/// resolved asks rendered as quiet transcript blocks.
 internal struct ChatContent: Sendable, Equatable {
     var messages: [ChatMessage]
     var toolResults: [ToolResult]
     var pending: [PendingInteraction]
+    var resolvedAsks: [ResolvedAsk] = []
 
     init(
         messages: [ChatMessage] = [], toolResults: [ToolResult] = [],
-        pending: [PendingInteraction] = []
+        pending: [PendingInteraction] = [],
+        resolvedAsks: [ResolvedAsk] = []
     ) {
         self.messages = messages
         self.toolResults = toolResults
         self.pending = pending
+        self.resolvedAsks = resolvedAsks
     }
 }
 
@@ -336,6 +340,7 @@ struct ChatScreen: View {
             messages: content.messages,
             toolResults: content.toolResults,
             pending: content.pending,
+            resolvedAsks: content.resolvedAsks,
             level: level
         )
     }

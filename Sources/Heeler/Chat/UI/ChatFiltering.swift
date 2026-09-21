@@ -65,6 +65,24 @@ internal struct PendingInteraction: Sendable, Equatable, Identifiable {
     }
 }
 
+/// One resolved ask, rendered as a quiet block in the transcript flow:
+/// 'You answered: <labels>' when this client answered, the honest
+/// outcome note otherwise (answered in terminal / cancelled / expired).
+/// `timestamp` places the block at its true point in the conversation
+/// (before the first message that postdates it); nil parks it at the
+/// bottom of the transcript, before any pending card.
+internal struct ResolvedAsk: Sendable, Equatable, Identifiable {
+    let id: String
+    let body: String
+    var timestamp: Date?
+
+    init(id: String, body: String, timestamp: Date? = nil) {
+        self.id = id
+        self.body = body
+        self.timestamp = timestamp
+    }
+}
+
 /// One renderable row of the chat surface, in display order.
 ///
 /// Rows are block-scoped: a message's ordered blocks become one row per
@@ -96,6 +114,10 @@ internal enum ChatRow: Sendable, Equatable, Identifiable {
     /// A blocked-agent pending question — visible at every level; it is the
     /// live frontier of the conversation, not chrome.
     case pending(PendingInteraction)
+    /// A resolved ask's quiet record ('You answered: …' / the honest
+    /// outcome note) — visible at every level; it is conversation
+    /// history, not chrome.
+    case resolvedAsk(ResolvedAsk)
 
     var id: String {
         switch self {
@@ -108,6 +130,8 @@ internal enum ChatRow: Sendable, Equatable, Identifiable {
             return "result#\(result.toolCallId)"
         case .pending(let interaction):
             return "pending#\(interaction.id)"
+        case .resolvedAsk(let ask):
+            return "resolved#\(ask.id)"
         }
     }
 }
@@ -197,16 +221,23 @@ internal enum ChatFiltering {
         toolResults: [ToolResult],
         level: DetailLevel
     ) -> [ChatRow] {
-        visibleRows(messages: messages, toolResults: toolResults, pending: [], level: level)
+        visibleRows(
+            messages: messages, toolResults: toolResults, pending: [],
+            resolvedAsks: [], level: level)
     }
 
     /// Full form, including the blocked-agent affordance rows. Pending
     /// interactions render at every level, after all transcript rows — they
     /// are the conversation's live edge, not chrome to be filtered.
+    /// Resolved asks render at every level too — they are conversation
+    /// history: a timestamped ask interleaves before the first message
+    /// that postdates it; a timestamp-less one (no reliable ordering
+    /// signal) parks after the transcript, before any pending card.
     static func visibleRows(
         messages: [ChatMessage],
         toolResults: [ToolResult],
         pending: [PendingInteraction],
+        resolvedAsks: [ResolvedAsk] = [],
         level: DetailLevel
     ) -> [ChatRow] {
         // Pair results by the opaque id. First record wins if a call somehow
@@ -225,8 +256,25 @@ internal enum ChatFiltering {
             }
         }
 
+        // The resolved asks that carry a timestamp, keyed by time for the
+        // interleave below. Those without park at the transcript's end.
+        var timedAsks = resolvedAsks.filter { $0.timestamp != nil }
+        let untimedAsks = resolvedAsks.filter { $0.timestamp == nil }
+
         var rows: [ChatRow] = []
         for message in messages {
+            // A resolved ask renders before the first message that
+            // postdates it — the block sits at its true point in the
+            // conversation, so older pages (prepended above) and newer
+            // turns both keep their positions around it.
+            while let next = timedAsks.first,
+                let askTime = next.timestamp,
+                let messageTime = message.timestamp,
+                askTime <= messageTime
+            {
+                rows.append(.resolvedAsk(next))
+                timedAsks.removeFirst()
+            }
             switch message.role {
             case .user:
                 // User turns are conversation, not chrome: their text is
@@ -278,6 +326,10 @@ internal enum ChatFiltering {
                 }
             }
         }
+        // Any timestamped asks not consumed by the interleave (their time
+        // postdates every visible message) render at the transcript's end.
+        rows.append(contentsOf: timedAsks.map(ChatRow.resolvedAsk))
+        rows.append(contentsOf: untimedAsks.map(ChatRow.resolvedAsk))
 
         // Window-boundary orphans: results whose call is not among the
         // visible messages, after the transcript so they never interleave

@@ -759,3 +759,146 @@ struct AgentAskStaleCardTests {
         }
     }
 }
+
+// MARK: - Answer renders in chat history (v2)
+
+struct AgentAskTranscriptTests {
+    private func interaction() -> AgentChatInteraction {
+        let json = #"{"requestId":"r-1","generation":1,"kind":"question","questions":[{"id":"q1","text":"Keep testing?","multi":false,"options":[{"id":"idx:0","label":"Keep testing surfaces"},{"id":"idx:1","label":"Stop here"}],"allowCustom":true}]}"#
+        return try! JSONDecoder().decode(
+            AgentChatInteraction.self, from: Data(json.utf8))
+    }
+
+    @Test("this client's answer renders 'You answered' with the chosen LABEL, not the wire id")
+    func answeredRendersLabel() {
+        let resolution = AgentChatInteractionResolution(
+            answered: interaction(),
+            answers: [
+                AgentChatAnswer(
+                    questionId: "q1", optionIds: ["idx:0"],
+                    customText: nil, note: nil)
+            ])
+        #expect(
+            resolution.transcriptBody
+                == "You answered: Keep testing surfaces")
+        // The state note stays honest too.
+        #expect(resolution.message == "Answered from this device.")
+    }
+
+    @Test("multi-select joins its labels; unknown option ids never render raw")
+    func multiSelectAndUnknownIds() {
+        let json = #"{"requestId":"r-2","generation":1,"kind":"question","questions":[{"id":"q1","text":"Include what?","multi":true,"options":[{"id":"idx:0","label":"Video"},{"id":"idx:1","label":"Report"},{"id":"idx:2","label":"Frames"}],"allowCustom":false}]}"#
+        let interaction = try! JSONDecoder().decode(
+            AgentChatInteraction.self, from: Data(json.utf8))
+        let resolution = AgentChatInteractionResolution(
+            answered: interaction,
+            answers: [
+                AgentChatAnswer(
+                    questionId: "q1", optionIds: ["idx:2", "idx:0"],
+                    customText: nil, note: nil),
+                // An unknown id drops, never renders 'idx:' raw.
+                AgentChatAnswer(
+                    questionId: "qX", optionIds: ["idx:9"],
+                    customText: nil, note: nil),
+            ])
+        #expect(
+            resolution.transcriptBody
+                == "You answered: Frames + Video")
+    }
+
+    @Test("terminal-answered / cancelled / expired keep their honest notes in the transcript")
+    func honestNotesInTranscript() {
+        let terminal = AgentChatInteractionResolution(
+            requestId: "r3", outcome: "answered", source: "terminal")
+        let cancelled = AgentChatInteractionResolution(
+            requestId: "r4", outcome: "cancelled", source: "remote")
+        let expired = AgentChatInteractionResolution(
+            requestId: "r5", outcome: "expired", source: "terminal")
+        #expect(
+            terminal.transcriptBody
+                == "Answered in the agent's terminal.")
+        #expect(
+            cancelled.transcriptBody == "The question was cancelled.")
+        #expect(
+            expired.transcriptBody
+                == "The question expired before it was answered.")
+    }
+}
+
+// MARK: - Resolved-ask rows in the transcript flow (v2)
+
+struct ChatResolvedAskRowTests {
+    private func message(
+        _ text: String, role: ChatRole = .assistant,
+        at date: Date? = nil
+    ) -> ChatMessage {
+        ChatMessage(role: role, blocks: [.text(text)], timestamp: date)
+    }
+
+    @Test("the resolved block renders at every detail level")
+    func rendersAtEveryLevel() {
+        let ask = ResolvedAsk(id: "r1", body: "You answered: Ship it")
+        for level in DetailLevel.allCases {
+            let rows = ChatFiltering.visibleRows(
+                messages: [message("Earlier turn")], toolResults: [],
+                pending: [], resolvedAsks: [ask], level: level)
+            let askRows = rows.filter {
+                if case .resolvedAsk = $0 { return true } else { return false }
+            }
+            #expect(askRows.count == 1)
+        }
+    }
+
+    @Test("a timestamped ask interleaves before the first message that postdates it")
+    func timestampedAskInterleaves() {
+        let base = Date(timeIntervalSince1970: 1000)
+        let ask = ResolvedAsk(
+            id: "r1", body: "You answered: Ship it",
+            timestamp: base.addingTimeInterval(10))
+        let rows = ChatFiltering.visibleRows(
+            messages: [
+                message("Before the ask", at: base),
+                message("After the ask", at: base.addingTimeInterval(20)),
+            ],
+            toolResults: [], pending: [], resolvedAsks: [ask], level: .l0)
+        let order = rows.map { row -> String in
+            switch row {
+            case .text(_, _, _, let text): return "text:\(text)"
+            case .resolvedAsk(let ask): return "ask:\(ask.body)"
+            default: return "other"
+            }
+        }
+        #expect(order == [
+            "text:Before the ask",
+            "ask:You answered: Ship it",
+            "text:After the ask",
+        ])
+    }
+
+    @Test("an untimed ask parks after the transcript, before a pending card")
+    func untimedAskParksBeforePending() {
+        let ask = ResolvedAsk(id: "r1", body: "The question was cancelled.")
+        let pending = PendingInteraction(
+            question: "Proceed?", options: ["yes"])
+        let rows = ChatFiltering.visibleRows(
+            messages: [message("Earlier turn")], toolResults: [],
+            pending: [pending], resolvedAsks: [ask], level: .l0)
+        guard case .resolvedAsk = rows[rows.count - 2] else {
+            Issue.record("resolved ask must be second-to-last (before the pending card)")
+            return
+        }
+        guard case .pending = rows.last else {
+            Issue.record("pending card must stay the live edge (last row)")
+            return
+        }
+    }
+
+    @Test("row id is stable and namespaced (level switching diffs cleanly)")
+    func rowIdStable() {
+        let ask = ResolvedAsk(id: "r-uuid-1", body: "You answered: Ship it")
+        let rows = ChatFiltering.visibleRows(
+            messages: [], toolResults: [], pending: [],
+            resolvedAsks: [ask], level: .l0)
+        #expect(rows.map(\.id) == ["resolved#r-uuid-1"])
+    }
+}

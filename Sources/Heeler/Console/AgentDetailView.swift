@@ -480,21 +480,9 @@ struct AgentDetailView: View {
                         at: path, on: agent.hostID)
                 })
                 // The honest resolved-ask note (answered elsewhere /
-                // cancelled / expired): the card is gone but the WHY
-                // renders — the newest resolution, above the composer.
-                .overlay(alignment: .bottom) {
-                    if let latest = store.interactionResolutions.last {
-                        Text(latest.message)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(.thinMaterial, in: Capsule())
-                            .padding(.bottom, 120)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                            .id(latest.id)
-                    }
-                }
+                // cancelled / expired) now renders IN the transcript
+                // flow as a quiet block (brokerContent.resolvedAsks),
+                // not as a floating note above the composer.
                 .overlay(alignment: .bottom) {
                     if case .disconnected(let reason) = store.phase {
                         AgentChatStateBanner(
@@ -548,6 +536,18 @@ struct AgentDetailView: View {
                                 id: option.id, label: option.label)
                         })
                 })
+        } ?? []
+        // Resolved asks render as quiet blocks in the transcript flow:
+        // 'You answered: <labels>' (this device's answers) or the
+        // honest outcome note (answered in terminal / cancelled /
+        // expired). Timestamped at the client's observation time so
+        // the block sits before the agent's response that follows.
+        content.resolvedAsks = brokerChat?.interactionResolutions.map {
+            resolution in
+            ResolvedAsk(
+                id: resolution.requestId,
+                body: resolution.transcriptBody,
+                timestamp: resolution.resolvedAt)
         } ?? []
         return content
     }
