@@ -436,7 +436,7 @@ struct ChatLinkText: View {
                 .foregroundStyle(foregroundOverride ?? style.color)
         } else {
             ChatMarkdownView(
-                markdown: ChatMarkdownText(text).rewritten,
+                markdown: ChatMarkdownText(text).rendered,
                 textColor: foregroundOverride)
         }
     }

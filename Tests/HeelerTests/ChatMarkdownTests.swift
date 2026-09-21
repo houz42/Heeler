@@ -573,32 +573,68 @@ private extension UIImage {
     }
 }
 
-// MARK: - Hard line breaks (the multiline-collapse device finding)
+// MARK: - Multiline (the v2 contract: one paragraph, line breaks inside)
 
 struct ChatMarkdownHardBreakTests {
-    @Test func proseLinesBecomeSeparateParagraphs() {
-        // A single newline must render as a paragraph boundary, not a
-        // space (cmark's soft-break rule collapsed multi-line agent
-        // messages on the device).
-        let out = ChatMarkdownText.preservingHardBreaks("first line\nsecond line")
-        #expect(out == "first line\n\nsecond line")
+    /// A single newline is a line break WITHIN one paragraph — never a
+    /// paragraph split (cmark's soft break). The v1 pre-pass inserted a
+    /// blank line between every prose line; that shattered GFM tables
+    /// and fragmented multi-line blockquotes, so the render now keeps
+    /// the source structure and turns soft breaks into line breaks at
+    /// the view (markdownSoftBreakMode(.lineBreak)). Structure proof:
+    /// one <p>, the newline inside it.
+    @Test func singleNewlineIsOneParagraph() {
+        let html = MarkdownContent("first line\nsecond line").renderHTML()
+        #expect(html.components(separatedBy: "<p>").count - 1 == 1)
+        // The line break survives as a newline INSIDE the paragraph.
+        #expect(html.contains("first line\nsecond line"))
     }
 
-    @Test func alreadyBlankLinesStaySingle() {
-        let out = ChatMarkdownText.preservingHardBreaks("para one\n\npara two")
-        #expect(out == "para one\n\npara two")
+    /// A blank line is a real paragraph boundary (two <p> blocks).
+    @Test func blankLineStillSplitsParagraphs() {
+        let html = MarkdownContent("para one\n\npara two").renderHTML()
+        #expect(html.components(separatedBy: "<p>").count - 1 == 2)
     }
 
+    /// A GFM table stays ONE table block — rows are not paragraphs.
+    /// The v1 pre-pass turned every row into a separate <p>, which the
+    /// chat table view then framed as stripes of unrelated paragraphs;
+    /// with the pre-pass gone, MarkdownUI parses the whole table.
+    @Test func gfmTableParsesAsOneTable() {
+        let source = """
+            | Phase | Status |
+            | --- | --- |
+            | Build | passing |
+            | Tests | failing |
+            """
+        let html = MarkdownContent(source).renderHTML()
+        #expect(html.contains("<table>"))
+        #expect(html.contains("<th>"))
+        #expect(html.components(separatedBy: "<p>").count - 1 == 0)
+    }
+
+    /// A multi-line blockquote is ONE blockquote with its line breaks
+    /// inside — the accent bar + wash render once per action, never
+    /// one bar per line (the v1 "quote renders duplicated" finding).
+    @Test func multilineBlockquoteIsOneQuote() {
+        let source = "> quoted line one\n> quoted line two"
+        let content = MarkdownContent(source)
+        let html = content.renderHTML()
+        #expect(html.components(separatedBy: "<blockquote>").count - 1 == 1)
+        // The lines stay in ONE paragraph inside the quote.
+        let quoteHTML = content.childContent?.renderHTML() ?? ""
+        #expect(quoteHTML.components(separatedBy: "<p>").count - 1 == 1)
+        #expect(quoteHTML.contains("quoted line one\nquoted line two"))
+    }
+
+    /// Fenced code keeps its literal line structure (a code block is
+    /// data, not prose — soft-break mode never reaches inside it).
     @Test func fencedCodeStaysVerbatim() {
         let source = "before\n```swift\nlet a = 1\nlet b = 2\n```\nafter"
-        let out = ChatMarkdownText.preservingHardBreaks(source)
-        // Code lines stay verbatim; cmark's own block rules close the
-        // code at the fence, so no separator is needed after it.
-        #expect(out.contains("```swift\nlet a = 1\nlet b = 2\n```"))
-        // cmark's block rules separate the paragraph from the code
-        // block without any inserted blank — the pre-pass leaves fence
-        // boundaries to the parser.
-        #expect(out.hasPrefix("before\n```"))
-        #expect(out.hasSuffix("```\nafter"))
+        let html = MarkdownContent(source).renderHTML()
+        #expect(html.contains("<pre><code"))
+        #expect(html.contains("let a = 1\nlet b = 2"))
+        #expect(html.contains("before"))
+        #expect(html.contains("after"))
     }
 }
