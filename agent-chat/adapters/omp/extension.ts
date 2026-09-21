@@ -616,13 +616,23 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 						respondError(frame.id, "invalid_request", "context usage could not be verified; refusing the switch (nothing will be trimmed automatically)");
 						return;
 					}
-					const targetWindow = typeof target.contextWindow === "number" ? target.contextWindow : undefined;
-					if (targetWindow !== undefined && usedTokens > targetWindow) {
-						respondError(frame.id, "invalid_request", `the reported context (${Math.round(usedTokens)} tokens) exceeds this model's window (${targetWindow}); nothing will be trimmed automatically`);
-						return;
-					}
 					const available = ctx.modelRegistry?.getAvailable?.() ?? [];
 					const match = available.find(m => typeof m === "object" && m !== null && m.provider + "/" + m.id === id);
+					if (match === undefined) {
+						respondError(frame.id, "invalid_request", "unknown model " + id);
+						return;
+					}
+					// The fit gate needs the TARGET's window — compare AFTER
+					// the lookup (the earlier pre-lookup reference was wrong:
+					// the window compared against nothing, so the gate
+					// silently never refused; proven by the live probe).
+					const matchWindow = typeof (match as Record<string, unknown>).contextWindow === "number"
+						? ((match as Record<string, unknown>).contextWindow as number)
+						: undefined;
+					if (matchWindow !== undefined && usedTokens > matchWindow) {
+						respondError(frame.id, "invalid_request", `the reported context (${Math.round(usedTokens)} tokens) exceeds this model's window (${matchWindow}); nothing will be trimmed automatically`);
+						return;
+					}
 					// Method call MUST stay bound to pi: the host implementation
 					// reads `this.ctx`/`this.runtime` — a detached call loses
 					// `this` and dies as an internal TypeError (proven live).
