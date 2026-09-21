@@ -21,9 +21,6 @@ struct AgentDetailView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var composer: AgentComposerStore
     @State private var attach: AgentAttachStore
-    /// The chat surface's live-data store, one per (host, pane). Created
-    /// alongside attach: both surfaces stay mounted-capable across switches.
-    @State private var chat: ChatStore?
     /// The chat input's submit router (/ # @ ! routing). Built with the
     /// same per-agent task as the chat store.
     /// The broker-backed chat store, one per (host, pane). Preferred
@@ -317,8 +314,7 @@ struct AgentDetailView: View {
     /// surface, so agents whose integration registers after first render
     //  still get a chat.
     private func buildChatIfPossible() async {
-        guard chat == nil,
-            agent.agent.agentSession?.kind == AgentSessionRefKind.path
+        guard agent.agent.agentSession?.kind == AgentSessionRefKind.path
         else { return }
 
         // Broker backend: only when this Host configured a broker socket
@@ -352,7 +348,6 @@ struct AgentDetailView: View {
         // The broker lane is the only chat path; hosts without a broker show
         // ChatUnavailablePlaceholder. The conversation slice's fix round
         // removes the lane's code entirely.
-        chat = nil
         // The chat input's attachment bundle: the staging pipeline the
         // + button's pickers and the image paste share, plus the draft
         // seam its path inserts land in. Idempotent per agent identity.
@@ -392,118 +387,12 @@ struct AgentDetailView: View {
         // No JSONL ChatStore.start: the lane is deprecated (see above).
     }
 
-    #if DEBUG
-        /// Demo-mode-only pending fixture for the redesign proofs: a
-        /// blocked demo agent renders both card shapes — short compact
-        /// options and descriptive full-width options. Debug + demo
-        /// Demo ask seams: Debug + screenshot gate only; a no-op
-        /// delivery so the card's step flow is exercisable in proofs.
-        private static var demoAskSeamsEnabled: Bool {
-            #if DEBUG && targetEnvironment(simulator)
-            DemoScreenshotMode.isEnabled
-            #else
-            false
-            #endif
-        }
-
-        /// screenshot mode only; never in release.
-        @MainActor
-        private static func demoPendingFixture(
-            agent: ConsoleAgent, chatAgentState: ChatAgentState,
-            content: ChatContent
-        ) -> ChatContent {
-            // DemoScreenshotMode is simulator-only; on device the
-            // fixture is inert and the content passes through.
-            #if targetEnvironment(simulator)
-            let demoEnabled = DemoScreenshotMode.isEnabled
-            #else
-            let demoEnabled = false
-            #endif
-            guard demoEnabled,
-                chatAgentState == .blocked
-            else { return content }
-            var content = content
-            content.pending = [
-                PendingInteraction(
-                    id: "demo-pending-multi",
-                    question: "Stage the retry how?",
-                    options: [],
-                    questions: [
-                        PendingAskQuestion(
-                            id: "q1", text: "Which environment should run the retry?",
-                            multi: false,
-                            options: [
-                                PendingAskQuestion.Option(id: "o1", label: "Dev"),
-                                PendingAskQuestion.Option(id: "o2", label: "Staging"),
-                                PendingAskQuestion.Option(id: "o3", label: "Both"),
-                            ]),
-                        PendingAskQuestion(
-                            id: "q2", text: "Which checks should re-run?",
-                            multi: true,
-                            options: [
-                                PendingAskQuestion.Option(id: "o1", label: "Unit tests"),
-                                PendingAskQuestion.Option(id: "o2", label: "Integration suite"),
-                                PendingAskQuestion.Option(id: "o3", label: "Smoke"),
-                            ]),
-                    ]),
-                PendingInteraction(
-                    id: "demo-pending-short",
-                    question: "Keep the original camera timing?",
-                    options: ["Yes", "No", "Normalize"]),
-                PendingInteraction(
-                    id: "demo-pending-long",
-                    question: "The verification run found one failing check. How should the retry be staged?",
-                    options: [
-                        "Retry only the failing check on a clean checkout — apply no local patches before re-running.",
-                        "Retry the full suite to catch any coupled regressions from the fix.",
-                        "Skip the retry and mark the change verified on manual review.",
-                    ]),
-            ]
-            return content
-        }
-    #endif
-
     /// Builds (once per agent identity) and starts the chat store, then
     /// renders the chat surface.
     @ViewBuilder
     private var chatSurface: some View {
         if let brokerChat {
             brokerChatSurface(brokerChat)
-        } else if let chat {
-            ChatScreen(
-                paneID: agent.agent.paneID,
-                agentName: agent.tabLabel ?? agent.agent.displayName,
-                state: chatAgentState,
-                // DEMO FIXTURE (Debug + demo mode only): the blocked demo
-                // agent carries one pending for the card proofs.
-                content: Self.demoPendingFixture(
-                    agent: agent, chatAgentState: chatAgentState,
-                    content: chat.content),
-                initialLevel: chatLevels.level(paneID: agent.agent.paneID),
-                changeLevel: { [chatLevels] level, paneID in
-                    chatLevels.setLevel(level, paneID: paneID)
-                },
-                hasOlder: chat.hasOlder,
-                isLoadingOlder: chat.isLoadingOlder,
-                loadOlder: { [weak chat] in await chat?.loadOlder() },
-                router: chatRouter,
-                deliver: { text in
-                    try await console.promptAgent(
-                        AgentPromptParams(target: agent.agent.paneID, text: text),
-                        on: agent.hostID)
-                },
-                authorLabel: "Heeler · \(agent.agent.kind.lowercased())",
-                attachments: chatAttachments,
-                // Demo mode (Debug + screenshot gate only): the ask
-                // card's flow is exercisable for proofs — advancing
-                // steps, Back, multi-select confirm — with a no-op
-                // delivery seam. Production paths pass real seams.
-                onAskAnswer: Self.demoAskSeamsEnabled ? { _, _ in } : nil,
-                onAskCancel: Self.demoAskSeamsEnabled ? { _ in } : nil,
-                fetch: { path in
-                    try await console.readRemoteFile(
-                        at: path, on: agent.hostID)
-                })
         } else {
             ChatUnavailablePlaceholder()
         }
@@ -743,7 +632,6 @@ struct AgentDetailView: View {
             hasAppeared = false
             focus.leave()
             // The chat store's poll loop must not outlive the detail view.
-            chat = nil
             chatRouter = nil
             chatAttachments = nil
         }
