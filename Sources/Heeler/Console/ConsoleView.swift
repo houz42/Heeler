@@ -222,6 +222,17 @@ struct ConsoleView: View {
         .onChange(of: isStartingAgent) { _, starting in
             if starting { isSearchFocused = false }
         }
+        // The destination-value seam (user device bug): keying on the
+        // DESTINATION VALUE itself, not any menu control — leaving
+        // Agents for Hosts or Settings (menu, drawer, or the nav seam's
+        // future shapes) resigns the search field; query/chips/scroll
+        // stay preserved for the return trip. The Agents page stays
+        // mounted-but-hidden under AppRootView, so this onChange fires
+        // on the LIVE ConsoleView instance — the same instance whose
+        // FocusState owns the field.
+        .onChange(of: appDestination?.wrappedValue) { _, _ in
+            isSearchFocused = false
+        }
     }
 
     // The toolbar extracted from the body: keeps the body's expression
