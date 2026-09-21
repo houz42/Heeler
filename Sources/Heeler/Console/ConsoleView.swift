@@ -302,6 +302,48 @@ struct ConsoleView: View {
     /// The sidebar selection as a projection of the router's path. Setting
     /// it (a row tap, or the collapsed stack popping) writes the path back,
     /// so user navigation and deep links keep one source of truth.
+    /// The grouped container's card: the SAME card the flat rows render,
+    /// WITHOUT the NavigationLink — a Button's label cannot contain a
+    /// NavigationLink (the link swallows the tap and resolves to nothing
+    /// outside the List's selection machinery, the device bug).
+    private func groupedCard(
+        _ agent: ConsoleAgent,
+        mergedTabLabel: String? = nil
+    ) -> some View {
+        let layout = console.rowLayout(for: agent.hostID)
+        let prefix = AgentRowRenderer.unrenderedTabLabel(
+            mergedTabLabel, layout: layout, agent: agent)
+            .map { "\($0) — " } ?? ""
+        return AgentCardView(
+            agent: agent,
+            layout: layout,
+            isPinned: console.pins.isPinned(
+                hostID: agent.hostID, paneID: agent.agent.paneID),
+            headlinePrefix: prefix)
+    }
+
+    /// The grouped row's spoken/tappable identity: the card's own texts
+    /// are combined away by the row wrapper, so expose them explicitly.
+    private func groupedCardLabel(_ agent: ConsoleAgent) -> String {
+        let title = AgentCardRowTitle.title(for: agent)
+        let kind = AgentKindBadgeModel(agent: agent).accessibilityLabel
+        return "\(title), \(kind), status \(agent.agent.status.searchLabel)"
+    }
+
+    /// The grouped ScrollView rows' tap action: the SAME router-path write
+    /// the flat list's selection binding performs — one source of truth,
+    /// so grouped tap-through keeps deep links, focus handoff, and the
+    /// split-view selection projection working identically.
+    private func selectAgent(_ id: ConsoleAgent.ID) {
+        guard id != notificationRouter.path.last else { return }
+        if commandRegistry.terminal?.isFocused == true
+            || commandRegistry.composer?.isFocused == true
+        {
+            keyboardHandoff.arm(for: id)
+        }
+        notificationRouter.path = [id]
+    }
+
     private var selectedAgent: Binding<ConsoleAgent.ID?> {
         Binding(
             get: { notificationRouter.path.last },
@@ -385,6 +427,41 @@ struct ConsoleView: View {
                 case .hosts: presentHosts()
                 }
             }
+        }
+    }
+
+    /// The grouped container's navigationDestination content (device-bug
+    /// fix): constructs the SAME detail the split detail column shows for
+    /// the router's current selection, so value-link pushes and the
+    /// router's path stay one source of truth (deep links included).
+    @ViewBuilder
+    private func detailColumn(for id: ConsoleAgent.ID) -> some View {
+        if let receipt = matchingRemovedWorktreeReceipt(for: id) {
+            removedWorktreeSurface(receipt)
+        } else if let agent = console.agents.first(where: { $0.id == id }) {
+            AgentDetailView(
+                agent: agent,
+                console: console,
+                terminal: terminal,
+                inputMode: inputMode,
+                hosts: hosts.hosts,
+                activity: activity,
+                keyboardHandoff: keyboardHandoff,
+                keyboardInset: keyboardInset,
+                stage: AgentDetailStage(
+                    isVisible: { [notificationRouter] in
+                        notificationRouter.path.last == id
+                            && console.agents.contains(where: { $0.id == id })
+                    },
+                    terminalAccess: { [sceneRouting] in
+                        sceneRouting?.terminalAccess(for: id.hostID) ?? .holds
+                    }),
+                onSwitch: { notificationRouter.path = [$0] },
+                onClosed: { notificationRouter.path = [] })
+        } else {
+            let presentation = MissingAgentPresentation(
+                agentID: id, console: console, hosts: hosts)
+            missingAgentSurface(presentation)
         }
     }
 
@@ -534,6 +611,14 @@ struct ConsoleView: View {
                             // survives the search for when it clears.
                             if !isEffectivelyCollapsed(section.id) {
                                 ForEach(section.agents) { agent in
+                                    // Grouped rows live OUTSIDE the List's
+                                    // selection machinery (the density
+                                    // directive's ScrollView container), so
+                                    // a value-NavigationLink here resolves
+                                    // to nothing — a silent no-op on device.
+                                    // Route through the router path instead,
+                                    // the same source of truth the flat
+                                    // list's selection binding writes.
                                     agentRow(agent)
                                         .padding(.horizontal, 16)
                                         .padding(.vertical, 2)
@@ -544,6 +629,18 @@ struct ConsoleView: View {
                 }
                 // Drag-to-hide the keyboard, query intact (both surfaces).
                 .scrollDismissesKeyboard(.interactively)
+                // The device bug's fix (user report; Main's option a):
+                // value-NavigationLinks outside a List's selection
+                // machinery resolve to NOTHING unless a destination is
+                // registered. The Agents page's NavigationStack hosts it;
+                // registering on the GROUPED container only keeps the flat
+                // List's selection path from double-handling.
+                .navigationDestination(for: ConsoleAgent.ID.self) { id in
+                    // The detail column's same construction: reuse the
+                    // selected-agent projection so the router's path stays
+                    // the single source of truth (deep links included).
+                    detailColumn(for: id)
+                }
             }
         }
     }
