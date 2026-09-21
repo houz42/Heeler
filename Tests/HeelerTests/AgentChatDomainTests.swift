@@ -741,3 +741,21 @@ struct AgentAskAppChainTests {
         #expect(expired.message == "The question expired before it was answered.")
     }
 }
+
+// MARK: - The stale-card self-heal + honest error copy (device bug fix)
+
+struct AgentAskStaleCardTests {
+    @Test func staleInteractionErrorCarriesHonestMessage() {
+        // The on-card error is the WIRE MESSAGE, never a raw domain
+        // dump ('AgentChatError error 0').
+        let error = AgentChatError.wire(
+            code: "unknown_request",
+            message: "This question is no longer pending — it may have been answered or expired in the agent's terminal.",
+            retryable: false)
+        if case AgentChatError.wire(_, let message, _) = error {
+            #expect(message.contains("no longer pending"))
+        } else {
+            Issue.record("pattern match failed")
+        }
+    }
+}

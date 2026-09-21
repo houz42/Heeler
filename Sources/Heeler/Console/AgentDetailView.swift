@@ -429,19 +429,36 @@ struct AgentDetailView: View {
                           let matched = store.interactions.first(where: {
                               $0.requestId == interaction.id })
                     else {
+                        // The card is stale (resolved elsewhere): the
+                        // store's self-heal already dropped it and the
+                        // resolved note renders.
                         throw AgentChatError.wire(
                             code: "stale_interaction",
-                            message: "This ask is no longer pending.",
+                            message: "This question is no longer pending — it may have been answered or expired in the agent's terminal.",
                             retryable: false)
                     }
-                    try await store.answer(
-                        matched,
-                        answers: payloads.map { payload in
-                            AgentChatAnswer(
-                                questionId: payload.questionId,
-                                optionIds: payload.optionIds,
-                                customText: nil, note: nil)
-                        })
+                    do {
+                        try await store.answer(
+                            matched,
+                            answers: payloads.map { payload in
+                                AgentChatAnswer(
+                                    questionId: payload.questionId,
+                                    optionIds: payload.optionIds,
+                                    customText: nil, note: nil)
+                            })
+                    } catch let error as AgentChatError {
+                        if case .wire(let code, _, _) = error,
+                            code == "stale_interaction"
+                                || code == "unknown_request"
+                                || code == "settled"
+                        {
+                            throw AgentChatError.wire(
+                                code: code,
+                                message: "This question is no longer pending — it may have been answered or expired in the agent's terminal.",
+                                retryable: false)
+                        }
+                        throw error
+                    }
                 },
                 onAskCancel: { interaction in
                     guard let store = brokerChat else {

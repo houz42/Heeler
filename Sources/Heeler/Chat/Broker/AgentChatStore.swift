@@ -448,13 +448,49 @@ final class AgentChatStore {
                 return .object(object)
             }),
         ])
-        _ = try await channel.request(
-            AgentChatRequest(
-                id: "", method: "answer",
-                target: AgentChatTarget(
-                    instanceId: registration.instanceId,
-                    generation: registration.generation),
-                params: params))
+        do {
+            _ = try await channel.request(
+                AgentChatRequest(
+                    id: "", method: "answer",
+                    target: AgentChatTarget(
+                        instanceId: registration.instanceId,
+                        generation: registration.generation),
+                    params: params))
+        } catch let error as AgentChatError {
+            if isStaleInteractionError(error) {
+                // The broker says this requestId is no longer pending
+                // (answered/expired elsewhere while the card was up —
+                // the resolved event can be missed under event-queue
+                // pressure). Self-heal: the card is DEAD, drop it,
+                // show the honest note, re-list for the truth.
+                interactions.removeAll {
+                    $0.requestId == interaction.requestId
+                }
+                resolvedInteractionTombstones.insert(interaction.requestId)
+                interactionResolutions.removeAll {
+                    $0.requestId == interaction.requestId
+                }
+                interactionResolutions.append(AgentChatInteractionResolution(
+                    requestId: interaction.requestId,
+                    outcome: "expired",
+                    source: "remote"))
+                try? await refreshInteractions()
+            }
+            throw error
+        }
+    }
+
+    /// Whether a failed answer/cancel means the request no longer
+    /// exists broker-side (vs a transport blip).
+    private func isStaleInteractionError(_ error: AgentChatError) -> Bool {
+        if case .wire(let code, _, _) = error {
+            return [
+                "unknown_request", "unknown_request_id", "not_found",
+                "stale_interaction", "settled", "invalid_request",
+                "unsupported_request",
+            ].contains(code)
+        }
+        return false
     }
 
     func cancelInteraction(requestId: String) async throws {
@@ -465,13 +501,21 @@ final class AgentChatStore {
                 message: "This agent cannot cancel interactions.",
                 retryable: false)
         }
-        _ = try await channel.request(
-            AgentChatRequest(
-                id: "", method: "cancel",
-                target: AgentChatTarget(
-                    instanceId: registration.instanceId,
-                    generation: registration.generation),
-                params: .object(["requestId": .string(requestId)])))
+        do {
+            _ = try await channel.request(
+                AgentChatRequest(
+                    id: "", method: "cancel",
+                    target: AgentChatTarget(
+                        instanceId: registration.instanceId,
+                        generation: registration.generation),
+                        params: .object(["requestId": .string(requestId)])))
+        } catch let error as AgentChatError {
+            if isStaleInteractionError(error) {
+                interactions.removeAll { $0.requestId == requestId }
+                resolvedInteractionTombstones.insert(requestId)
+            }
+            throw error
+        }
     }
 
     // MARK: Channel events
