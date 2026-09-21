@@ -173,7 +173,11 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 			...(typeof e.maxTokens === "number" ? { maxTokens: e.maxTokens } : {}),
 			...(Array.isArray(e.input) ? { input: e.input.filter((x): x is string => typeof x === "string") } : {}),
 			...(typeof e.reasoning === "boolean" ? { reasoning: e.reasoning } : {}),
-			...(typeof e.supportsComputerUse === "boolean" ? { supportsComputerUse: e.supportsComputerUse } : {}),
+			// Tool-calling support: the omp catalog carries no explicit
+			// per-model tools boolean — the field stays ABSENT unless a
+			// future catalog reports one, so clients render "Not reported"
+			// rather than a guessed value.
+			...(typeof e.supportsTools === "boolean" ? { supportsTools: e.supportsTools } : {}),
 		};
 		if (typeof e.cost === "object" && e.cost !== null) {
 			const c = e.cost as Record<string, unknown>;
@@ -591,13 +595,39 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 						respondError(frame.id, "invalid_request", "the agent is working; finish or stop the current turn before changing models");
 						return;
 					}
+					// Authoritative context-fit gate: the UI promises "Nothing
+					// will be trimmed, compacted or discarded automatically" —
+					// so the switch itself must REFUSE when the live reported
+					// usage exceeds the target window. A usage reading that
+					// cannot be verified is also an honest refusal (never a
+					// blind switch).
+					let usage: unknown;
+					try {
+						usage = (ctx as unknown as TelemetryCtx).getContextUsage?.();
+					} catch {
+						usage = undefined;
+					}
+					let usedTokens: number | undefined;
+					if (typeof usage === "object" && usage !== null) {
+						const t = (usage as Record<string, unknown>).tokens;
+						if (typeof t === "number" && Number.isFinite(t)) usedTokens = t;
+					}
+					if (usedTokens === undefined) {
+						respondError(frame.id, "invalid_request", "context usage could not be verified; refusing the switch (nothing will be trimmed automatically)");
+						return;
+					}
+					const targetWindow = typeof target.contextWindow === "number" ? target.contextWindow : undefined;
+					if (targetWindow !== undefined && usedTokens > targetWindow) {
+						respondError(frame.id, "invalid_request", `the reported context (${Math.round(usedTokens)} tokens) exceeds this model's window (${targetWindow}); nothing will be trimmed automatically`);
+						return;
+					}
 					const available = ctx.modelRegistry?.getAvailable?.() ?? [];
-					const target = available.find(m => typeof m === "object" && m !== null && m.provider + "/" + m.id === id);
+					const match = available.find(m => typeof m === "object" && m !== null && m.provider + "/" + m.id === id);
 					// Method call MUST stay bound to pi: the host implementation
 					// reads `this.ctx`/`this.runtime` — a detached call loses
 					// `this` and dies as an internal TypeError (proven live).
 					const setModelFn = (pi as unknown as { setModel?: (m: unknown) => Promise<boolean> }).setModel?.bind(pi);
-										if (target === undefined || typeof setModelFn !== "function") {
+										if (match === undefined || typeof setModelFn !== "function") {
 						respondError(frame.id, "invalid_request", "unknown model " + id);
 						return;
 					}
@@ -605,7 +635,7 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 					// switch); any throw is a rejection, never a crash.
 					let switched: boolean;
 					try {
-						switched = (await setModelFn(target)) === true;
+						switched = (await setModelFn(match)) === true;
 					} catch (error) {
 												switched = false;
 					}
