@@ -110,8 +110,17 @@ struct AppDestinationHeading: View {
                 .hoverEffect(.highlight)
                 .accessibilityLabel(trigger.accessibilityLabel)
                 .accessibilityValue(trigger.accessibilityValue)
+                // Assistive-focus return note (review round): VoiceOver
+                // lands on the trigger after dismissal via the root's
+                // .screenChanged post — the trigger is the page's FIRST
+                // accessible element (topBarLeading), so the
+                // notification's default focus target IS this button.
+                // (Binding an AccessibilityFocusState through environment
+                // into a toolbar item suppresses the item's rendering —
+                // verified: the trigger vanished from the AX tree — so
+                // the notification is the mechanism here.)
                 if let triggerFocus {
-                    // Focus return (#A): the drawer hands focus back here.
+                    // Keyboard focus return.
                     triggerButton.focused(triggerFocus)
                 } else {
                     triggerButton
@@ -157,7 +166,11 @@ struct AppDestinationDrawer: View {
                     .buttonStyle(.plain)
                     .hoverEffect(.highlight)
                     .accessibilityLabel("Close navigation")
-                    .keyboardShortcut(.escape)
+                    // Escape dismissal: .cancelAction is the system's
+                    // Escape routing (a raw .escape shortcut is
+                    // intercepted by the OS keyboard-dismiss path and
+                    // never reaches the button — verified in the UITest).
+                    .keyboardShortcut(.cancelAction)
                 }
                 .padding(.horizontal, 8)
                 .padding(.bottom, 18)
@@ -195,6 +208,14 @@ struct AppDestinationDrawer: View {
                 .accessibilityAddTraits(.isButton)
         }
         .accessibilityAddTraits(.isModal)
+        // Escape dismissal (review round): the accessibility ESCAPE
+        // action — VoiceOver's two-finger Z scrub gesture, switch-control
+        // escape, and XCUITest's performAccessibilityAction(.escape).
+        // (The hardware-keyboard route also exists: the close button's
+        // .cancelAction shortcut. Both land in the same close path.)
+        .accessibilityAction(.escape) {
+            close(true)
+        }
         .transition(.move(edge: .leading).combined(with: .opacity))
     }
 }

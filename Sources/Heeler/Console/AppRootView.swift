@@ -29,9 +29,9 @@ struct AppRootView: View {
     /// Focus return (#A): the trigger that opened the drawer receives
     /// focus back on dismissal.
     @FocusState private var isTriggerFocused: Bool
-    /// VoiceOver/switch-control focus containment (review finding 3):
-    /// moves assistive focus INTO the drawer on open and back to the
-    /// trigger on dismissal.
+    /// VoiceOver/switch-control focus (review rounds): focus moves INTO
+    /// the drawer on open and back to the TRIGGER on dismissal — the
+    /// trigger itself is the assistive-focus target.
     @AccessibilityFocusState private var isDrawerAXFocused: Bool
     /// Which pages currently cover the window with their OWN navigation
     /// — reported upward through `AppDestinationPageFocusKey`.
@@ -99,7 +99,22 @@ struct AppRootView: View {
                         close: { restoreFocus in
                             withAnimation(.snappy) { isDrawerOpen = false }
                             isDrawerAXFocused = false
-                            if restoreFocus { isTriggerFocused = true }
+                            if restoreFocus {
+                                // Keyboard focus returns to the trigger.
+                                isTriggerFocused = true
+                                // Assistive focus returns to the trigger
+                                // too (review round): the trigger is the
+                                // page's FIRST accessible element
+                                // (topBarLeading), so a .screenChanged
+                                // post lands VoiceOver on it — binding an
+                                // AccessibilityFocusState through env
+                                // into the toolbar suppresses the item's
+                                // rendering (verified), so the
+                                // notification is the mechanism.
+                                UIAccessibility.post(
+                                    notification: .screenChanged,
+                                    argument: nil)
+                            }
                         })
                         .accessibilityFocused($isDrawerAXFocused)
                 }
@@ -107,8 +122,13 @@ struct AppRootView: View {
             .onChange(of: isDrawerOpen) { _, open in
                 if open {
                     // Move assistive focus into the drawer once it lands.
+                    // GUARD (review round): a fast scrim-dismiss inside
+                    // the delay must not steal focus back onto an
+                    // already-dismissed drawer.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                        isDrawerAXFocused = true
+                        if isDrawerOpen {
+                            isDrawerAXFocused = true
+                        }
                     }
                 }
             }
@@ -267,7 +287,7 @@ extension EnvironmentValues {
     }
 }
 
-/// The absent-trigger focus default. A computed `static var` — unlike a
+/// The absent key-focus default. A computed `static var` — unlike a
 /// stored `let`, it is not shared mutable state, so the concurrency check
 /// passes for the non-Sendable `FocusState.Binding`.
 private struct AppNavigationTriggerFocusKey: EnvironmentKey {

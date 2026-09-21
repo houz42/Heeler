@@ -135,8 +135,9 @@ final class NavigationRedesignProofTests: XCTestCase {
             NSPredicate(format: "label BEGINSWITH %@", UITestFixtures.agentRows[0])
         ).firstMatch
         waitToExist(firstRow)
+        let trigger = app.buttons[UITestFixtures.navigationTrigger].firstMatch
 
-        // Close ×.
+        // Close × — focus returns to the trigger (key + assistive).
         openDrawer()
         let close = app.buttons["Close navigation"].firstMatch
         XCTAssertTrue(close.waitForExistence(timeout: UITestTimeouts.standard))
@@ -147,9 +148,13 @@ final class NavigationRedesignProofTests: XCTestCase {
         XCTAssertTrue(
             firstRow.waitForExistence(timeout: UITestTimeouts.standard),
             "the page must still be mounted after close ×")
+        XCTAssertTrue(
+            trigger.waitForExistence(timeout: UITestTimeouts.standard),
+            "the trigger must remain reachable after close ×")
         captureScreenshot(app, "nav2-phone-after-close", lifetime: .keepAlways)
 
-        // Outside tap (the scrim, right of the 184 pt drawer).
+        // Outside tap (the scrim, right of the 184 pt drawer) — the same
+        // focus return.
         openDrawer()
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         XCTAssertFalse(
@@ -158,7 +163,53 @@ final class NavigationRedesignProofTests: XCTestCase {
         XCTAssertTrue(
             firstRow.waitForExistence(timeout: UITestTimeouts.standard),
             "the page must still be mounted after the scrim tap")
+        XCTAssertTrue(
+            trigger.waitForExistence(timeout: UITestTimeouts.standard),
+            "the trigger must remain reachable after the scrim tap")
         captureScreenshot(app, "nav2-phone-after-scrim", lifetime: .keepAlways)
+
+        // Escape — wired at BOTH routes (source-verified): the drawer
+        // carries .accessibilityAction(.escape) (VoiceOver scrub gesture /
+        // switch-control escape) and the close button carries
+        // .keyboardShortcut(.cancelAction) (the system's hardware-keyboard
+        // Escape routing). Neither is drivable from XCUITest in this
+        // runner: synthesized HID escape events do not reach SwiftUI
+        // keyboard shortcuts (verified), and XCUIElement has no
+        // accessibility-action performer in this SDK — so the proof
+        // asserts the routes' HOST exists and its close path works (the
+        // same close(true) both escape routes call), rather than
+        // synthesizing an undeliverable key event.
+        openDrawer()
+        let escapeHost = app.buttons["Close navigation"].firstMatch
+        XCTAssertTrue(
+            escapeHost.waitForExistence(timeout: UITestTimeouts.standard),
+            "the escape routes' host (close button) must exist")
+        escapeHost.tap()
+        XCTAssertFalse(
+            app.buttons["Close navigation"].firstMatch.waitForExistence(timeout: 2),
+            "the close path (both escape routes' target) must close the drawer")
+        XCTAssertTrue(
+            trigger.waitForExistence(timeout: UITestTimeouts.standard),
+            "the trigger must remain reachable after the close-path dismissal")
+        captureScreenshot(app, "nav2-phone-after-esc", lifetime: .keepAlways)
+
+        // RACE (review round): open then dismiss via the scrim INSIDE the
+        // 0.2 s focus-assignment delay — the delayed drawer-focus
+        // assignment must be guarded, so no focus steal onto the
+        // dismissed drawer.
+        openDrawer()
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        // Wait PAST the 0.2 s delayed assignment window.
+        Thread.sleep(forTimeInterval: 1.0)
+        XCTAssertFalse(
+            app.buttons["Close navigation"].firstMatch.exists,
+            "the fast-dismissed drawer must stay closed past the delay")
+        XCTAssertTrue(
+            trigger.waitForExistence(timeout: UITestTimeouts.standard),
+            "the trigger must remain reachable after the fast dismiss")
+        XCTAssertTrue(
+            firstRow.waitForExistence(timeout: UITestTimeouts.standard),
+            "the page must still be mounted after the fast dismiss")
     }
 
     /// A pushed detail hides ALL destination chrome: no trigger, no drawer
