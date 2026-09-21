@@ -226,6 +226,7 @@
 		6AD4E067F02196A9935D1171 /* NotificationConfigFileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 365757614D9876F58A48CEDA /* NotificationConfigFileTests.swift */; };
 		6B34378D8F7396BBF0DBB825 /* StartAgentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC2E07D2395573D9EF9DE8B9 /* StartAgentView.swift */; };
 		6C33AC12CE7ACC5730240A75 /* HeelerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F710C63524E24B79F95A898 /* HeelerApp.swift */; };
+		6C5D02C4FC769A57AA8A40A9 /* ChatKeyboardInset.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43FCB46C5FAAE626409A9583 /* ChatKeyboardInset.swift */; };
 		6CD1D3CCDB58EBFF5350AC7F /* AgentNotificationBannerStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A319930B80D42FB33DC8E42 /* AgentNotificationBannerStoreTests.swift */; };
 		6D436E6E24D655DD87ED9364 /* ConsoleCommandRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F6451A20326DC01EDBFE50D /* ConsoleCommandRegistry.swift */; };
 		6DA75E728052945BC787BBD3 /* AgentComposerStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 362EF66CE6DA07688C3E5F63 /* AgentComposerStoreTests.swift */; };
@@ -701,6 +702,7 @@
 		4273AC6F39EB1E015820E614 /* TerminalAppearanceSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalAppearanceSettingsView.swift; sourceTree = "<group>"; };
 		427512344847A84699F819A0 /* TerminalFontSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalFontSettingsTests.swift; sourceTree = "<group>"; };
 		431389855EAA66004BCCB5B9 /* AgentRowLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRowLayoutTests.swift; sourceTree = "<group>"; };
+		43FCB46C5FAAE626409A9583 /* ChatKeyboardInset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatKeyboardInset.swift; sourceTree = "<group>"; };
 		442A5127B47FF6FF8840B0B9 /* WorktreeDetailStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeDetailStoreTests.swift; sourceTree = "<group>"; };
 		443200EE85ADB91172DCFA90 /* ConsoleAgentSearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsoleAgentSearchTests.swift; sourceTree = "<group>"; };
 		444F11A4450A3CA904B26658 /* SkillsPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillsPickerView.swift; sourceTree = "<group>"; };
@@ -1750,6 +1752,7 @@
 				AC713C0A8F9860E625926C43 /* ChatDraftTileRail.swift */,
 				699591038C8BEBE618B0EB26 /* ChatFiltering.swift */,
 				70BB08F3F2812A61FECB5AB0 /* ChatInputAccessory.swift */,
+				43FCB46C5FAAE626409A9583 /* ChatKeyboardInset.swift */,
 				5BAE600FB5DE9F10EF90440D /* ChatMarkdownView.swift */,
 				39925FB51288D9FAD0C780B8 /* ChatPagingGate.swift */,
 				D71D76912A55B04D1E8038C2 /* ChatRows.swift */,
@@ -2298,6 +2301,7 @@
 				0671222380D45FA2D2DBF58B /* ChatDraftTileRail.swift in Sources */,
 				FDFDA6AA6821DCDE31483E51 /* ChatFiltering.swift in Sources */,
 				D6AFE155880AD6B898BCAC2B /* ChatInputAccessory.swift in Sources */,
+				6C5D02C4FC769A57AA8A40A9 /* ChatKeyboardInset.swift in Sources */,
 				175FBCC1D3F792C2E9E3CAFF /* ChatLinkAllowlistStore.swift in Sources */,
 				B9CA65AA9263072FBD10BE83 /* ChatMarkdownView.swift in Sources */,
 				90AFA0D89F777E64C60FEA23 /* ChatModels.swift in Sources */,
