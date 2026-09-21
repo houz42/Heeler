@@ -119,6 +119,9 @@ struct ChatScreen: View {
     /// sentinel row is on screen. Plain state so the trigger is a pure
     /// transition the tests can drive.
     @State private var pagingGate = ChatPagingGate()
+    /// The measured keyboard overlap (item 5): the composer pins to
+    /// this height instead of SwiftUI's two-stage keyboard avoidance.
+    @State private var keyboardInset = ChatKeyboardInset()
     @State private var topSentinelVisible = false
     /// The bottom sentinel's visibility drives the jump control's
     /// newest-end button.
@@ -205,8 +208,27 @@ struct ChatScreen: View {
                     .padding(.trailing, 8)
                 }
             }
+            // The composer is a LAYOUT SIBLING (not a safe-area inset):
+            // stock SwiftUI keyboard avoidance follows the two-stage
+            // UIKit notifications an accessory-bearing responder
+            // publishes, so the composer parked at the accessory-less
+            // frame between the stages and the transcript showed
+            // through the strip (the intermittent device gap). The
+            // ChatKeyboardInset measures the FINAL frame (coalesced)
+            // and the whole surface pads by exactly that — the
+            // composer's bottom IS the keyboard stack's top under
+            // every state.
+            // Read-only transcripts (no router/deliver) keep the
+            // composer absent; the keyboard inset stays zero because
+            // nothing becomes first responder.
+            if router != nil, deliver != nil {
+                inputFrame
+            }
         }
-        .safeAreaInset(edge: .bottom) { inputFrame }
+        .padding(.bottom, keyboardInset.height)
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+        .chatKeyboardInsetWindow(keyboardInset)
+
         // The +N collection sheet: every draft item, removable there.
         .sheet(isPresented: $showsDraftCollection) {
             ChatDraftCollectionSheet(
