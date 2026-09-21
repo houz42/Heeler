@@ -450,7 +450,7 @@ final class AgentChatStore {
         ])
         _ = try await channel.request(
             AgentChatRequest(
-                id: "", method: "answer",
+                id: "", method: "interactions.answer",
                 target: AgentChatTarget(
                     instanceId: registration.instanceId,
                     generation: registration.generation),
@@ -467,7 +467,7 @@ final class AgentChatStore {
         }
         _ = try await channel.request(
             AgentChatRequest(
-                id: "", method: "cancel",
+                id: "", method: "interactions.cancel",
                 target: AgentChatTarget(
                     instanceId: registration.instanceId,
                     generation: registration.generation),
