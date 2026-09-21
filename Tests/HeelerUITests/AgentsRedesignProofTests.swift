@@ -204,6 +204,67 @@ final class AgentsRedesignProofTests: XCTestCase {
         }
     }
 
+    // MARK: User device bug — grouped tap-through
+
+    func testGroupedRowsTapThroughForHostAndStateGroupings() {
+        // Host grouping: tapping a row must push the agent detail.
+        resetViewMenu()
+        waitToExist(row(containing: "Polish the Attach experience"))
+        app.buttons["Agent list view options"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Grouping"].firstMatch.waitForExistence(timeout: 5))
+        app.buttons["Grouping"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Host"].firstMatch.waitForExistence(timeout: 5))
+        app.buttons["Host"].firstMatch.tap()
+        let done = app.buttons["Done"].firstMatch
+        if done.waitForExistence(timeout: 5) { done.tap() }
+        XCTAssertTrue(staticText(containing: "Build Server").waitForExistence(timeout: 10))
+        // Tap a Studio Mac row inside the grouped container: the detail
+        // must arrive (device bug: value-links outside the List's
+        // selection machinery resolved to NOTHING).
+        row(containing: "Polish the Attach experience").tap()
+        XCTAssertTrue(app.waitForPushedDetail(),
+                      "a grouped (host) row tap must push the agent detail")
+        captureScreenshot(app, "agents-grouped-host-row-tapped", lifetime: .keepAlways)
+        let edge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
+        let target = app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5))
+        edge.press(forDuration: 0.05, thenDragTo: target)
+    }
+
+    func testGroupedRowsTapThroughForStateGrouping() {
+        // State grouping (fresh launch — the sheet's second in-test
+        // presentation flake on iOS 27): same tap-through contract.
+        resetViewMenu()
+        waitToExist(row(containing: "Polish the Attach experience"))
+        app.buttons["Agent list view options"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Grouping"].firstMatch.waitForExistence(timeout: 5))
+        app.buttons["Grouping"].firstMatch.tap()
+        app.swipeUp(velocity: .fast)
+        XCTAssertTrue(app.buttons["Agent state"].firstMatch.waitForExistence(timeout: 5))
+        app.buttons["Agent state"].firstMatch.tap()
+        let done = app.buttons["Done"].firstMatch
+        if done.waitForExistence(timeout: 5) { done.tap() }
+        XCTAssertTrue(staticText(containing: "Needs you").waitForExistence(timeout: 10))
+        row(containing: "Checkout review").tap()
+        XCTAssertTrue(app.waitForPushedDetail(),
+                      "a grouped (state) row tap must push the agent detail")
+        captureScreenshot(app, "agents-grouped-state-row-tapped", lifetime: .keepAlways)
+    }
+
+    func testFlatRowsStillTapThrough() {
+        // Regression: the flat list's native selection path keeps working.
+        resetViewMenu()
+        waitToExist(row(containing: "Polish the Attach experience"))
+        row(containing: "Polish the Attach experience").tap()
+        XCTAssertTrue(app.waitForPushedDetail(),
+                      "a flat row tap must push the agent detail")
+        // The detail hides the native back button (edge-gesture app);
+        // return via the same left-edge swipe the round-trip proof uses.
+        let edge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
+        let target = app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5))
+        edge.press(forDuration: 0.05, thenDragTo: target)
+        XCTAssertTrue(staticText(containing: "5 of 5 agents").waitForExistence(timeout: 10))
+    }
+
     // MARK: User device finding — the quick-state chips
 
     func testQuickStateChipsFilterAndSyncWithTypedFilters() {
@@ -605,6 +666,9 @@ final class AgentsRedesignProofTests: XCTestCase {
         app.buttons["Agent list view options"].firstMatch.tap()
         XCTAssertTrue(app.buttons["Grouping"].firstMatch.waitForExistence(timeout: 5))
         app.buttons["Grouping"].firstMatch.tap()
+        // The chooser's sixth option can sit below the fold — scroll the
+        // chooser before selecting.
+        app.swipeUp(velocity: .fast)
         XCTAssertTrue(app.buttons["Agent state"].firstMatch.waitForExistence(timeout: 5))
         app.buttons["Agent state"].firstMatch.tap()
         let done = app.buttons["Done"].firstMatch
