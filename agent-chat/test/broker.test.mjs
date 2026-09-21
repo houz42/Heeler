@@ -9,9 +9,14 @@ import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { startBroker } from '../src/broker.mjs';
 import { FrameReader, MAX_FRAME_BYTES } from '../src/frame.mjs';
 import { PROTOCOL_VERSION } from '../src/protocol.mjs';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 
 let dir;
 let broker;
@@ -32,10 +37,13 @@ afterEach(async () => {
 });
 
 // Minimal scripted peer: hello, then collect frames; reply() sends one.
+// Works against the suite's shared broker by default, or any broker via
+// an options object with socketPath (the wire-log tests run their own).
 class Peer {
-  constructor() {
+  constructor(target = {}) {
     this.frames = [];
-    this.sock = net.connect(broker.socketPath);
+    const socketPath = target.socketPath ?? broker.socketPath;
+    this.sock = net.connect(socketPath);
     this.sock.setNoDelay(true);
     this.closed = new Promise((r) => this.sock.once('close', r));
     this.reader = new FrameReader({ maxBytes: MAX_FRAME_BYTES, onFrame: (f) => this.frames.push(f) });
@@ -477,4 +485,170 @@ test('duplicate instanceId via a second fresh connection replaces the route', as
   await a2.next((f) => f.type === 'request', 'routed to a2');
   await c.close();
   await a2.close();
+});
+
+// ---------------------------------------------------------------------------
+// Wire observability: every contract rejection a client can hit must also
+// land in the broker's log with the method name and the caller peer, so a
+// client-side generic error is traceable broker-side. These tests run their
+// OWN broker with a collecting sink (the shared suite broker logs to
+// stderr by default and must keep doing so untouched).
+
+test('wire log: unknown method rejection names the method and the caller peer', async () => {
+  const events = [];
+  const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-chat-wirelog-'));
+  const b2 = await startBroker({
+    socketPath: path.join(dir2, 'chat.sock'),
+    log: (ev) => events.push(ev),
+  });
+  try {
+    const a = new Peer({ socketPath: b2.socketPath });
+    a.send(HELLO_ADAPTER);
+    await a.next((f) => f.type === 'welcome', 'welcome');
+    a.send(registration());
+    await a.next((f) => f.type === 'registered', 'registered');
+    const c = new Peer({ socketPath: b2.socketPath });
+    c.send(HELLO_CLIENT);
+    await c.next((f) => f.type === 'welcome', 'welcome');
+    // The historic failure shape: a client invoking a method that exists
+    // NOWHERE in the routing table (e.g. the answer-vs-interactions.answer
+    // bug class) gets a generic invalid_request client-side.
+    c.send({ type: 'request', id: 'x1', method: 'answer', target: { instanceId: 'inst-1', generation: 0 } });
+    const r = await c.next((f) => f.id === 'x1', 'x1 reply');
+    assert.equal(r.error.code, 'invalid_request'); // unchanged wire behavior
+    const ev = events.find((e) => e.event === 'request.unrouted' && e.method === 'answer');
+    assert.ok(ev, 'request.unrouted event naming the method was logged');
+    assert.equal(ev.code, 'invalid_request');
+    assert.ok(typeof ev.ts === 'string' && !Number.isNaN(Date.parse(ev.ts)), 'timestamped');
+    assert.ok(ev.peer.startsWith('client#'), `caller peer identified: ${ev.peer}`);
+    // Routing is unchanged: nothing reached the adapter.
+    assert.equal(a.frames.some((f) => f.type === 'request'), false);
+    await c.close();
+    await a.close();
+  } finally {
+    await b2.close().catch(() => {});
+    fs.rmSync(dir2, { recursive: true, force: true });
+  }
+});
+
+test('wire log: capability-gate rejection names method, capability and peer', async () => {
+  const events = [];
+  const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-chat-wirelog-'));
+  const b2 = await startBroker({
+    socketPath: path.join(dir2, 'chat.sock'),
+    log: (ev) => events.push(ev),
+  });
+  try {
+    const a = new Peer({ socketPath: b2.socketPath });
+    a.send(HELLO_ADAPTER);
+    await a.next((f) => f.type === 'welcome', 'welcome');
+    // telemetry:false registration -> session.telemetry is capability-gated.
+    a.send(registration());
+    await a.next((f) => f.type === 'registered', 'registered');
+    const c = new Peer({ socketPath: b2.socketPath });
+    c.send(HELLO_CLIENT);
+    await c.next((f) => f.type === 'welcome', 'welcome');
+    c.send({ type: 'request', id: 'g1', method: 'session.telemetry', target: { instanceId: 'inst-1', generation: 0 } });
+    const r = await c.next((f) => f.id === 'g1', 'g1 reply');
+    assert.equal(r.error.code, 'unsupported_capability'); // unchanged wire behavior
+    const ev = events.find((e) => e.event === 'request.gated' && e.method === 'session.telemetry');
+    assert.ok(ev, 'request.gated event naming the method was logged');
+    assert.equal(ev.capability, 'telemetry');
+    assert.equal(ev.code, 'unsupported_capability');
+    assert.ok(typeof ev.ts === 'string' && !Number.isNaN(Date.parse(ev.ts)), 'timestamped');
+    assert.ok(ev.peer.startsWith('client#'), `caller peer identified: ${ev.peer}`);
+    assert.equal(a.frames.some((f) => f.type === 'request'), false);
+    await c.close();
+    await a.close();
+  } finally {
+    await b2.close().catch(() => {});
+    fs.rmSync(dir2, { recursive: true, force: true });
+  }
+});
+
+test('wire log: routing-table miss (unknown instance) names method, target and peer', async () => {
+  const events = [];
+  const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-chat-wirelog-'));
+  const b2 = await startBroker({
+    socketPath: path.join(dir2, 'chat.sock'),
+    log: (ev) => events.push(ev),
+  });
+  try {
+    const c = new Peer({ socketPath: b2.socketPath });
+    c.send(HELLO_CLIENT);
+    await c.next((f) => f.type === 'welcome', 'welcome');
+    c.send({ type: 'request', id: 'm1', method: 'history.open', target: { instanceId: 'ghost', generation: 0 } });
+    const r = await c.next((f) => f.id === 'm1', 'm1 reply');
+    assert.equal(r.error.code, 'session_unavailable'); // unchanged wire behavior
+    const ev = events.find((e) => e.event === 'request.route_miss' && e.method === 'history.open');
+    assert.ok(ev, 'request.route_miss event naming the method was logged');
+    assert.equal(ev.target, 'ghost');
+    assert.equal(ev.code, 'session_unavailable');
+    assert.ok(ev.peer.startsWith('client#'), `caller peer identified: ${ev.peer}`);
+    // And a stale-generation miss logs too (same event, stale_generation).
+    const a = new Peer({ socketPath: b2.socketPath });
+    a.send(HELLO_ADAPTER);
+    await a.next((f) => f.type === 'welcome', 'welcome');
+    a.send(registration({ generation: 5 }));
+    await a.next((f) => f.type === 'registered', 'registered');
+    c.send({ type: 'request', id: 'm2', method: 'history.open', target: { instanceId: 'inst-1', generation: 3 } });
+    await c.next((f) => f.id === 'm2', 'm2 reply');
+    const ev2 = events.find((e) => e.event === 'request.route_miss' && e.target === 'inst-1@3');
+    assert.ok(ev2, 'route_miss for stale generation logged with instance@generation target');
+    assert.equal(ev2.code, 'stale_generation');
+    await c.close();
+    await a.close();
+  } finally {
+    await b2.close().catch(() => {});
+    fs.rmSync(dir2, { recursive: true, force: true });
+  }
+});
+
+test('wire log: default sink writes parseable JSON lines to stderr and log:null silences', async () => {
+  const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-chat-wirelog-'));
+  const sock2 = path.join(dir2, 'chat.sock');
+  // log:null must disable logging without breaking the broker.
+  const b2 = await startBroker({ socketPath: sock2, log: null });
+  await b2.close();
+  // The executable with --log FILE must emit parseable JSON lines there.
+  const logFile = path.join(dir2, 'wire.jsonl');
+  const child = spawn(
+    process.execPath,
+    [path.join(__dirname, '..', 'bin', 'broker.mjs'), '--socket', path.join(dir2, 'b3.sock'), '--log', logFile],
+    { stdio: ['ignore', 'inherit', 'inherit'] },
+  );
+  let a;
+  try {
+    const deadline = Date.now() + 5000;
+    while (!fs.existsSync(path.join(dir2, 'b3.sock')) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    a = new Peer({ socketPath: path.join(dir2, 'b3.sock') });
+    a.send(HELLO_ADAPTER);
+    await a.next((f) => f.type === 'welcome', 'adapter welcome');
+    a.send(registration());
+    await a.next((f) => f.type === 'registered', 'registered');
+    const c = new Peer({ socketPath: path.join(dir2, 'b3.sock') });
+    c.send(HELLO_CLIENT);
+    await c.next((f) => f.type === 'welcome', 'welcome');
+    c.send({ type: 'request', id: 'x1', method: 'bogus.method', target: { instanceId: 'inst-1', generation: 0 } });
+    await c.next((f) => f.id === 'x1', 'x1 reply');
+    await c.close();
+    const deadline2 = Date.now() + 2000;
+    let lines = [];
+    while (Date.now() < deadline2) {
+      lines = fs.readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+      if (lines.some((e) => e.event === 'request.unrouted')) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const ev = lines.find((e) => e.event === 'request.unrouted' && e.method === 'bogus.method');
+    assert.ok(ev, 'executable --log file received the request.unrouted JSON line');
+    assert.ok(!Number.isNaN(Date.parse(ev.ts)), 'file line timestamped');
+    assert.ok(ev.peer.startsWith('client#'), 'file line names the caller peer');
+  } finally {
+    await a?.close().catch(() => {});
+    child.kill('SIGTERM');
+    await new Promise((r) => child.once('exit', r));
+  }
+  fs.rmSync(dir2, { recursive: true, force: true });
 });
