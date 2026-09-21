@@ -53,9 +53,11 @@ final class HostsCardProofTests: XCTestCase {
         // The card list itself: both named routes with their chips.
         captureScreenshot(app, "host-card-routes", lifetime: .keepAlways)
 
-        // Tap the route row: the inspector for THAT route opens, titled
-        // HOST · ROUTE.
-        primaryRow.tap()
+        // Tap the route CHEVRON: the inspector for THAT route opens,
+        // titled HOST · ROUTE (the row itself is the switch now).
+        let primaryChevron = app.buttons["route-chevron-studio.demo.invalid"]
+        waitToExist(primaryChevron)
+        primaryChevron.tap()
         let inspectorTitle = app.navigationBars["Studio Mac · Primary"]
         XCTAssertTrue(
             inspectorTitle.waitForExistence(timeout: UITestTimeouts.standard),
@@ -101,8 +103,11 @@ final class HostsCardProofTests: XCTestCase {
             lanLabel.contains("alternate route"),
             "non-dialed route must present as alternate: \(lanLabel)")
         XCTAssertTrue(
-            lanLabel.contains("reachability unknown until checked"),
-            "alternate reachability must be stated unknown: \(lanLabel)")
+            lanLabel.contains("alternate route"),
+            "the row must present as an alternate: \(lanLabel)")
+        XCTAssertTrue(
+            lanLabel.contains("switch to this route"),
+            "the row's AX label must offer the switch action: \(lanLabel)")
         // The row is quiet: no state TEXT may render on route rows (the
         // dot alone signals; the user's design decision).
         for word in ["In use", "Alternate"] {
@@ -111,7 +116,9 @@ final class HostsCardProofTests: XCTestCase {
                 "route rows must not render state text ('\(word)' found)")
         }
 
-        lanRow.tap()
+        let lanChevron = app.buttons["route-chevron-studio.lan.demo.invalid"]
+        waitToExist(lanChevron)
+        lanChevron.tap()
         let inspectorTitle = app.navigationBars["Studio Mac · Local network"]
         XCTAssertTrue(
             inspectorTitle.waitForExistence(timeout: UITestTimeouts.standard),
@@ -224,37 +231,86 @@ final class HostsCardProofTests: XCTestCase {
         captureScreenshot(app, "route-edit-saved", lifetime: .keepAlways)
     }
 
-    // MARK: Scoped Edit on a host card
+    // MARK: Card chrome is quiet (user directive)
 
-    /// The card's Edit button opens the host form editing THAT host,
-    /// with its routes prefilled (§E 3: never a hardcoded host).
-    func testCardEditOpensTheFormForThatHost() {
+    /// The card carries NO Edit button (user directive: the name line
+    /// already leads to the detail page's own Edit). Asserts absence so
+    /// the control does not creep back; the detail chevron stays.
+    func testCardHasNoEditButtonButChevronLeadsToDetail() {
         app = UITestApp.launchDemo(.hostList)
 
-        // Two cards each carry an Edit; pick the first (Studio Mac).
-        let edit = app.buttons.matching(
-            NSPredicate(format: "identifier == 'host-card-edit'")).firstMatch
-        waitToExist(edit)
-        edit.tap()
-
-        // The form opens in edit mode with the Studio Mac host's values.
-        let form = app.navigationBars["Edit Host"]
-        XCTAssertTrue(
-            form.waitForExistence(timeout: UITestTimeouts.standard),
-            "host form never appeared from the card's Edit")
-        let name = app.textFields[UITestFixtures.hostFormNameField]
-        waitToExist(name)
         XCTAssertEqual(
-            (name.value as? String ?? "").trimmingCharacters(in: .whitespaces),
-            "Studio Mac",
-            "card Edit must open the form for THAT host")
-        // The named routes are prefilled from the host.
-        let primaryRoute = app.descendants(matching: .any).matching(
-            NSPredicate(
-                format: "identifier BEGINSWITH 'host-form-route-' AND label CONTAINS 'studio.demo.invalid'")
+            app.buttons.matching(
+                NSPredicate(format: "identifier == 'host-card-edit'")).firstMatch.exists,
+            false,
+            "the card-level Edit button must not exist (user directive)")
+        let chevron = app.buttons["host-card-detail-chevron"].firstMatch
+        waitToExist(chevron)
+        chevron.tap()
+        // The heading chevron opens the SAME detail the name does.
+        let detail = app.navigationBars["Studio Mac"]
+        XCTAssertTrue(
+            detail.waitForExistence(timeout: UITestTimeouts.standard),
+            "card chevron should open the Host detail")
+    }
+
+    // MARK: Row tap switches the route (user directive)
+
+    /// Tapping a route ROW switches the Host's preferred dial path to
+    /// THAT route (v1 PreferredAddressStore semantics): observable via
+    /// the detail page's Addresses section, where the preferred route
+    /// leads and carries the Preferred mark. Instant, no confirmation.
+    func testRouteRowTapSwitchesThePreferredPath() {
+        app = UITestApp.launchDemo(.hostList)
+
+        // Tap the NON-active route row: Local network on Studio Mac.
+        let lanRow = app.buttons["host-route-studio.lan.demo.invalid"]
+        waitToExist(lanRow)
+        lanRow.tap()
+
+        // The row is a switch: the inspector must NOT open from the row.
+        XCTAssertFalse(
+            app.navigationBars["Studio Mac · Local network"]
+                .waitForExistence(timeout: 2),
+            "a row tap must switch the route, not open the inspector")
+
+        // The preference is observable on the detail page's Addresses
+        // section: the switched route's ADDRESS now leads with the
+        // Preferred mark (the section lists addresses, not labels).
+        let heading = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH 'Open details for Studio Mac'")
         ).firstMatch
-        waitToExist(primaryRoute)
-        captureScreenshot(app, "host-card-edit-form", lifetime: .keepAlways)
+        waitToExist(heading)
+        heading.tap()
+        let lanAddress = app.staticTexts["studio.lan.demo.invalid"].firstMatch
+        XCTAssertTrue(
+            lanAddress.waitForExistence(timeout: UITestTimeouts.standard),
+            "the switched route's address should appear in the Addresses section")
+        // The Preferred mark exists and sits on the SAME row as the
+        // switched address (same y band) — the preference moved.
+        let preferredMark = app.staticTexts["Preferred"].firstMatch
+        waitToExist(preferredMark)
+        let lanY = lanAddress.frame.minY
+        let markY = preferredMark.frame.minY
+        XCTAssertEqual(
+            abs(lanY - markY), 0, accuracy: 30,
+            "the Preferred mark should sit on the switched route's row")
+        captureScreenshot(app, "route-switched-preferred", lifetime: .keepAlways)
+    }
+
+    /// The route CHEVRON opens the inspector for THAT route (the row's
+    /// second action).
+    func testRouteChevronOpensTheInspector() {
+        app = UITestApp.launchDemo(.hostList)
+
+        let chevron = app.buttons["route-chevron-studio.lan.demo.invalid"]
+        waitToExist(chevron)
+        chevron.tap()
+        let inspector = app.navigationBars["Studio Mac · Local network"]
+        XCTAssertTrue(
+            inspector.waitForExistence(timeout: UITestTimeouts.standard),
+            "the route chevron must open the route inspector")
+        captureScreenshot(app, "route-chevron-inspector", lifetime: .keepAlways)
     }
 
     // MARK: Route removal is deliberate and floor-guarded
@@ -389,9 +445,9 @@ final class HostsCardProofTests: XCTestCase {
         // The Build Server card's single route is unnamed (the demo
         // fixture gives it no label) — its inspector says "Name this
         // route" (the in-context hint).
-        let row = app.buttons["host-route-build.demo.invalid"]
-        waitToExist(row)
-        row.tap()
+        let chevron = app.buttons["route-chevron-build.demo.invalid"]
+        waitToExist(chevron)
+        chevron.tap()
         let inspector = app.navigationBars["Build Server · build.demo.invalid"]
         XCTAssertTrue(
             inspector.waitForExistence(timeout: UITestTimeouts.standard),
@@ -451,9 +507,9 @@ final class HostsCardProofTests: XCTestCase {
         // The Build Server's route: a real dial to a demo-unreachable
         // address — the check must produce a verdict, and the verdict
         // must survive re-renders of the open inspector.
-        let row = app.buttons["host-route-build.demo.invalid"]
-        waitToExist(row)
-        row.tap()
+        let chevron = app.buttons["route-chevron-build.demo.invalid"]
+        waitToExist(chevron)
+        chevron.tap()
         let inspector = app.navigationBars["Build Server · build.demo.invalid"]
         XCTAssertTrue(inspector.waitForExistence(timeout: UITestTimeouts.standard))
 

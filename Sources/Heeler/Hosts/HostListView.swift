@@ -85,9 +85,6 @@ struct HostListView: View {
     @State private var isScanningToPair = false
     @State private var manualFallbackRequested = false
     @State private var path: [Host.ID] = []
-    /// The Host being edited from a card's scoped Edit action (§E 3):
-    /// the host form sheet always targets exactly this Host.
-    @State private var editingHost: Host?
     @State private var inspectedRoute: HostRouteInspection?
     /// Top-level nav seam (handoff §A revision): the heading trigger is
     /// env-driven; sheets/tests without the app root keep the plain
@@ -211,11 +208,6 @@ struct HostListView: View {
                 HostFormView(store: store) { saved in
                     path.append(saved.id)
                 }
-            }
-            .sheet(item: $editingHost) { host in
-                // A card's scoped Edit (§E 3): the form edits exactly the
-                // Host the user tapped, keyed by that Host value.
-                HostFormView(store: store, editing: host)
             }
             .sheet(item: $inspectedRoute) { inspection in
                 // Tapping a route on a Host card: the inspector targets
@@ -355,7 +347,14 @@ struct HostListView: View {
                 { await retry(host.id) }
             },
             openDetail: { path.append(host.id) },
-            openEditor: { editingHost = host },
+            switchToRoute: { address in
+                // Row tap = switch (user directive): the tapped route
+                // becomes the Host's preferred dial path — the v1
+                // PreferredAddressStore semantics the multi-path work
+                // established. Instant, reversible (tap another route).
+                PreferredAddressStore(hostID: host.id)
+                    .prefer(address, candidates: host.candidateAddresses)
+            },
             openRouteInspector: { address in
                 // The inspection item owns its store for the lifetime of
                 // one presentation (device bug #5): status ticks re-run
@@ -442,11 +441,15 @@ struct HostRouteInspection: Identifiable {
     var store: HostRouteInspectorStore { carrier.store }
 }
 
-/// One Host as a card (handoff §E): heading with name + connection chip
-/// and an Edit button, then one row per NAMED route — exact address plus
-/// honest in-use/alternate state — each tapping into the route
-/// inspector. Chat service state belongs to the Host, not a route, so
-/// its row targets the Host (provisioning integration point, below).
+/// One Host as a card: heading with name + connection chip, then one row
+/// per NAMED route. The row IS a switch (user directive): tapping it
+/// makes that route the Host's preferred dial path — instant, no
+/// confirmation, reversible by tapping another route; the right-side
+/// chevron opens the route inspector. No card-level Edit button (user
+/// directive: the name line already leads to the detail page's own
+/// Edit; the card stays quiet). Chat service state belongs to the Host,
+/// not a route, so its row targets the Host (provisioning integration
+/// point, below).
 private struct HostCardSection: View {
     let host: Host
     let connectionStatus: EventsSessionStatus?
@@ -456,9 +459,11 @@ private struct HostCardSection: View {
     let isRetryInFlight: Bool
     let retryConnection: (@MainActor @Sendable () async -> Void)?
     let openDetail: () -> Void
-    /// Scoped Edit: opens the host form for THIS host, straight from the
-    /// card (approved §E: host edit targets the selected host).
-    let openEditor: () -> Void
+    /// Row tap = switch: makes the tapped route the Host's preferred dial
+    /// path (v1 PreferredAddressStore semantics; v2 reconciles its own
+    /// selection at integration).
+    let switchToRoute: (String) -> Void
+    /// Chevron tap = inspect: opens the route inspector for THAT route.
     let openRouteInspector: (String) -> Void
 
     /// Terminal stopped-auto-retry state: failed, or connecting while a
@@ -519,60 +524,78 @@ private struct HostCardSection: View {
                     .disabled(isRetryInFlight)
                     .accessibilityLabel("Retry connecting to \(host.displayAliasName)")
                 }
-                // Scoped Edit for THIS host, directly on the card
-                // (§E requirement 3): opens the host form editing
-                // exactly this Host, never a hardcoded one.
-                Button("Edit") { openEditor() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .accessibilityLabel("Edit \(host.displayAliasName)")
-                    .accessibilityIdentifier("host-card-edit")
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                // The heading's chevron opens the same detail (user
+                // directive: no card-level Edit — the detail page owns
+                // its own).
+                Button { openDetail() } label: {
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open details for \(host.displayAliasName)")
+                .accessibilityIdentifier("host-card-detail-chevron")
             }
 
-            // One row per named route: exact address and honest
-            // in-use/alternate state; tap inspects THAT route.
+            // One row per named route. The ROW is a switch (user
+            // directive): tapping makes it the preferred dial path —
+            // instant, reversible. The CHEVRON is the inspector.
             ForEach(host.candidateAddresses, id: \.self) { address in
                 let route = HostRoutePresentation(
                     host: host, address: address, connectedAddress: connectedAddress)
-                Button {
-                    openRouteInspector(address)
-                } label: {
-                    HStack(spacing: 10) {
-                        // The dot IS the in-use signal (user decision:
-                        // the row stays quiet — no 'In use'/'Alternate'
-                        // text; the inspector keeps the words).
-                        Image(systemName: "circle.fill")
-                            .font(.system(size: 7))
-                            .foregroundStyle(
-                                route.usage == .inUse ? Color.green : Color.secondary)
-                            .accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(route.name)
-                                .font(.subheadline.weight(.medium))
-                                .foregroundStyle(.primary)
-                            Text("\(route.address):\(String(host.port))")
-                                .font(.caption)
-                                .monospaced()
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
+                HStack(spacing: 10) {
+                    Button {
+                        switchToRoute(address)
+                    } label: {
+                        HStack(spacing: 10) {
+                            // The dot IS the in-use signal (user
+                            // decision: the row stays quiet — no state
+                            // text; the inspector keeps the words).
+                            Image(systemName: "circle.fill")
+                                .font(.system(size: 7))
+                                .foregroundStyle(
+                                    route.usage == .inUse ? Color.green : Color.secondary)
+                                .accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(route.name)
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(.primary)
+                                Text("\(route.address):\(String(host.port))")
+                                    .font(.caption)
+                                    .monospaced()
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            Spacer()
                         }
-                        Spacer()
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel(
+                        "Route \(route.name), \(route.address):\(String(host.port)), "
+                            + (route.usage == .inUse
+                                ? "currently in use"
+                                : "alternate route")
+                            + ". Double tap to switch to this route.")
+                    .accessibilityHint(
+                        "Sets this route as the preferred dial path for "
+                            + host.displayAliasName)
+                    .accessibilityIdentifier("host-route-\(route.address)")
+                    // The chevron: the row's second action — inspect.
+                    Button {
+                        openRouteInspector(address)
+                    } label: {
                         Image(systemName: "chevron.right")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                     }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel(
+                        "Show route details for \(route.name)")
+                    .accessibilityIdentifier(
+                        "route-chevron-\(route.address)")
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(
-                    "Route \(route.name), \(route.address):\(String(host.port)), "
-                        + (route.usage == .inUse
-                            ? "currently in use"
-                            : "alternate route, reachability unknown until checked"))
-                .accessibilityIdentifier("host-route-\(route.address)")
             }
         }
     }
