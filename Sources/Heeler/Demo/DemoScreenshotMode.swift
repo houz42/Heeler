@@ -202,7 +202,7 @@
                 initialLevel: .l0,
                 changeLevel: { _, _ in },
                 deliver: { _ in },
-                authorLabel: "Heeler · omp",
+                authorLabel: "Meadow · omp",
                 onAskAnswer: { _, _ in },
                 onAskCancel: { _ in })
         }

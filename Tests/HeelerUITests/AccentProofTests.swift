@@ -46,7 +46,7 @@ final class AccentProofTests: XCTestCase {
         let app = UITestApp.launchDemo(.chatPendingAsk)
 
         // The assistant article's author line (accent chrome).
-        let author = app.staticTexts["Heeler · omp"].firstMatch
+        let author = app.staticTexts["Meadow · omp"].firstMatch
         XCTAssertTrue(
             author.waitForExistence(timeout: UITestTimeouts.standard),
             "the author line must render on the pending-ask chat surface")
