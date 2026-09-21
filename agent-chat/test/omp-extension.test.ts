@@ -115,3 +115,130 @@ test('no session.changed on per-turn activity; only on real generation churn', {
   await rm(dir,{recursive:true,force:true});
  }
 });
+
+// Structured image send (attachments): prompt.send gains an OPTIONAL images
+// array [{ref?,mimeType,byteLength?,data?}]. Text-only sends must stay the
+// exact string call; image sends must reach pi.sendUserMessage as a CONTENT
+// ARRAY (text block + image blocks), resolvable from inline base64 or the
+// session blob store (img: refs).
+test('prompt.send: text-only stays a string; images build a content array', {timeout:5000}, async () => {
+ const dir=await mkdtemp(join(tmpdir(),'chat-image-send-'));
+ const socketPath=join(dir,'broker.sock');
+ const old=process.env.HEELER_CHAT_SOCKET;
+ process.env.HEELER_CHAT_SOCKET=socketPath;
+ const handlers=new Map();
+ // Tiny real PNG (1x1 transparent): omp's image validator decodes the data.
+ const pngB64='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+ const calls=[];
+ // Blob store: one stored user entry whose content array holds the image,
+ // addressable as the img:<entryId>:c:<index> ref blob.read serves.
+ const entryId='entry-1';
+ const entries=new Map([[entryId,{id:entryId,parentId:null,type:'message',message:{role:'user',content:[{type:'text',text:'see attached'},{type:'image',data:pngB64,mimeType:'image/png'}]}}]]);
+ const ctx={sessionManager:{getSessionId:()=>'test-session',getLeafId:()=>entryId,getEntry:id=>entries.get(id)},abort(){}};
+ let conn;
+ const connected=Promise.withResolvers();
+ // Gate on the adapter's own register frame arriving at the server (the
+ // 'registered' ack unblocks request serving on the adapter side).
+ const registered=Promise.withResolvers();
+ // The ADAPTER answers prompt.send requests itself over this socket; the
+ // server only performs the handshake (welcome + registered acks).
+ const server=net.createServer(socket=>{
+  conn=socket;connected.resolve();let buffer='';socket.setEncoding('utf8');
+  socket.on('data',chunk=>{
+   buffer+=chunk;
+   for(;;){const end=buffer.indexOf('\n');if(end<0)break;
+    const frame=JSON.parse(buffer.slice(0,end));buffer=buffer.slice(end+1);
+    if(frame.type==='hello')socket.write(JSON.stringify({type:'welcome',protocol:1,maxFrameBytes:1048576})+'\n');
+    if(frame.type==='register'){socket.write(JSON.stringify({type:'registered'})+'\n');registered.resolve();}
+   }
+  });
+ });
+ const request=(params)=>{
+  const {promise,resolve}=Promise.withResolvers();
+  const id='req-'+Math.random().toString(36).slice(2);
+  let buf='';
+  const onData=chunk=>{
+   buf+=chunk;
+   for(;;){const end=buf.indexOf('\n');if(end<0)break;
+    const frame=JSON.parse(buf.slice(0,end));buf=buf.slice(end+1);
+    if(frame.type==='response'&&frame.id===id){conn.off('data',onData);resolve(frame);}
+   }
+  };
+  conn.on('data',onData);
+  conn.write(JSON.stringify({type:'request',id,method:'prompt.send',params})+'\n');
+  return promise;
+ };
+ try {
+  server.listen(socketPath);await once(server,'listening');
+  extension({on:(name,fn)=>handlers.set(name,fn),sendUserMessage(c){calls.push(c);},getCommands:()=>[]});
+  handlers.get('session_start')({},ctx);
+  await registered.promise;
+  // 1) text-only: EXACT string, no array.
+  const r1=await request({text:'plain hello',requestKey:'k1'});
+  assert.equal(r1.result?.accepted,true);
+  assert.equal(calls.at(-1),'plain hello');
+  // 2) inline base64 image: content ARRAY with text + image blocks.
+  const r2=await request({text:'what is this?',requestKey:'k2',images:[{data:pngB64,mimeType:'image/png'}]});
+  assert.equal(r2.result?.accepted,true);
+  const c2=calls.at(-1);
+  assert.ok(Array.isArray(c2),'image send must pass a content array');
+  assert.deepEqual(c2,[{type:'text',text:'what is this?'},{type:'image',data:pngB64,mimeType:'image/png'}]);
+  // 3) blob-store ref: resolves to the SAME bytes as blob.read serves.
+  const r3=await request({text:'look at this ref',requestKey:'k3',images:[{ref:`img:${entryId}:c:1`,mimeType:'image/png'}]});
+  assert.equal(r3.result?.accepted,true);
+  const c3=calls.at(-1);
+  assert.ok(Array.isArray(c3));
+  assert.deepEqual(c3,[{type:'text',text:'look at this ref'},{type:'image',data:pngB64,mimeType:'image/png'}]);
+  // 4) validations reject (nothing sent on): bad mime, both data+ref, unknown ref.
+  const bad=[
+   {code:'invalid_request',params:{text:'x',requestKey:'e1',images:[{data:pngB64,mimeType:'image/bmp'}]}},
+   {code:'invalid_request',params:{text:'x',requestKey:'e2',images:[{data:pngB64,ref:`img:${entryId}:c:1`,mimeType:'image/png'}]}},
+   // Unknown blob ref: the blob store's own contract code, not invalid_request.
+   {code:'item_not_found',params:{text:'x',requestKey:'e3',images:[{ref:'img:missing:c:0',mimeType:'image/png'}]}},
+   {code:'invalid_request',params:{text:'x',requestKey:'e4',images:[]}},
+  ];
+  for(const {code,params} of bad){
+   const r=await request(params);
+   assert.equal(r.error?.code,code,JSON.stringify(params));
+   assert.equal(calls.length,3,'no send after a rejected prompt');
+  }
+ } finally {
+  handlers.get('session_shutdown')?.({},ctx);
+  const closed=Promise.withResolvers();server.close(closed.resolve);await closed.promise;
+  if(old===undefined)delete process.env.HEELER_CHAT_SOCKET;else process.env.HEELER_CHAT_SOCKET=old;
+  await rm(dir,{recursive:true,force:true});
+ }
+});
+
+test('registration declares attachments capability', {timeout:5000}, async () => {
+ const dir=await mkdtemp(join(tmpdir(),'chat-image-cap-'));
+ const socketPath=join(dir,'broker.sock');
+ const old=process.env.HEELER_CHAT_SOCKET;
+ process.env.HEELER_CHAT_SOCKET=socketPath;
+ const handlers=new Map();
+ const ctx={sessionManager:{getSessionId:()=> 'test-session',getLeafId:()=>null,getEntry:()=>undefined},abort(){}};
+ let peer;let register;
+ const server=net.createServer(socket=>{
+  peer=socket;let buffer='';socket.setEncoding('utf8');
+  socket.on('data',chunk=>{
+   buffer+=chunk;
+   for(;;){const end=buffer.indexOf('\n');if(end<0)break;
+    const frame=JSON.parse(buffer.slice(0,end));buffer=buffer.slice(end+1);
+    if(frame.type==='hello')socket.write(JSON.stringify({type:'welcome',protocol:1,maxFrameBytes:1048576})+'\n');
+    if(frame.type==='register'){register=frame;socket.write(JSON.stringify({type:'registered'})+'\n');}
+   }
+  });
+ });
+ try {
+  server.listen(socketPath);await once(server,'listening');
+  extension({on:(name,fn)=>handlers.set(name,fn),sendUserMessage(){},getCommands:()=>[]});
+  handlers.get('session_start')({},ctx);
+  await new Promise(r=>setTimeout(r,300));
+  assert.equal(register?.registration?.capabilities?.attachments,true,'attachments capability must be declared once the image-send path exists');
+ } finally {
+  handlers.get('session_shutdown')?.({},ctx);peer?.destroy();
+  const closed=Promise.withResolvers();server.close(closed.resolve);await closed.promise;
+  if(old===undefined)delete process.env.HEELER_CHAT_SOCKET;else process.env.HEELER_CHAT_SOCKET=old;
+  await rm(dir,{recursive:true,force:true});
+ }
+});

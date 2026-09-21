@@ -45,10 +45,18 @@ interface LocalCtx {
 	abort(): void;
 }
 
+/** One content block of a structured user message (omp extension API). */
+type ContentBlock =
+	| { type: "text"; text: string }
+	| { type: "image"; data: string; mimeType: string };
+
 /** The pi (ExtensionAPI) surface this adapter uses. */
 interface LocalPi {
 	on(event: string, handler: (event: unknown, ctx: LocalCtx) => void | Promise<void>): void;
-	sendUserMessage(content: string): void;
+	/** Content array form verified against the installed omp build (18.2.6):
+	 *  session.sendUserMessage splits text blocks into the prompt string and
+	 *  passes non-text blocks ({type:'image',data:<base64>,mimeType}) as images. */
+	sendUserMessage(content: string | ContentBlock[]): void;
 	getCommands(): Array<{ name: string; description?: string; source?: string; location?: string; path?: string }>;
 	logger?: { warn: (...args: unknown[]) => void };
 	/** Present in current omp builds; optional so older hosts still load. */
@@ -241,7 +249,7 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 			interrupt: true,
 			interactions: ask?.registered === true,
 			commands: true,
-			attachments: false,
+			attachments: true,
 			branches: false,
 			// v2 slice 1 (agent details): live context/model telemetry +
 			// explicit model changes. Requires a model-bearing ctx (older
@@ -480,7 +488,93 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 		respond(id, undefined, { code, message, retryable: false });
 	}
 
+
+	// -- structured prompt content (attachments) ------------------------------
+
+	/** Wire shape of one entry of prompt.send params.images. */
+	interface PromptImage {
+		ref?: unknown;
+		mimeType?: unknown;
+		byteLength?: unknown;
+		data?: unknown;
+	}
+
+	/** Image mime types the installed omp build accepts (image validator `ic`). */
+	const IMAGE_MIME_TYPES: Record<string, true> = {
+		"image/png": true,
+		"image/jpeg": true,
+		"image/gif": true,
+		"image/webp": true,
+	};
+
+	/**
+	 * Validate params.images and resolve each entry to a base64 payload:
+	 * inline `data` (base64 string) or a `ref` into this session's blob store
+	 * (the same `img:` refs blob.read serves). Throws HistoryError on any bad
+	 * entry; an absent images array yields undefined (text-only send).
+	 */
+	function resolvePromptImages(raw: unknown): Array<{ data: string; mimeType: string }> | undefined {
+		if (raw === undefined) return undefined;
+		if (!Array.isArray(raw) || raw.length === 0) {
+			throw new HistoryError("invalid_request", "images must be a non-empty array when present");
+		}
+		if (history === null) {
+			throw new HistoryError("session_unavailable", "session context not yet available");
+		}
+		const out: Array<{ data: string; mimeType: string }> = [];
+		for (const entryRaw of raw as PromptImage[]) {
+			if (typeof entryRaw !== "object" || entryRaw === null) {
+				throw new HistoryError("invalid_request", "each images entry must be an object");
+			}
+			const entry = entryRaw;
+			if (typeof entry.mimeType !== "string" || IMAGE_MIME_TYPES[entry.mimeType] !== true) {
+				throw new HistoryError(
+					"invalid_request",
+					`mimeType must be one of png/jpeg/gif/webp (got ${String(entry.mimeType)})`,
+				);
+			}
+			if (entry.data !== undefined && entry.ref !== undefined) {
+				throw new HistoryError("invalid_request", "each images entry must set exactly one of data or ref");
+			}
+			let data: string;
+			if (entry.data !== undefined) {
+				if (typeof entry.data !== "string" || entry.data.length === 0) {
+					throw new HistoryError("invalid_request", "data must be a non-empty base64 string");
+				}
+				data = entry.data;
+			} else if (entry.ref !== undefined) {
+				if (typeof entry.ref !== "string" || entry.ref.length === 0) {
+					throw new HistoryError("invalid_request", "ref must be a non-empty blob id");
+				}
+				// Resolve through the same blob store blob.read serves; a bad ref
+				// must reject the whole prompt (never a silent text-only send).
+				data = history.readBlobAll(entry.ref);
+			} else {
+				throw new HistoryError("invalid_request", "each images entry must set data or ref");
+			}
+			if (entry.byteLength !== undefined && typeof entry.byteLength !== "number") {
+				throw new HistoryError("invalid_request", "byteLength must be a number when present");
+			}
+			out.push({ data, mimeType: entry.mimeType });
+		}
+		return out;
+	}
+
+	/**
+	 * prompt.send content: the text-only path is the exact string (identical
+	 * call as before); with images, a content array — text block first, then
+	 * image blocks — matching omp's sendUserMessage content-array contract.
+	 */
+	function buildPromptContent(text: string, rawImages: unknown): string | ContentBlock[] {
+		const images = resolvePromptImages(rawImages);
+		if (images === undefined) return text;
+		const content: ContentBlock[] = [{ type: "text", text }];
+		for (const img of images) content.push({ type: "image", data: img.data, mimeType: img.mimeType });
+		return content;
+	}
+
 	// -- routed request handling -------------------------------------------------
+
 
 	async function handleRequest(frame: RoutedRequest): Promise<void> {
 		if (typeof frame.id !== "string" || typeof frame.method !== "string") return;
@@ -532,12 +626,16 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 						respond(frame.id, { accepted: true, requestKey: params.requestKey }); // idempotent replay
 						return;
 					}
+					const content = buildPromptContent(params.text, params.images);
 					dedupSeen.add(params.requestKey);
 					if (dedupSeen.size > DEDUP_MAX) {
 						const oldest = dedupSeen.keys().next().value;
 						if (typeof oldest === "string") dedupSeen.delete(oldest);
 					}
-					pi.sendUserMessage(params.text);
+					// Text-only send: identical string call as before (byte for
+					// byte); structured send: content ARRAY so images reach the
+					// provider as real image content, not inline text.
+					pi.sendUserMessage(content);
 					// NOTE: no session.changed here — per-turn activity must not trigger a
 					// client resync; turn lifecycle is covered by message.* + history.changed.
 					respond(frame.id, { accepted: true, requestKey: params.requestKey });

@@ -649,7 +649,21 @@ export class HistoryService {
 		return Buffer.from(block.data, "base64");
 	}
 
-	/** First chunk for an id records its hash; a changed hash on a later chunk is `item_changed`. */
+
+	/**
+	 * Full raw base64 payload of a blob (attachments: prompt.send image refs
+	 * resolve through the same blob store blob.read serves, in one call).
+	 * No consistency tracking: a prompt send is a point-in-time snapshot, not
+	 * a chunk sequence.
+	 */
+	readBlobAll(blobId: string): string {
+		const address = this.parseBlobId(blobId);
+		if (address === null) {
+			throw new HistoryError("item_not_found", `unknown blob ${blobId}`);
+		}
+		return this.blobBytes(address, blobId).toString("base64");
+	}
+
 	private trackConsistency(store: Map<string, string>, id: string, bytes: Buffer): void {
 		const hash = createHash("sha256").update(bytes).digest("hex");
 		const prior = store.get(id);
