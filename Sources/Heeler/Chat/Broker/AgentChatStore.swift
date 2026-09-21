@@ -83,6 +83,19 @@ final class AgentChatStore {
     /// resolution racing an in-flight interactions.list must win over
     /// the stale snapshot — the card may never resurrect.
     @ObservationIgnored private var resolvedInteractionTombstones: Set<String> = []
+    /// The persisted-history identity: the broker socket + pane session
+    /// the archive file is keyed by. Set on the first start() that
+    /// resolves availability + pane identity.
+    @ObservationIgnored private var archiveIdentity:
+        (socketPath: String, sessionFile: String)?
+    @ObservationIgnored private var didLoadArchivedResolutions = false
+    /// Answers THIS store has submitted but not yet acknowledged (the
+    /// broker emits interaction.resolved synchronously with accepting,
+    /// so the event can beat the submit's own reply). The resolved
+    /// handler recognizes these as OURS — a lost ack must never
+    /// misread this device's answer as 'another device'.
+    @ObservationIgnored private var submittedAnswers:
+        [String: AgentChatInteractionResolution] = [:]
     @ObservationIgnored private var subscribed = false
     @ObservationIgnored private var recentPageEpoch = 0
     /// Reconnect backoff after a broker-channel loss (contract: any
@@ -140,6 +153,19 @@ final class AgentChatStore {
         else {
             phase = .unavailable("No chat broker is configured for this Host.")
             return
+        }
+        // FIRST start on this store: the persisted resolution history
+        // loads from the archive (a NEW store — the detail reopen
+        // path — reconstructs its history here; later start()s keep
+        // the in-memory list, which is never behind the archive).
+        archiveIdentity = (socketPath: socketPath, sessionFile: pane.sessionFilePath)
+        if !didLoadArchivedResolutions {
+            didLoadArchivedResolutions = true
+            let archived = AgentChatResolutionArchiveStore.load(
+                socketPath: socketPath, sessionFile: pane.sessionFilePath)
+            if !archived.isEmpty {
+                interactionResolutions = archived
+            }
         }
         phase = .connecting
         lifecycleTask = Task { [weak self] in
@@ -455,6 +481,15 @@ final class AgentChatStore {
                 return .object(object)
             }),
         ])
+        // In-flight marker BEFORE the request: the broker emits
+        // interaction.resolved synchronously with accepting, so the
+        // event can arrive BEFORE this submit's own acknowledgement
+        // returns — the resolved handler must still recognize THIS
+        // device's answer (a lost ack must not misread our own
+        // answer as 'another device').
+        let submission = AgentChatInteractionResolution(
+            answered: interaction, answers: answers)
+        submittedAnswers[interaction.requestId] = submission
         do {
             _ = try await channel.request(
                 AgentChatRequest(
@@ -467,14 +502,17 @@ final class AgentChatStore {
             // submit. Clear the card and tombstone NOW (the resolved
             // event may be lost under event-queue pressure) and
             // record the transcript block with the resolved labels.
+            submittedAnswers[interaction.requestId] = nil
             interactions.removeAll {
                 $0.requestId == interaction.requestId
             }
             resolvedInteractionTombstones.insert(interaction.requestId)
-            recordResolution(
-                AgentChatInteractionResolution(
-                    answered: interaction, answers: answers))
+            recordResolution(submission)
         } catch let error as AgentChatError {
+            // Not settled by this submit (refused or transport blip):
+            // the stash must not survive into a later foreign
+            // resolution for the same id.
+            submittedAnswers[interaction.requestId] = nil
             if staleAnswerKind(error) != nil {
                 // The broker refused the answer: the ask is no longer
                 // pending (answered/cancelled/expired elsewhere while
@@ -493,6 +531,7 @@ final class AgentChatStore {
             throw error
         }
     }
+
 
     /// The honest kind for a refused answer, from the broker's REAL
     /// ask-adapter codes (ask.ts claimEntry + ERROR_CODES): 
@@ -619,17 +658,25 @@ final class AgentChatStore {
             // resolution racing interactions.list can never resurrect.
             resolvedInteractionTombstones.insert(requestId)
             interactions.removeAll { $0.requestId == requestId }
-            // The resolved ask renders as a transcript row. When this
-            // client already recorded the answer (the answer() path),
-            // the event is the same resolution — the recorded one
-            // keeps its labels and stays in place. A wire 'remote'
-            // resolution this store did NOT record was answered by
-            // ANOTHER device.
+            // An in-flight submission: this device's OWN answer — the
+            // broker emits the resolved event synchronously with
+            // accepting, so it can beat the submit's reply. The
+            // stashed resolution (with labels) is the record; the
+            // ack path dedups by requestId when it lands.
+            if let submission = submittedAnswers[requestId] {
+                submittedAnswers[requestId] = nil
+                recordResolution(submission)
+                return
+            }
+            // Already recorded (the answer ack beat the event): the
+            // recorded entry keeps its labels and stays in place.
             if interactionResolutions.contains(where: {
                 $0.requestId == requestId
             }) {
                 return
             }
+            // Not ours: a wire 'remote' resolution this store never
+            // submitted was answered by ANOTHER device.
             recordResolution(AgentChatInteractionResolution(
                 requestId: requestId, wireOutcome: outcome, wireSource: source))
         }
@@ -638,12 +685,20 @@ final class AgentChatStore {
     /// One resolution, one rendered record: replaces any existing entry
     /// for the same requestId (the recorded answer beats a later
     /// same-id event only via explicit re-record, which never happens)
-    /// and appends in arrival order.
+    /// and appends in first-record order — then persists the whole
+    /// list to the archive so a NEW store (detail reopen, app
+    /// relaunch) reconstructs the history.
     func recordResolution(_ resolution: AgentChatInteractionResolution) {
         interactionResolutions.removeAll {
             $0.requestId == resolution.requestId
         }
         interactionResolutions.append(resolution)
+        if let archive = archiveIdentity {
+            AgentChatResolutionArchiveStore.save(
+                socketPath: archive.socketPath,
+                sessionFile: archive.sessionFile,
+                resolutions: interactionResolutions)
+        }
     }
 
     private func upsertInteraction(_ interaction: AgentChatInteraction) {

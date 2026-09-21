@@ -223,6 +223,7 @@
 		6A4A6C677BD586F0D4750B21 /* KnownHostsStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AACC0F2C9582DE0932380D35 /* KnownHostsStoreTests.swift */; };
 		6AD4E067F02196A9935D1171 /* NotificationConfigFileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 365757614D9876F58A48CEDA /* NotificationConfigFileTests.swift */; };
 		6B34378D8F7396BBF0DBB825 /* StartAgentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC2E07D2395573D9EF9DE8B9 /* StartAgentView.swift */; };
+		6B523F83C8A9D28F6B07D914 /* AgentChatResolutionArchive.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F6776CC2DE69E14C2B4DFE8 /* AgentChatResolutionArchive.swift */; };
 		6C33AC12CE7ACC5730240A75 /* HeelerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F710C63524E24B79F95A898 /* HeelerApp.swift */; };
 		6CD1D3CCDB58EBFF5350AC7F /* AgentNotificationBannerStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A319930B80D42FB33DC8E42 /* AgentNotificationBannerStoreTests.swift */; };
 		6D436E6E24D655DD87ED9364 /* ConsoleCommandRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F6451A20326DC01EDBFE50D /* ConsoleCommandRegistry.swift */; };
@@ -659,6 +660,7 @@
 		2F48E9AF0870D90DF0829852 /* HostRetryPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostRetryPolicyTests.swift; sourceTree = "<group>"; };
 		2F565A5BE8CC4ABA3FA10D57 /* EventsSessionLatencyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventsSessionLatencyTests.swift; sourceTree = "<group>"; };
 		2F6451A20326DC01EDBFE50D /* ConsoleCommandRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsoleCommandRegistry.swift; sourceTree = "<group>"; };
+		2F6776CC2DE69E14C2B4DFE8 /* AgentChatResolutionArchive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentChatResolutionArchive.swift; sourceTree = "<group>"; };
 		3078FFAC4A7DD0A39D0031B9 /* ChatPasteResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatPasteResolver.swift; sourceTree = "<group>"; };
 		31B3368D352EFC805C2534F9 /* RealSSHFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealSSHFixture.swift; sourceTree = "<group>"; };
 		31F09325DE68693680E5A3BB /* HerdrSocketLocationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HerdrSocketLocationTests.swift; sourceTree = "<group>"; };
@@ -1931,6 +1933,7 @@
 				A6CCF1357D1D132740FF3043 /* AgentChatDomain.swift */,
 				C6F0435EDE7651482A8894AF /* AgentChatMapper.swift */,
 				E4C3A844FF5AEEFCDE2C532B /* AgentChatReconcile.swift */,
+				2F6776CC2DE69E14C2B4DFE8 /* AgentChatResolutionArchive.swift */,
 				6BEF84D857BBE5032A9F9FA7 /* AgentChatStore.swift */,
 				8EE595BA88C00393EE79C824 /* AgentChatTransport.swift */,
 				3206CEF877C07971A78E1728 /* AgentChatUI.swift */,
@@ -2222,6 +2225,7 @@
 				1061850F6BD4E7CF6ABA746A /* AgentChatDomain.swift in Sources */,
 				AF81E7419102466A24EF6FA3 /* AgentChatMapper.swift in Sources */,
 				C68809F09A56EAA712E78B83 /* AgentChatReconcile.swift in Sources */,
+				6B523F83C8A9D28F6B07D914 /* AgentChatResolutionArchive.swift in Sources */,
 				BF05F8507E8B6B84B8A83014 /* AgentChatStore.swift in Sources */,
 				4825B341BC8A6D0EA6506F46 /* AgentChatTransport.swift in Sources */,
 				E83F2812AD9FC60412AB9CA8 /* AgentChatUI.swift in Sources */,

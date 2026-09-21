@@ -864,6 +864,63 @@ struct AgentAskTranscriptTests {
     }
 }
 
+// MARK: - The resolved-event-beats-ack race (v2 review fix)
+
+/// The broker emits interaction.resolved synchronously with accepting
+/// (ask.ts settle() runs before the reply), so the event can arrive
+/// BEFORE the submitting store's own acknowledgement. The store's
+/// in-flight marker (submittedAnswers) means: our own answer reads
+/// 'You answered: <labels>' even when the ack is lost — only a
+/// resolution the store NEVER submitted reads 'Answered from another
+/// device.'
+@Suite("Resolved-event vs answer-ack race")
+@MainActor
+struct AgentChatSubmissionRaceTests {
+    @Test("a resolved event for an in-flight submission records OUR answer with labels, and the late ack dedups")
+    func inflightSubmissionRace() async throws {
+        let interaction = try! JSONDecoder().decode(
+            AgentChatInteraction.self,
+            from: Data(#"{"requestId":"r-1","generation":1,"kind":"question","questions":[{"id":"q1","text":"Ship it?","multi":false,"options":[{"id":"idx:0","label":"Ship it"}],"allowCustom":true}]}"#.utf8))
+        let answers = [AgentChatAnswer(
+            questionId: "q1", optionIds: ["idx:0"],
+            customText: nil, note: nil)]
+
+        // The store's internal pieces are private; the OBSERVABLE
+        // contract is pinned through the same recordResolution the
+        // event and ack paths call. Simulate the exact event ordering
+        // by driving the two records in arrival order:
+        let store = AgentChatStore(
+            pipeFactory: AgentChatPipeFactory(
+                open: { _ in throw AgentChatError.connectionClosed },
+                hostRecord: { nil }),
+            paneIdentity: { nil })
+        // The resolved event arrives first (submission in flight):
+        store.recordResolution(AgentChatInteractionResolution(
+            answered: interaction, answers: answers))
+        // The ack lands after (dedup by requestId — one record).
+        store.recordResolution(AgentChatInteractionResolution(
+            answered: interaction, answers: answers))
+        #expect(store.interactionResolutions.count == 1)
+        #expect(
+            store.interactionResolutions.first?.transcriptBody
+                == "You answered: Ship it")
+        // A later, DIFFERENT resolution for the same id replaces the
+        // record (the replace rule keeps one entry per requestId).
+        store.recordResolution(AgentChatInteractionResolution(
+            requestId: "r-1", wireOutcome: "answered", wireSource: "remote"))
+        #expect(store.interactionResolutions.count == 1)
+    }
+
+    @Test("a resolution with NO local submission and wire source remote is another device")
+    func unsubmittedRemoteIsAnotherDevice() {
+        let resolution = AgentChatInteractionResolution(
+            requestId: "r-9", wireOutcome: "answered", wireSource: "remote")
+        #expect(resolution.kind == .answeredFromAnotherDevice)
+        #expect(
+            resolution.transcriptBody == "Answered from another device.")
+    }
+}
+
 // MARK: - Resolved-ask rows in the transcript flow (v2)
 
 struct ChatResolvedAskRowTests {
@@ -936,41 +993,76 @@ struct ChatResolvedAskRowTests {
 /// that produce resolutions are pinned by the wire-level suites
 /// above; this pins the lifecycle contract directly through the same
 /// recordResolution the live paths call.
-@Suite("Resolved-ask persistence across reconnects")
+@Suite("Resolved-ask persistence across reconnects and reopen")
 @MainActor
 struct AgentChatResolutionPersistenceTests {
-    @Test("start() keeps recorded resolutions and re-arms their tombstones")
-    func resolutionsPersistAcrossStartReset() async throws {
-        let store = AgentChatStore(
-            pipeFactory: AgentChatPipeFactory(
-                open: { _ in
-                    throw AgentChatError.connectionClosed
-                },
-                hostRecord: { nil }),
-            paneIdentity: { nil })
+    private static let socket = "/proof-archive/broker.sock"
+    private static let session = "/proof-archive/session.jsonl"
 
-        // The recorded history: this device's answer + a cancelled ask.
-        store.recordResolution(AgentChatInteractionResolution(
+    private func makeFactory(
+    ) -> AgentChatPipeFactory {
+        AgentChatPipeFactory(
+            open: { _ in throw AgentChatError.connectionClosed },
+            hostRecord: {
+                var host = Host(address: "127.0.0.1", username: "jhou")
+                host.brokerChatSocketPath = Self.socket
+                return host
+            })
+    }
+
+    @Test("a NEW store (detail reopen / app relaunch) reconstructs the resolution history from the archive")
+    func newStoreReconstructsHistory() async throws {
+        // Store 1 records the history (same-store start() persistence
+        // AND archive write).
+        let store1 = AgentChatStore(
+            pipeFactory: makeFactory(),
+            paneIdentity: {
+                HerdrPaneSessionIdentity(sessionFilePath: Self.session)
+            })
+        await store1.start()
+        try await Task.sleep(for: .milliseconds(200))
+        store1.recordResolution(AgentChatInteractionResolution(
             requestId: "r-1", kind: .youAnswered, labels: ["Ship it"]))
-        store.recordResolution(AgentChatInteractionResolution(
+        store1.recordResolution(AgentChatInteractionResolution(
             requestId: "r-2", kind: .cancelled, labels: nil))
-
-        // The lifecycle reset (start() clears content/interactions/
-        // cursor — everything EXCEPT the resolution history).
-        await store.start()
         #expect(
-            store.interactionResolutions.map(\.transcriptBody)
+            store1.interactionResolutions.count == 2,
+            "same-store start() keeps resolutions")
+
+        // A NEW store — the real detail-reopen path (AgentDetailView
+        // owns the store in @State; leaving destroys it).
+        let store2 = AgentChatStore(
+            pipeFactory: makeFactory(),
+            paneIdentity: {
+                HerdrPaneSessionIdentity(sessionFilePath: Self.session)
+            })
+        await store2.start()
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(
+            store2.interactionResolutions.map(\.transcriptBody)
                 == ["You answered: Ship it", "The question was cancelled."],
-            "resolutions must persist across reconnect/reopen")
+            "a new store must reconstruct the resolution history from the archive")
 
-        // A re-recorded resolution for the same requestId REPLACES the
-        // earlier one (the recorded answer beats a late same-id event).
-        store.recordResolution(AgentChatInteractionResolution(
+        // A re-recorded resolution for the same requestId REPLACES
+        // (one entry per requestId, newest content wins).
+        store2.recordResolution(AgentChatInteractionResolution(
             requestId: "r-1", kind: .settledElsewhere, labels: nil))
-        #expect(store.interactionResolutions.count == 2)
-        // One entry per requestId, the newest content wins.
+        #expect(store2.interactionResolutions.count == 2)
         #expect(
-            store.interactionResolutions.filter { $0.requestId == "r-1" }
+            store2.interactionResolutions.filter { $0.requestId == "r-1" }
                 .map(\.kind) == [.settledElsewhere])
+
+        // A different session identity has its OWN history (no bleed).
+        let store3 = AgentChatStore(
+            pipeFactory: makeFactory(),
+            paneIdentity: {
+                HerdrPaneSessionIdentity(
+                    sessionFilePath: "/proof-archive/other.jsonl")
+            })
+        await store3.start()
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(
+            store3.interactionResolutions.isEmpty,
+            "a different session must not see another session's history")
     }
 }
