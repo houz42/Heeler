@@ -796,8 +796,86 @@ struct ChatMarkdownIRCFencingTests {
 // MARK: - ChatKeyboardInset (v2 item 5; the review's geometry regressions)
 
 struct ChatKeyboardInsetTests {
-    /// Drives the inset through real notifications with an injected
-    /// measurement seam.
+    /// The REAL geometry calculation (bottomEdgeCoverage), driven with
+    /// window-geometry inputs — frame + bounds + safe area — exactly
+    /// what the production notification path hands it. No injected
+    /// result: the docked/floating/off-window decisions run for real.
+    @Test func dockedKeyboardMeasuresCoveredHeight() {
+        // Docked at a 390x844 window: reaches the bottom edge.
+        let windowBounds = CGRect(x: 0, y: 0, width: 390, height: 844)
+        let frame = CGRect(x: 0, y: 444, width: 390, height: 400)
+        let withSafeArea: CGFloat = ChatKeyboardInset.bottomEdgeCoverage(
+            frameInWindow: frame, windowBounds: windowBounds,
+            bottomSafeArea: 34)
+        #expect(withSafeArea == 366)
+        // Safe area zero (test windows): full covered height.
+        let noSafeArea: CGFloat = ChatKeyboardInset.bottomEdgeCoverage(
+            frameInWindow: frame, windowBounds: windowBounds,
+            bottomSafeArea: 0)
+        #expect(noSafeArea == 400)
+    }
+
+    /// The review's floating-keyboard case: a frame hovering mid-window
+    /// NEVER touches the bottom edge and measures ZERO however large.
+    @Test func floatingKeyboardMeasuresZero() {
+        let windowBounds = CGRect(x: 0, y: 0, width: 1024, height: 1366)
+        // Floating on iPad: hovers mid-window, maxY far above the edge.
+        let floating = CGRect(x: 100, y: 400, width: 320, height: 280)
+        #expect(ChatKeyboardInset.bottomEdgeCoverage(
+            frameInWindow: floating, windowBounds: windowBounds,
+            bottomSafeArea: 20) == 0)
+        // Even a HUGE floating rect (bigger than the docked inset would
+        // be) measures zero — its maxY still misses the bottom edge.
+        let hugeFloating = CGRect(x: 40, y: 300, width: 700, height: 500)
+        #expect(ChatKeyboardInset.bottomEdgeCoverage(
+            frameInWindow: hugeFloating, windowBounds: windowBounds,
+            bottomSafeArea: 20) == 0)
+    }
+
+    /// Docked→floating→docked transitions over the real calculation:
+    /// the floating update measures zero (the state machine CLEARS on
+    /// it — pinned below), and the re-docked frame measures again.
+    @Test func dockedFloatingDockedTransitions() {
+        let windowBounds = CGRect(x: 0, y: 0, width: 390, height: 844)
+        let docked = CGRect(x: 0, y: 444, width: 390, height: 400)
+        let floating = CGRect(x: 40, y: 200, width: 320, height: 200)
+        let redocked = CGRect(x: 0, y: 544, width: 390, height: 300)
+        // Docked: covered height.
+        #expect(ChatKeyboardInset.bottomEdgeCoverage(
+            frameInWindow: docked, windowBounds: windowBounds,
+            bottomSafeArea: 0) == 400)
+        // Floating: zero — the state machine must CLEAR, not discard.
+        #expect(ChatKeyboardInset.bottomEdgeCoverage(
+            frameInWindow: floating, windowBounds: windowBounds,
+            bottomSafeArea: 0) == 0)
+        // Re-docked (shorter): measures its own height again.
+        #expect(ChatKeyboardInset.bottomEdgeCoverage(
+            frameInWindow: redocked, windowBounds: windowBounds,
+            bottomSafeArea: 0) == 300)
+    }
+
+    /// Off-window frames (the keyboard slid off the bottom, or the
+    /// notification's end frame lies below the screen — the iPad
+    /// off-screen frame family) measure zero.
+    @Test func offWindowFramesMeasureZero() {
+        let windowBounds = CGRect(x: 0, y: 0, width: 390, height: 844)
+        // Wholly below the window: intersection empty.
+        let below = CGRect(x: 0, y: 900, width: 390, height: 300)
+        #expect(ChatKeyboardInset.bottomEdgeCoverage(
+            frameInWindow: below, windowBounds: windowBounds,
+            bottomSafeArea: 0) == 0)
+        // 1pt tolerance: a frame 2pt short of the edge is floating.
+        let nearly = CGRect(x: 0, y: 44, width: 390, height: 798)
+        #expect(ChatKeyboardInset.bottomEdgeCoverage(
+            frameInWindow: nearly, windowBounds: windowBounds,
+            bottomSafeArea: 0) == 0)
+    }
+
+    /// The notification state machine (coalescing + clear-on-zero):
+    /// driven through real notifications with the measure seam, since
+    /// a unit-test host window has no UIWindowScene to satisfy the
+    /// production window-ownership gate (the geometry itself is
+    /// covered by the bottomEdgeCoverage tests above).
     @MainActor
     private func makeInset(
         measure: @escaping @MainActor (CGRect) -> CGFloat?
@@ -811,19 +889,13 @@ struct ChatKeyboardInsetTests {
     @MainActor
     private func post(
         _ center: NotificationCenter, _ name: Notification.Name,
-        frame: CGRect? = nil
+        frame: CGRect
     ) {
-        var userInfo: [AnyHashable: Any] = [:]
-        if let frame {
-            userInfo[UIResponder.keyboardFrameEndUserInfoKey] = frame
-        }
         center.post(
-            name: name, object: nil, userInfo: userInfo.isEmpty ? nil : userInfo)
+            name: name, object: nil,
+            userInfo: [UIResponder.keyboardFrameEndUserInfoKey: frame])
     }
 
-    /// Async main-queue delivery + the 60ms coalesce: the main thread
-    /// must YIELD for the queue-scheduled observer block to run; poll
-    /// with sleeps (each `try await Task.sleep` services the main queue).
     @MainActor
     private func settle(
         _ inset: ChatKeyboardInset, to height: CGFloat
@@ -835,86 +907,54 @@ struct ChatKeyboardInsetTests {
         return inset.height == height
     }
 
-    @Test func dockedPresentationSetsHeight() async throws {
+    @Test func zeroMeasurementClearsAPreviouslySetInset() async throws {
         let (inset, center) = await MainActor.run {
             makeInset { frame in
-                frame.height > 100 ? frame.height : nil
+                // Docked geometry (real shape): the window's bottom 400pt.
+                if frame.maxY > 800 { return 400 }
+                // Floating geometry: zero.
+                return 0
             }
         }
         await MainActor.run {
             post(center, UIResponder.keyboardWillShowNotification, frame: CGRect(
-                x: 0, y: 500, width: 390, height: 400))
+                x: 0, y: 444, width: 390, height: 400))
         }
-        let settled = await settle(inset, to: 400)
+        let docked = await settle(inset, to: 400)
+        #expect(docked, "docked presentation never landed")
+        await MainActor.run {
+            post(center, UIResponder.keyboardWillChangeFrameNotification, frame: CGRect(
+                x: 40, y: 200, width: 320, height: 200))
+        }
+        let cleared = await settle(inset, to: 0)
         let finalHeight = await MainActor.run { inset.height }
-        #expect(settled, "coalesced docked height never landed; got \(finalHeight)")
+        #expect(cleared, "floating transition never cleared the inset; got \(finalHeight)")
     }
 
     @Test func dismissalClearsHeight() async throws {
         let (inset, center) = await MainActor.run {
-            makeInset { frame in
-                frame.height > 100 ? frame.height : nil
-            }
+            makeInset { frame in frame.maxY > 800 ? 400 : nil }
         }
         await MainActor.run {
             post(center, UIResponder.keyboardWillShowNotification, frame: CGRect(
-                x: 0, y: 500, width: 390, height: 400))
+                x: 0, y: 444, width: 390, height: 400))
         }
         _ = await settle(inset, to: 400)
         await MainActor.run {
-            post(center, UIResponder.keyboardWillHideNotification)
+            post(center, UIResponder.keyboardWillHideNotification, frame: .zero)
         }
         let cleared = await settle(inset, to: 0)
         #expect(cleared, "dismissal never cleared the inset")
     }
 
-    /// The review's floating-keyboard case: a frame that covers no
-    /// bottom edge measures ZERO, and — the actual regression — a zero
-    /// measurement arriving while a previous height is set must CLEAR
-    /// it (the first cut discarded the update and the stale inset
-    /// stayed pinned).
-    @Test func zeroCoverageClearsAPreviouslySetInset() async throws {
-        let (inset, center) = await MainActor.run {
-            makeInset { frame in
-                // Floating geometry: hovers mid-window, never touches
-                // the bottom edge → measures zero.
-                if frame.minY > 200 && frame.maxY < 700 { return 0 }
-                return frame.height
-            }
-        }
-        // Docked first: height set.
-        await MainActor.run {
-            post(center, UIResponder.keyboardWillShowNotification, frame: CGRect(
-                x: 0, y: 500, width: 390, height: 400))
-        }
-        let docked = await settle(inset, to: 400)
-        #expect(docked, "docked presentation never landed")
-        // Then docked→floating: the update carries the floating frame
-        // and must CLEAR the inset, not keep the stale 400.
-        await MainActor.run {
-            post(center, UIResponder.keyboardWillChangeFrameNotification, frame: CGRect(
-                x: 40, y: 300, width: 320, height: 200))
-        }
-        let cleared = await settle(inset, to: 0)
-        let finalHeight2 = await MainActor.run { inset.height }
-        #expect(cleared, "floating transition never cleared the inset; got \(finalHeight2)")
-    }
-
-    /// The observer leak: the inset's block registrations are REMOVED
-    /// at deinit — after the inset dies, posting must not deliver
-    /// anywhere (no zombie observer in the center).
+    /// The observer leak teardown: the inset's block registrations are
+    /// REMOVED at deinit — no registration outlives the inset.
     @Test func observersAreRemovedAtDeinit() async throws {
-        await MainActor.run {
+        try await MainActor.run {
             let center = NotificationCenter()
             do {
-                _ = ChatKeyboardInset(
-                    notificationCenter: center,
-                    measure: { _ in 300 })
+                _ = ChatKeyboardInset(notificationCenter: center)
             }
-            // Delivered after deinit → a leaked registration. The
-            // center holds weak self so delivery is a no-op for the
-            // dead inset; the OBSERVABLE contract is that no block
-            // remains registered at all.
             var delivered = 0
             let probe = center.addObserver(
                 forName: UIResponder.keyboardWillShowNotification,
@@ -923,8 +963,29 @@ struct ChatKeyboardInsetTests {
             defer { center.removeObserver(probe) }
             center.post(name: UIResponder.keyboardWillShowNotification, object: nil)
             RunLoop.current.run(until: Date().addingTimeInterval(0.2))
-            // The probe itself received the post.
             #expect(delivered == 1)
         }
+    }
+
+    /// Item 18 + review: two hosts with the SAME pane id keep
+    /// independent drafts — the draft identity is HOST-QUALIFIED.
+    @Test func draftKeysAreHostQualified() {
+        let suite = "test.drafts.\(UUID().uuidString)"
+        let store = ChatDraftPersistenceStore(
+            defaults: UserDefaults(suiteName: suite)!)
+        let hostA = UUID()
+        let hostB = UUID()
+        let keyA = "\(hostA.uuidString)#w1:p1"
+        let keyB = "\(hostB.uuidString)#w1:p1"
+        store.save(
+            ChatPaneDraft(text: "host A draft", caretLocation: 4, items: []),
+            paneID: keyA)
+        #expect(store.draft(paneID: keyA)?.text == "host A draft")
+        #expect(store.draft(paneID: keyB) == nil)
+        store.save(
+            ChatPaneDraft(text: "host B draft", caretLocation: 0, items: []),
+            paneID: keyB)
+        #expect(store.draft(paneID: keyB)?.text == "host B draft")
+        #expect(store.draft(paneID: keyA)?.text == "host A draft")
     }
 }

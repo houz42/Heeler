@@ -132,32 +132,21 @@ final class ChatKeyboardInset {
                 isSceneKeyWindow: scene.keyWindow === window,
                 activationState: scene.activationState)
         else { return }
-        // BOTTOM-EDGE obstruction only (the review's floating-keyboard
-        // case): the inset is how far the keyboard covers the window's
-        // bottom edge — a docked keyboard reaches to (or near) the
-        // window's bottom; a FLOATING keyboard (iPad) hovers mid-window
-        // and covers none of the edge, so it must measure ZERO however
-        // large its rect is. Requiring the frame to reach the bottom
-        // edge (1pt tolerance) is what separates the two.
         let frameInWindow = window.convert(
             endFrame, from: window.screen.coordinateSpace)
-        let reachesBottomEdge = abs(
-            frameInWindow.maxY - window.bounds.maxY) <= 1
-        guard reachesBottomEdge else {
-            // Zero coverage: the keyboard left the bottom edge
-            // (docked→floating, or slid off-window). CLEAR the previous
-            // inset — the earlier code discarded the update and a stale
-            // height stayed pinned under a floating keyboard.
-            coalesceTask?.cancel()
-            coalesceTask = nil
-            apply(0)
-            return
-        }
-        let covered = window.bounds.intersection(frameInWindow).height
-        let height = max(0, covered - window.safeAreaInsets.bottom)
+        // The REAL geometry, extracted (tests drive it with
+        // window-geometry inputs — frame + bounds + safe area — not a
+        // precomputed result):
+        let height = Self.bottomEdgeCoverage(
+            frameInWindow: frameInWindow,
+            windowBounds: window.bounds,
+            bottomSafeArea: window.safeAreaInsets.bottom)
         guard height > 0 else {
-            // Zero-height coverage also clears (the dismissal path
-            // publishes a shrinking end frame before the hide lands).
+            // Zero coverage: the keyboard left the bottom edge
+            // (docked→floating, off-window) or the covered height
+            // collapsed to zero. CLEAR the previous inset — the review's
+            // case: the earlier code discarded the update and a stale
+            // height stayed pinned under a floating keyboard.
             coalesceTask?.cancel()
             coalesceTask = nil
             apply(0)
@@ -169,6 +158,26 @@ final class ChatKeyboardInset {
             guard !Task.isCancelled else { return }
             self?.apply(height)
         }
+    }
+
+    /// The inset for a keyboard frame against a window's geometry:
+    /// BOTTOM-EDGE obstruction only (the review's floating-keyboard
+    /// case). A docked keyboard reaches the window's bottom edge (1pt
+    /// tolerance) and measures its covered height above the bottom
+    /// safe area; a FLOATING keyboard (mid-window hover) never touches
+    /// the bottom edge and measures ZERO however large its rect is.
+    /// The same zero result covers a frame that slid off the window —
+    /// every non-docked state clears the inset.
+    nonisolated static func bottomEdgeCoverage(
+        frameInWindow: CGRect,
+        windowBounds: CGRect,
+        bottomSafeArea: CGFloat
+    ) -> CGFloat {
+        let reachesBottomEdge = abs(
+            frameInWindow.maxY - windowBounds.maxY) <= 1
+        guard reachesBottomEdge else { return 0 }
+        let covered = windowBounds.intersection(frameInWindow).height
+        return max(0, covered - bottomSafeArea)
     }
 
     private func keyboardWillDismiss() {
