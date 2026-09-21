@@ -160,27 +160,13 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack(path: $path) {
             Form {
-                Section {
-                    NavigationLink(value: Self.agentListDestination.rawValue) {
-                        Label("Agent List Fields", systemImage: "list.bullet.rectangle")
-                    }
-                    .accessibilityIdentifier(Self.agentListDestination.rawValue)
-                    NavigationLink(value: Self.headerLayoutDestination.rawValue) {
-                        Label("In-Agent Header", systemImage: "rectangle.topthird.inset.filled")
-                    }
-                    .accessibilityIdentifier(Self.headerLayoutDestination.rawValue)
-                    NavigationLink(value: "settings.notifications") {
-                        Label("Notifications", systemImage: "bell.badge")
-                    }
-                    NavigationLink(value: "settings.terminalAppearance") {
-                        Label("Terminal Appearance", systemImage: "paintpalette")
-                    }
-                }
-
-                // Reading & appearance (#A settings revision): the
-                // designed group. The EXISTING appearance picker moves
-                // here unchanged; text size and the default conversation
-                // detail join below it. Every pre-existing row stays.
+                // Reading & appearance (#A settings revision, device
+                // feedback): ONE group for every appearance/readability
+                // control — the designed rows (Appearance, Text Size,
+                // Default Conversation Detail) plus the existing surface
+                // appearance rows (Agent List Fields, In-Agent Header,
+                // Terminal Appearance), in the approved order. No second
+                // header; every existing item kept.
                 Section {
                     appearancePicker
                     NavigationLink(value: "settings.textSize") {
@@ -189,8 +175,25 @@ struct SettingsView: View {
                     NavigationLink(value: "settings.defaultDetail") {
                         Label("Default Conversation Detail", systemImage: "list.bullet.indent")
                     }
+                    NavigationLink(value: Self.agentListDestination.rawValue) {
+                        Label("Agent List Fields", systemImage: "list.bullet.rectangle")
+                    }
+                    .accessibilityIdentifier(Self.agentListDestination.rawValue)
+                    NavigationLink(value: Self.headerLayoutDestination.rawValue) {
+                        Label("In-Agent Header", systemImage: "rectangle.topthird.inset.filled")
+                    }
+                    .accessibilityIdentifier(Self.headerLayoutDestination.rawValue)
+                    NavigationLink(value: "settings.terminalAppearance") {
+                        Label("Terminal Appearance", systemImage: "paintpalette")
+                    }
                 } header: {
                     Text("Reading & Appearance")
+                }
+
+                Section {
+                    NavigationLink(value: "settings.notifications") {
+                        Label("Notifications", systemImage: "bell.badge")
+                    }
                 }
 
                 Section {
