@@ -64,6 +64,24 @@ enum ChatMarkdownTheme {
             ChatMarkdownTheme.tableCell(
                 configuration.row, label: configuration.label)
         }
+        .blockquote { configuration in
+            // The design's quote: a vertical accent bar, grey text
+            // (distinct from the author's prose), soft wash — a real
+            // markdown blockquote, never a bare indent.
+            configuration.label
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, 12)
+                .padding(.trailing, 12)
+                .padding(.vertical, 8)
+                .background(alignment: .leading) {
+                    // 3px accent bar (the prototype's rule).
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(Color.accentColor)
+                        .frame(width: 3)
+                }
+                .background(Color.primary.opacity(0.035))
+                .foregroundStyle(.secondary)
+        }
 
     /// The chat theme with its body text forced to a color (iMessage
     /// user bubbles: white on blue). MarkdownUI resolves the paragraph
@@ -233,7 +251,12 @@ struct ChatMarkdownView: View {
     var textColor: SwiftUI.Color? = nil
 
     var body: some View {
-        Markdown(markdown)
+        // Hard line breaks survive: cmark treats a single newline as a
+        // soft break (renders as a space), which collapsed the user's
+        // multi-line agent messages into one paragraph. The pre-pass
+        // splits prose lines into separate paragraphs (the prototype's
+        // <p> structure) while fenced code blocks stay verbatim.
+        Markdown(ChatMarkdownText.preservingHardBreaks(markdown))
             .markdownTheme(
                 textColor.map(ChatMarkdownTheme.chatColored)
                     ?? ChatMarkdownTheme.chat)
@@ -242,6 +265,11 @@ struct ChatMarkdownView: View {
             // unexpected network loads.
             .markdownImageProvider(NoImageProvider())
             .markdownInlineImageProvider(NoInlineImageProvider())
+            // Long-press is native text selection (final interaction
+            // spec): the prose/rich-markdown path had NO selection —
+            // only the mono/plain paths did. Enabling it on the
+            // container selects through MarkdownUI's Texts.
+            .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -262,6 +290,42 @@ struct ChatMarkdownText: Hashable {
     /// The markdown source with detected path targets rewritten as
     /// explicit markdown link constructs. Parsing happens downstream.
     var rewritten: String { ChatMarkdownText.rewrite(raw) }
+
+    /// Prose lines become separate paragraphs (a blank line between
+    /// them) so MarkdownUI/cmark's soft-break-as-space rule cannot
+    /// collapse multi-line messages into one blob. Fenced code blocks
+    /// pass through verbatim (their line structure is data). Pure
+    /// static — testable without a view.
+    static func preservingHardBreaks(_ text: String) -> String {
+        let lines = text.components(separatedBy: "\n")
+        var result: [String] = []
+        var inFence = false
+        for (index, line) in lines.enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
+                inFence.toggle()
+                result.append(line)
+                continue
+            }
+            if inFence || trimmed.isEmpty {
+                result.append(line)
+                continue
+            }
+            // A prose line: separate it from the next non-blank,
+            // non-fence line so cmark sees a paragraph boundary.
+            result.append(line)
+            if index < lines.count - 1 {
+                let next = lines[index + 1]
+                    .trimmingCharacters(in: .whitespaces)
+                let nextIsFence =
+                    next.hasPrefix("```") || next.hasPrefix("~~~")
+                if !next.isEmpty, !nextIsFence {
+                    result.append("")
+                }
+            }
+        }
+        return result.joined(separator: "\n")
+    }
 
     /// The pure seam: raw markdown in, markdown with explicit link
     /// constructs out. Static so tests drive it without a view.

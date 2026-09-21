@@ -572,3 +572,33 @@ private extension UIImage {
         return rightEdge - 6
     }
 }
+
+// MARK: - Hard line breaks (the multiline-collapse device finding)
+
+struct ChatMarkdownHardBreakTests {
+    @Test func proseLinesBecomeSeparateParagraphs() {
+        // A single newline must render as a paragraph boundary, not a
+        // space (cmark's soft-break rule collapsed multi-line agent
+        // messages on the device).
+        let out = ChatMarkdownText.preservingHardBreaks("first line\nsecond line")
+        #expect(out == "first line\n\nsecond line")
+    }
+
+    @Test func alreadyBlankLinesStaySingle() {
+        let out = ChatMarkdownText.preservingHardBreaks("para one\n\npara two")
+        #expect(out == "para one\n\npara two")
+    }
+
+    @Test func fencedCodeStaysVerbatim() {
+        let source = "before\n```swift\nlet a = 1\nlet b = 2\n```\nafter"
+        let out = ChatMarkdownText.preservingHardBreaks(source)
+        // Code lines stay verbatim; cmark's own block rules close the
+        // code at the fence, so no separator is needed after it.
+        #expect(out.contains("```swift\nlet a = 1\nlet b = 2\n```"))
+        // cmark's block rules separate the paragraph from the code
+        // block without any inserted blank — the pre-pass leaves fence
+        // boundaries to the parser.
+        #expect(out.hasPrefix("before\n```"))
+        #expect(out.hasSuffix("```\nafter"))
+    }
+}

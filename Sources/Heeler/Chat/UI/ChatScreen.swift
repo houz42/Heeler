@@ -244,6 +244,17 @@ struct ChatScreen: View {
             ChatTranscriptImageReader(image: image, fetch: imageFetcher ?? fetch)
                 .presentationDetents([.large])
         }
+        // A sent file's in-app reader.
+        .sheet(item: $viewingFile) { file in
+            NavigationStack {
+                ChatDraftFileReader(
+                    name: file.ref.split(separator: "/").last
+                        .map(String.init) ?? file.ref,
+                    path: file.ref,
+                    fetch: fetch)
+            }
+            .presentationDetents([.large])
+        }
         // The L1 Work inspector's call details.
         .sheet(item: $inspectedWork) { detail in
             ChatWorkInspectorSheet(detail: detail)
@@ -353,7 +364,15 @@ struct ChatScreen: View {
                     ChatBubbleView(
                         bubble: bubble,
                         router: openRouter,
-                        onToggleActions: { toggleActionsBubble(bubble) })
+                        onToggleActions: { toggleActionsBubble(bubble) },
+                        imageFetch: imageFetcher ?? fetch,
+                        openImageReader: { ref in
+                            if ref.mimeType == "file" {
+                                viewingFile = ref
+                            } else {
+                                viewingImage = ref
+                            }
+                        })
                 } else {
                     ChatAssistantArticleView(
                         bubble: bubble,
@@ -749,6 +768,14 @@ struct ChatScreen: View {
 
     @State private var draft = ""
     @State private var isSending = false
+    /// The last delivery failure, shown inline above the composer —
+    /// never silent (the send that vanishes is a build gate).
+    @State private var deliveryError: String?
+    /// SENDING → SENT (transcript-confirmed) / FAILED: the honest
+    /// delivery state. The transcript's own poll merges the sent
+    /// record into content; the confirmation flag shows SENT until
+    /// the message renders (then it's simply there).
+    @State private var showSentConfirmation = false
     @State private var inputFocused = false
     /// A suggestion accept waiting for the text view: the applied draft
     /// plus the caret the accept leaves (end of the insertion). Applied
@@ -770,6 +797,9 @@ struct ChatScreen: View {
     var imageFetcher: ((String) async throws -> Data)? = nil
     /// The transcript image being read full-size.
     @State private var viewingImage: ChatImageRef?
+    /// A file reference being read in-app (the sent-file chip opens
+    /// this reader — every file previews before any external app).
+    @State private var viewingFile: ChatImageRef?
     /// The L1 work inspector's call detail (tapped summary row).
     @State private var inspectedWork: ChatWorkCallDetail?
 
@@ -1032,8 +1062,29 @@ struct ChatScreen: View {
             !isSending, let router
         else { return }
         isSending = true
+        deliveryError = nil
         Task {
             defer { isSending = false }
+            // An attachment-bearing message is a PROMPT by definition —
+            // bypass the prefix classification entirely (the old path
+            // let a leading attachment path classify as a shell
+            // command and the message landed in a terminal pane, never
+            // the agent).
+            if ChatDraftComposer.carriesAttachments(items: draftItems) {
+                do {
+                    try await deliver?(text)
+                    clearDraftAfterSend()
+                    showSentConfirmation = true
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(2))
+                        showSentConfirmation = false
+                    }
+                } catch {
+                    // Visible + retryable: the draft (and items) stay.
+                    deliveryError = "Send failed — your message was not delivered. Retry when ready."
+                }
+                return
+            }
             let outcome = await router.submit(text)
             switch outcome {
             case .handled:
@@ -1044,8 +1095,14 @@ struct ChatScreen: View {
                 do {
                     try await deliver?(text)
                     clearDraftAfterSend()
+                    showSentConfirmation = true
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(2))
+                        showSentConfirmation = false
+                    }
                 } catch {
-                    // Delivery failed: keep the draft (and items) for retry.
+                    // Visible + retryable: the draft (and items) stay.
+                    deliveryError = "Send failed — your message was not delivered. Retry when ready."
                 }
             }
         }

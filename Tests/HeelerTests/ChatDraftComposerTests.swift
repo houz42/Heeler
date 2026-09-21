@@ -114,3 +114,66 @@ struct OmpParserImageBlockTests {
         #expect(texts == 1)
     }
 }
+
+// MARK: - The file-send misclassification fix (device finding 8)
+
+struct ChatDraftCompositionOrderTests {
+    private func file(_ path: String) -> ChatDraftItem {
+        .file(id: "f-\(path)", name: "notes.md", remotePath: path)
+    }
+
+    @Test func proseLeadsAndFileReferencesTrail() {
+        let text = ChatDraftComposer.messageText(
+            items: [file("/remote/notes.md")], draft: "please review")
+        #expect(text == "please review\n@/remote/notes.md")
+    }
+
+    @Test func imageReferencesKeepTheBarePathConvention() {
+        let text = ChatDraftComposer.messageText(
+            items: [.image(id: "i1", remotePath: "/remote/shot.png", previewData: nil)],
+            draft: "see this")
+        #expect(text == "see this\n/remote/shot.png")
+    }
+
+    @Test func attachmentBearingSendsBypassClassification() {
+        #expect(ChatDraftComposer.carriesAttachments(
+            items: [file("/remote/a.md")]))
+        #expect(ChatDraftComposer.carriesAttachments(
+            items: [.image(id: "i", remotePath: "/a.png", previewData: nil)]))
+        #expect(!ChatDraftComposer.carriesAttachments(
+            items: [.quote(id: "q", text: "hi", author: "Heeler")]))
+        #expect(!ChatDraftComposer.carriesAttachments(items: []))
+    }
+}
+
+// MARK: - The sent-attachment render split (device finding 8, render)
+
+struct SentAttachmentTextSplitTests {
+    @Test func imageLeadingPathSplitsToTile() {
+        let split = SentAttachmentText.split(
+            "/remote/shot.png\nlook at this")
+        #expect(split?.imageRefs.count == 1)
+        #expect(split?.imageRefs.first?.ref == "/remote/shot.png")
+        #expect(split?.imageRefs.first?.mimeType.hasPrefix("image/") == true)
+        #expect(split?.prose == "look at this")
+    }
+
+    @Test func atFileReferenceSplitsToChip() {
+        let split = SentAttachmentText.split(
+            "here it is\n@/remote/notes.md")
+        #expect(split?.imageRefs.count == 1)
+        #expect(split?.imageRefs.first?.ref == "/remote/notes.md")
+        #expect(split?.imageRefs.first?.mimeType == "file")
+        #expect(split?.prose == "here it is")
+    }
+
+    @Test func plainProseHasNoSplit() {
+        #expect(SentAttachmentText.split("just words") == nil)
+        #expect(SentAttachmentText.split("") == nil)
+    }
+
+    @Test func midTextPathsStayProse() {
+        let split = SentAttachmentText.split("the config at /etc/app.conf changed")
+        #expect(split == nil)
+    }
+}

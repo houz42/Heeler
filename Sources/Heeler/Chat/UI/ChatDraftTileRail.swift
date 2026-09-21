@@ -49,17 +49,35 @@ enum ChatDraftItem: Identifiable, Equatable {
 enum ChatDraftComposer {
     static func messageText(items: [ChatDraftItem], draft: String) -> String {
         var parts: [String] = []
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { parts.append(trimmed) }
         for item in items {
             switch item {
-            case .image(_, let path, _), .file(_, _, let path):
+            case .image(_, let path, _):
                 parts.append(path)
+            case .file(_, _, let path):
+                // The @-mention file grammar: the agent reads @path as
+                // a file reference.
+                parts.append("@\(path)")
             case .quote(_, let text, _):
                 parts.append(ChatQuote.draft(for: text))
             }
         }
-        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty { parts.append(trimmed) }
         return parts.joined(separator: "\n")
+    }
+}
+
+extension ChatDraftComposer {
+    /// True when the composed message carries attachments — such a
+    /// message is a PROMPT by definition and bypasses the router's
+    /// prefix classification entirely (a trailing path reference must
+    /// never be read as a shell command).
+    static func carriesAttachments(items: [ChatDraftItem]) -> Bool {
+        items.contains {
+            if case .image = $0 { return true }
+            if case .file = $0 { return true }
+            return false
+        }
     }
 }
 
@@ -83,13 +101,18 @@ struct ChatDraftTile<Content: View>: View {
                     .strokeBorder(Color.secondary.opacity(0.3), lineWidth: 0.5))
             .overlay(alignment: .topTrailing) {
                 if let remove {
+                    // Fully INSIDE the tile's corner (the old +6/-6
+                    // offset extended past the bounds and clipped at
+                    // the rail's edge on device — the × was half
+                    // hidden). 3pt padding keeps the whole hit target
+                    // visible at every tile size.
                     Button(action: remove) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .background(Circle().fill(.bar))
+                            .padding(3)
                     }
-                    .offset(x: 6, y: -6)
                     .accessibilityLabel("Remove draft item")
                 }
             }

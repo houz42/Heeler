@@ -473,26 +473,61 @@ struct ChatBubbleBody: View {
     let bubble: ChatBubble
     let router: OpenRouterCore
     var selectable: Bool = false
+    /// Resolves image-attachment refs (the host read seam) so a SENT
+    /// image renders as a preview tile in the user's own bubble, not
+    /// as its staged path string. Nil = no preview (the path text
+    /// stays visible — honest, never a broken tile).
+    var imageFetch: ((String) async throws -> Data)? = nil
+    /// Opens a preview tile's full reader.
+    var openImageReader: ((ChatImageRef) -> Void)? = nil
 
     @Environment(\.colorScheme) private var colorScheme
     private var isDark: Bool { colorScheme == .dark }
     private var isUser: Bool { bubble.role == .user }
 
     var body: some View {
-        Group {
-            if selectable {
-                Text(bubble.text)
-                    .font(.system(.subheadline))
-                    .foregroundStyle(isUser ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
-                    .textSelection(.enabled)
-            } else {
-                ChatLinkText(
-                    bubble.text,
-                    style: .assistant,
-                    router: router,
-                    // iMessage outgoing convention: saturated blue fill,
-                    // white text (the markdown body inherits the color).
-                    foregroundOverride: nil)
+        let split: SentAttachmentText.Split? = isUser
+            ? SentAttachmentText.split(bubble.text) : nil
+        return VStack(alignment: isUser ? .trailing : .leading, spacing: 6) {
+            // A SENT image renders as a preview tile, not its staged
+            // path string: the leading path tokens of a user message
+            // (the §D send composes them ahead of the prose) become
+            // the small-square gallery; the prose keeps the remaining
+            // text. Tapping the tile opens the full reader.
+            if isUser, let openImageReader, let split,
+                !split.imageRefs.isEmpty
+            {
+                let imageRefs = split.imageRefs.filter {
+                    $0.mimeType != "file"
+                }
+                let fileRefs = split.imageRefs.filter {
+                    $0.mimeType == "file"
+                }
+                if !imageRefs.isEmpty {
+                    ChatTranscriptImageGallery(
+                        images: imageRefs,
+                        fetch: imageFetch,
+                        openReader: openImageReader)
+                }
+                ForEach(fileRefs) { fileRef in
+                    SentFileChip(fileRef: fileRef) {
+                        openImageReader(fileRef)
+                    }
+                }
+            }
+            Group {
+                if selectable {
+                    Text(bubble.text)
+                        .font(.system(.subheadline))
+                        .foregroundStyle(isUser ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                        .textSelection(.enabled)
+                } else {
+                    ChatLinkText(
+                        split?.prose ?? bubble.text,
+                        style: .assistant,
+                        router: router,
+                        foregroundOverride: nil)
+                }
             }
         }
         .padding(.horizontal, 12)
@@ -529,12 +564,20 @@ struct ChatBubbleView: View {
     /// spec). Long press is NOT attached — it stays native text
     /// selection.
     var onToggleActions: (() -> Void)? = nil
+    /// Sent-image preview + sent-file chip seams (the user's own
+    /// bubble renders attachments, not path strings).
+    var imageFetch: ((String) async throws -> Data)? = nil
+    var openImageReader: ((ChatImageRef) -> Void)? = nil
 
     @State private var rowWidth: CGFloat = 320
     private var isUser: Bool { bubble.role == .user }
 
     var body: some View {
-        ChatBubbleBody(bubble: bubble, router: router)
+        ChatBubbleBody(
+            bubble: bubble,
+            router: router,
+            imageFetch: imageFetch,
+            openImageReader: openImageReader)
             .frame(maxWidth: rowWidth * 0.78, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { _, w in
@@ -1238,5 +1281,106 @@ struct ChatTranscriptImageGallery: View {
     static func fits(width: CGFloat) -> Int {
         guard width >= tile else { return 0 }
         return Int((width + gap) / (tile + gap))
+    }
+}
+
+
+/// Splits a SENT user message into its attachment path tokens and the
+/// prose remainder — the §D send composes attachment paths as leading
+/// standalone lines ahead of the message text (the agent reads the
+/// paths; the UI renders them as preview tiles instead). Pure static —
+/// testable. Image extensions only: a staged file path stays in the
+/// prose (no tile without image bytes).
+enum SentAttachmentText {
+    struct Split: Equatable {
+        var imageRefs: [ChatImageRef]
+        var prose: String
+    }
+
+    private static let imageExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "webp", "heic", "tiff",
+    ]
+
+    static func split(_ text: String) -> Split? {
+        // Reference lines may LEAD (bare image paths, the §D send) or
+        // TRAIL (the @-file references after the prose — the
+        // misclassification fix put prose first). Consume refs from
+        // both edges; everything in the middle is the user's prose.
+        let lines = text.components(separatedBy: "\n")
+
+        func refIfAny(_ line: String) -> ChatImageRef? {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { return nil }
+            let ext = Self.extensionOf(trimmed)
+            if trimmed.hasPrefix("/"), imageExtensions.contains(ext) {
+                return ChatImageRef(
+                    ref: trimmed, mimeType: "image/\(ext)", byteLength: nil)
+            }
+            if trimmed.hasPrefix("@/") {
+                return ChatImageRef(
+                    ref: String(trimmed.dropFirst()),
+                    mimeType: "file", byteLength: nil)
+            }
+            return nil
+        }
+
+        var start = 0
+        var leadRefs: [ChatImageRef] = []
+        while start < lines.count, let ref = refIfAny(lines[start]) {
+            leadRefs.append(ref)
+            start += 1
+        }
+        var end = lines.count
+        var tailRefs: [ChatImageRef] = []
+        while end > start, let ref = refIfAny(lines[end - 1]) {
+            tailRefs.insert(ref, at: 0)
+            end -= 1
+        }
+        let refs = leadRefs + tailRefs
+        guard !refs.isEmpty else { return nil }
+        let prose = lines[start..<end]
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return Split(imageRefs: refs, prose: prose)
+    }
+
+    /// The lowercased extension of `path`'s last path component
+    /// ("" when none).
+    private static func extensionOf(_ path: String) -> String {
+        let name = path.split(separator: "/").last.map(String.init) ?? path
+        guard let dot = name.lastIndex(of: ".") else { return "" }
+        return String(name[name.index(after: dot)...]).lowercased()
+    }
+}
+
+/// A sent file reference rendered as its NAME (never the raw path),
+/// opening the in-app file reader — the design's contract: every file
+/// opens in a preview before any external app.
+struct SentFileChip: View {
+    let fileRef: ChatImageRef
+    let open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 6) {
+                Image(systemName: "doc")
+                    .font(.caption)
+                Text(fileName)
+                    .font(.footnote.weight(.medium))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .frame(minHeight: 32, alignment: .center)
+            .background(
+                Color.secondary.opacity(0.1),
+                in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open file \(fileName)")
+    }
+
+    private var fileName: String {
+        fileRef.ref.split(separator: "/").last.map(String.init) ?? fileRef.ref
     }
 }
