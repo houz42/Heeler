@@ -538,7 +538,8 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 						if (typeof oldest === "string") dedupSeen.delete(oldest);
 					}
 					pi.sendUserMessage(params.text);
-					emitEvent("session.changed", {});
+					// NOTE: no session.changed here — per-turn activity must not trigger a
+					// client resync; turn lifecycle is covered by message.* + history.changed.
 					respond(frame.id, { accepted: true, requestKey: params.requestKey });
 					return;
 				}
@@ -820,7 +821,6 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 
 	pi.on("agent_start", (_e, ctx) => {
 		currentCtx = ctx;
-		emitEvent("session.changed", {});
 	});
 
 	pi.on("message_start", (event, ctx) => {
@@ -877,7 +877,6 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 		emitEvent("history.changed", { revision });
 	});
 
-	pi.on("turn_start", () => emitEvent("session.changed", {}));
 	pi.on("turn_end", () => {
 		revision = `rev:${randomUUID()}`;
 		emitEvent("history.changed", { revision });
