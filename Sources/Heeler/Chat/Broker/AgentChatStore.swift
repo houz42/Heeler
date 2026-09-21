@@ -55,6 +55,10 @@ final class AgentChatStore {
     private(set) var capabilities: AgentChatCapabilities?
     /// Pending interactions (only when interactions:true).
     private(set) var interactions: [AgentChatInteraction] = []
+    /// Recently resolved asks (honest state notes: answered elsewhere /
+    /// cancelled / expired — the card vanishing silently is the gap
+    /// this closes). Capped; the newest resolution wins.
+    private(set) var interactionResolutions: [AgentChatInteractionResolution] = []
 
     var askSupported: Bool { capabilities?.interactions == true }
 
@@ -113,6 +117,7 @@ final class AgentChatStore {
         capabilities = nil
         bufferedEvents = []
         resolvedInteractionTombstones = []
+        interactionResolutions = []
         subscribed = false
         reconnectTask?.cancel()
         reconnectTask = nil
@@ -530,11 +535,22 @@ final class AgentChatStore {
             streamTails.removeAll { $0.streamId == streamId }
         case .interaction(.opened(let interaction)):
             upsertInteraction(interaction)
-        case .interaction(.resolved(let requestId, _, _)):
+        case .interaction(.resolved(let requestId, let outcome, let source)):
             // Tombstone first: the snapshot install consults it, so a
             // resolution racing interactions.list can never resurrect.
             resolvedInteractionTombstones.insert(requestId)
             interactions.removeAll { $0.requestId == requestId }
+            // The honest resolved note replaces the vanished card.
+            let resolution = AgentChatInteractionResolution(
+                requestId: requestId, outcome: outcome, source: source)
+            interactionResolutions.removeAll {
+                $0.requestId == resolution.requestId
+            }
+            interactionResolutions.append(resolution)
+            if interactionResolutions.count > 4 {
+                interactionResolutions.removeFirst(
+                    interactionResolutions.count - 4)
+            }
         }
     }
 
