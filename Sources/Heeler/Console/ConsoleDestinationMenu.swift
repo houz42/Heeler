@@ -152,7 +152,7 @@ struct AppDestinationDrawer: View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
-                    Text("Heeler")
+                    Text("Meadow")
                         .font(.headline.weight(.semibold))
                     Spacer(minLength: 0)
                     Button {

@@ -46,7 +46,7 @@ const COUNT_MAX = 999;
 
 // The extension rewrites title and body after decrypting; this generic text
 // is what iOS shows if that fails, so it must never look alarming.
-const FALLBACK_ALERT = { title: "Heeler", body: "Agent update" };
+const FALLBACK_ALERT = { title: "Meadow", body: "Agent update" };
 
 const encoder = new TextEncoder();
 

@@ -348,7 +348,7 @@ private struct AgentActivityLinked<Content: View>: View {
             .buttonStyle(.plain)
             .tint(AgentActivitySemanticStyle.primary(on: surface))
             .accessibilityLabel(AgentActivityNarration.rowLabel(for: agent))
-            .accessibilityHint("Opens this Agent in Heeler")
+            .accessibilityHint("Opens this Agent in Meadow")
         } else {
             content
                 .frame(maxWidth: .infinity, minHeight: minimumHeight, alignment: .leading)
@@ -495,7 +495,7 @@ struct AgentActivityRowView: View {
 /// live agent. Open this file's canvas in Xcode to review the banner.
 #if DEBUG
     private func previewAgent(
-        _ status: String, kind: String, workspace: String? = "Heeler", name: String? = nil,
+        _ status: String, kind: String, workspace: String? = "Meadow", name: String? = nil,
         pane: String, title: String? = nil
     ) -> AgentActivityDetails.AgentDetail {
         AgentActivityDetails.AgentDetail(
@@ -510,12 +510,12 @@ struct AgentActivityRowView: View {
         static var configuredFields: AgentActivityPresentation {
             let agents = (1...4).map { index in
                 AgentActivityDetails.AgentDetail(
-                    paneID: "w1:p\(index)", kind: "claude", workspace: "Heeler",
+                    paneID: "w1:p\(index)", kind: "claude", workspace: "Meadow",
                     status: index == 1 ? "blocked" : "working", title: nil,
                     rows: [
-                        [.init(text: "Heeler"), .init(text: " · "), .init(text: "Claude", dim: true)],
+                        [.init(text: "Meadow"), .init(text: " · "), .init(text: "Claude", dim: true)],
                         [.init(text: "Review sidebar fields")],
-                        [.init(text: "~/Projects/Heeler", dim: true)],
+                        [.init(text: "~/Projects/Meadow", dim: true)],
                     ])
             }
             return .detailed(details: .init(hostName: "mbp", agents: agents),

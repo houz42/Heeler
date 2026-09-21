@@ -425,7 +425,7 @@ struct ConsoleDetailPresentationTests {
         #expect(presentation.renderingMode == .staticUnavailable)
         #expect(
             presentation.message
-                == "\(host.displayName): The connection is paused until Heeler becomes active.")
+                == "\(host.displayName): The connection is paused until Meadow becomes active.")
         #expect(!presentation.message.contains("no longer reported"))
         #expect(!presentation.message.contains("Connecting"))
     }

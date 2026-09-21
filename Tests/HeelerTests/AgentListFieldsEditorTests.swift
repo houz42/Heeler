@@ -152,7 +152,7 @@ struct AgentListFieldsEditorTests {
         await transport.setSidebarLayoutReadFailure(nil)
         await editor.syncFromPlugin(hostID)
         #expect(editor.syncStates[hostID] == .filled(
-            "This Host has no plugin fields snapshot, so Heeler's fallback fields were used."))
+            "This Host has no plugin fields snapshot, so Meadow's fallback fields were used."))
         #expect(editor.layout(for: hostID) == AgentRowLayout.heelerDefault.withHeelerRow([]))
 
         await transport.setSidebarLayout(pluginData)
@@ -366,7 +366,7 @@ struct AgentListFieldsEditorTests {
         await editor.syncFromPlugin(hostID)
         #expect(editor.layout(for: hostID) == AgentRowLayout.heelerDefault.withHeelerRow([]))
         #expect(editor.syncStates[hostID] == .filled(
-            "This Host has no plugin fields snapshot, so Heeler's fallback fields were used."))
+            "This Host has no plugin fields snapshot, so Meadow's fallback fields were used."))
 
         fetchState.value = .loaded(snapshot)
         await editor.syncFromPlugin(hostID)
@@ -603,7 +603,7 @@ struct AgentListFieldsInlineEditingTests {
         await editor.replaceWithPluginFields(hostID)
         #expect(layouts.hostLayouts[hostID] == AgentRowLayout.heelerDefault.withHeelerRow([]))
         #expect(editor.syncStates[hostID] == .filled(
-            "This Host has no plugin fields snapshot, so Heeler's fallback fields were used."))
+            "This Host has no plugin fields snapshot, so Meadow's fallback fields were used."))
     }
 }
 

@@ -95,7 +95,7 @@ struct AgentListFieldsSettingsTests {
 
     @Test func rowSlotCopyNamesHerdrRowsAndHeelersRow() {
         #expect(AgentListFieldsCopy.rowSlots.contains("Row 1 and Row 2 start from herdr"))
-        #expect(AgentListFieldsCopy.rowSlots.contains("Any row can use herdr and Heeler fields"))
+        #expect(AgentListFieldsCopy.rowSlots.contains("Any row can use herdr and Meadow fields"))
         #expect(AgentListFieldsCopy.rowSlots.contains("status badge always ends Row 1"))
         #expect(AgentListFieldsRowLabel.emptyText(slot: .herdr) == "No fields")
         #expect(AgentListFieldsRowLabel.emptyText(slot: .heeler) == "Not configured")
@@ -119,6 +119,6 @@ struct AgentListFieldsSettingsTests {
             AgentListFieldsRowLabel.accessibilityLabel(index: 0, row: [plain, dim])
                 == "Row 1, herdr row, Field 1 of 2: agent, default style, Field 2 of 2: workspace, secondary style")
         #expect(AgentListFieldsRowLabel.accessibilityLabel(index: 1, row: []) == "Row 2, herdr row, No fields")
-        #expect(AgentListFieldsRowLabel.accessibilityLabel(index: 2, row: []) == "Row 3, Heeler row, Not configured")
+        #expect(AgentListFieldsRowLabel.accessibilityLabel(index: 2, row: []) == "Row 3, Meadow row, Not configured")
     }
 }

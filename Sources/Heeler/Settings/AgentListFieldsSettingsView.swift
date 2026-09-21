@@ -617,7 +617,7 @@ enum AgentListFieldsCopy {
         "This Host's rows are replaced with its herdr fields and saved right away."
     static let unreadableCatalogTitle = "Saved fields can’t be read"
     static let unreadableCatalog =
-        "Heeler kept the saved data untouched. Every Host follows its herdr fields, and editing "
+        "Meadow kept the saved data untouched. Every Host follows its herdr fields, and editing "
         + "is paused until you reset."
     static let unreadableCatalogEdit =
         "The saved Agent List Fields could not be read. Nothing was changed. Reset Saved Fields to start over."
@@ -625,7 +625,7 @@ enum AgentListFieldsCopy {
         "The unreadable saved fields are deleted. Every Host returns to its herdr fields and can be edited again."
     static let rowSlots =
         "Row 1 and Row 2 start from herdr's sidebar fields; Sync from plugin refills them. "
-        + "Row 3 is Heeler's own row. Any row can use herdr and Heeler fields. "
+        + "Row 3 is Meadow's own row. Any row can use herdr and Meadow fields. "
         + "The status badge always ends Row 1."
 }
 

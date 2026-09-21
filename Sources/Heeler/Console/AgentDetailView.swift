@@ -422,7 +422,7 @@ struct AgentDetailView: View {
                     try await store.send(text)
                 },
                 pendingUnsupported: !store.askSupported,
-                authorLabel: "Heeler · \(agent.agent.kind.lowercased())",
+                authorLabel: "Meadow · \(agent.agent.kind.lowercased())",
                 attachments: chatAttachments,
                 onAskAnswer: { interaction, payloads in
                     guard let store = brokerChat,
@@ -515,7 +515,7 @@ struct AgentDetailView: View {
             AgentChatStateBanner(
                 icon: "arrow.triangle.branch",
                 title: "Ambiguous agent mapping",
-                detail: "More than one agent claims this session; Heeler will not guess.")
+                detail: "More than one agent claims this session; Meadow will not guess.")
         case .failed(let reason):
             AgentChatStateBanner(
                 icon: "exclamationmark.triangle",

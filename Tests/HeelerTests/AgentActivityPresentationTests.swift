@@ -17,7 +17,7 @@ struct AgentActivityPresentationTests {
         paneID: String, status: String = "working"
     ) -> AgentActivityDetails.AgentDetail {
         AgentActivityDetails.AgentDetail(
-            paneID: paneID, kind: "claude", name: nil, workspace: "Heeler", status: status,
+            paneID: paneID, kind: "claude", name: nil, workspace: "Meadow", status: status,
             title: "Task \(paneID)")
     }
 
@@ -113,16 +113,16 @@ struct AgentActivityPresentationTests {
 
     @Test func narrationIncludesStatusForIslandAccessibility() {
         let agent = agentDetail(paneID: "w1:p1", status: "blocked")
-        #expect(AgentActivityNarration.rowLabel(for: agent) == "Heeler, Claude, blocked")
+        #expect(AgentActivityNarration.rowLabel(for: agent) == "Meadow, Claude, blocked")
     }
 
     @Test func identityIgnoresCustomAgentNameAndTerminalTitle() {
         let agent = AgentActivityDetails.AgentDetail(
-            paneID: "w1:p1", kind: "codex", name: "identityprobe", workspace: "Heeler",
+            paneID: "w1:p1", kind: "codex", name: "identityprobe", workspace: "Meadow",
             status: "working", title: "Developer · identityprobe")
 
-        #expect(agent.displayIdentity == "Heeler · Codex")
-        #expect(agent.displayWorkspace == "Heeler")
+        #expect(agent.displayIdentity == "Meadow · Codex")
+        #expect(agent.displayWorkspace == "Meadow")
     }
 
     @Test func liveActivityRowsNarrateWorkspaceKindAndStatusWithoutTaskNoise() {
@@ -344,7 +344,7 @@ struct AgentActivityPresentationTests {
         let agents = (0..<agentCount).map { index in
             var agent = agentDetail(paneID: "w1:p\(index)")
             agent.rows = [
-                [.init(text: "Heeler · Claude", bold: true)],
+                 [.init(text: "Meadow · Claude", bold: true)],
                 [.init(text: "Fix the sidebar")],
                 [.init(text: "/Users/developer/Heeler", dim: true)],
             ]
