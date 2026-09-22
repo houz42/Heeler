@@ -430,6 +430,18 @@ class Broker {
         return false;
       }
       regEntry.lastSeq = ev.value.seq;
+      // Send-path observability: the adapter's delivery confirmation is
+      // logged (requestKey + committed recordId) so a send.accepted line with
+      // NO matching send.confirmed pins the failure to the adapter side.
+      if (ev.value.event?.type === 'send.confirmed') {
+        this.logWire('send.confirmed', {
+          peer: wirePeerLabel(sock, conn),
+          requestKey: ev.value.event.requestKey,
+          recordId: ev.value.event.recordId,
+          instanceId: conn.instanceId,
+          seq: ev.value.seq,
+        });
+      }
       const subs = this.subscribers.get(conn.instanceId);
       if (subs) {
         for (const [client, gen] of [...subs]) {
@@ -570,6 +582,18 @@ class Broker {
     }, this.cfg.requestTimeoutMs);
     this.corr.set(corrId, entry);
     conn.inflight++;
+    // Send-path observability: a prompt.send the broker ROUTES is logged
+    // with its requestKey, so a client-reported send failure is attributable
+    // (routed-but-never-confirmed = adapter-side drop; no route log at all =
+    // app/broker path). No wire change: pure logWire emission.
+    if (method === 'prompt.send') {
+      this.logWire('send.accepted', {
+        peer: wirePeerLabel(sock, conn),
+        requestKey: typeof params?.requestKey === 'string' ? params.requestKey : undefined,
+        target: target.instanceId,
+        corrId,
+      });
+    }
     this.write(reg.sock, { type: 'request', id: corrId, method, target, ...(params !== undefined && { params }) });
     return true;
   }
