@@ -221,6 +221,25 @@ The `attachments` capability remains the gate; the existing `text`+
 `images` params keep working (transition: adapters accept both; new
 clients send `content`).
 
+**Preserved wire shapes (invariants — additive only, never reshaped).**
+Everything below is live contract the in-review app domain batch
+depends on; this design extends ALONGSIDE it:
+
+1. `prompt.send` params `{text, requestKey, images?}`, where `images` is
+   `[{ref|data, mimeType, byteLength?}]` and refs are blob-store
+   `img:<entryId>:<scope>:<index>` ids — unchanged; `content` is an
+   additional param, never a replacement.
+2. `send.confirmed` event `{type:'send.confirmed', requestKey, recordId}`
+   where recordId IS the committed user record's entry id — unchanged,
+   and per §4a never fires for `command.invoke`.
+3. History user-message items carry optional `metadata:{requestKey}` on
+   the same record id — unchanged.
+4. Capability booleans incl. `attachments:true` — unchanged;
+   `command.invoke` reuses the existing `commands` bit.
+5. Chunk reads `item.read`/`blob.read` params `{itemId|blobId, offset?,
+   length?}` with encodings `json-utf8-base64` / `raw-base64` —
+   unchanged.
+
 ## 7. App-side composer change (post-review PoC)
 
 `ComposerRouterStore.routeSlash` grows an explicit three-way decision
