@@ -354,16 +354,21 @@ struct HostOnboardingView: View {
         .accessibilityIdentifier("host-detail-route-\(address)")
     }
 
-    /// One route-row tap, two honest meanings: with a pick pending
-    /// (several paths just answered), the tap IS the pick — persist AND
-    /// connect now through it, like `Use` always did. Otherwise the tap
-    /// switches the active route for the NEXT connect — instant,
-    /// reversible, and never tears down a live session.
+    /// ONE route-row tap, the SAME semantics as the list (review finding:
+    /// the two surfaces must not diverge): persist the pick through the
+    /// shared store, then reconnect through the Console's own retry path
+    /// — the identical persist + retryHost action a list-card tap runs.
+    /// With a pick pending (several paths just answered), the tap IS the
+    /// pick and the onboarding connect plays that role. Without a
+    /// Console behind this page (previews, demo), the tap persists only.
     private func tapRoute(_ address: String) {
         if store.pendingAddressChoice?.contains(address) == true {
             Task { await store.chooseAddress(address) }
         } else {
             store.setActiveRoute(address)
+            Task { @MainActor in
+                await retryConnection?()
+            }
         }
     }
 
@@ -398,23 +403,22 @@ struct HostOnboardingView: View {
                 + String(store.host.jumpPort))
     }
 
-    private var routeSectionFooter: String {
-        if store.pendingAddressChoice != nil {
-            return "Several paths answered — pick the one to connect through."
-        }
-        if store.host.candidateAddresses.count > 1 {
-            return "Tap a route to make it the one the next connection "
-                + "dials. A live connection keeps using its current route "
-                + "until it reconnects."
-        }
-        return ""
-    }
-
     private func retry() {
         guard !isManualReconnectInFlight, let retryConnection else { return }
         Task { @MainActor in
             await retryConnection()
         }
+    }
+
+    private var routeSectionFooter: String {
+        if store.pendingAddressChoice != nil {
+            return "Several paths answered — pick the one to connect through."
+        }
+        if store.host.candidateAddresses.count > 1 {
+            return "Tap a route to switch to it — the connection redials "
+                + "through it now."
+        }
+        return ""
     }
 
     private var connectionPresentation: HostOnboardingConnectionPresentation {

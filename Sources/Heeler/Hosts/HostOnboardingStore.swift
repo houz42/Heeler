@@ -131,14 +131,15 @@ final class HostOnboardingStore {
             ?? host.address
     }
 
-    /// TAP = SWITCH, on any candidate, any time: persists `address` as the
-    /// Host's active route — the path the NEXT dial leads with (the same
-    /// `PreferredAddressStore` order the real dial consumes via
-    /// `SSHTransportSettings.init(host:)`). Deliberately does NOT tear
-    /// down a live session: a route switch while connected takes effect on
-    /// the next connect (Reconnect, or the session's own redial), so a
-    /// working connection is never dropped on a tap. Reversible by
-    /// tapping another route; a no-op on the already-active route.
+    /// TAP = SWITCH, one half of the unified action (identical on the
+    /// list and here): persists `address` as the Host's active route —
+    /// the path the next dial leads with (the same `PreferredAddressStore`
+    /// order the real dial consumes via `SSHTransportSettings.init(host:)`)
+    /// — and broadcasts through the shared store. The dial itself is the
+    /// VIEW's second half (the Console retry, the same path a list-card
+    /// tap and a Reconnect press take); the store layer owns no Console.
+    /// Reversible by tapping another route; a no-op on an address the
+    /// Host no longer carries.
     func setActiveRoute(_ address: String) {
         guard host.candidateAddresses.contains(address) else { return }
         preferredAddresses.prefer(address, candidates: host.candidateAddresses)

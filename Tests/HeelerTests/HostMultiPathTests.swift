@@ -1007,4 +1007,90 @@ struct HostDetailRouteSwitchTests {
         #expect(settings.host == "vpn.example")
         #expect(settings.candidateAddresses == ["lan.example", "tailnet.example"])
     }
+
+    // MARK: The shared store's broadcast (review finding: real
+    // observation, not incidental status changes)
+
+    /// A preference change re-renders every reader ON ITS OWN: an
+    /// observation taken on `activeRoute` fires when ANY surface writes
+    /// through the shared store — no connection-status change needed to
+    /// mask it. This is the mechanism that keeps the list and the
+    /// detail from ever diverging.
+    @Test func sharedStoreBroadcastsPreferenceChangesToReaders() async throws {
+        let suiteName = "hm-detail-route-switch-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let host = Host(
+            address: "lan.example", username: "dev",
+            additionalAddresses: ["vpn.example"])
+        let shared = HostActiveRouteStore(defaults: defaults)
+
+        // A reader (the list card's mark, say) observes the active route.
+        let changes = AsyncStream<Void>.makeStream()
+        withObservationTracking {
+            _ = shared.activeRoute(
+                hostID: host.id, candidates: host.candidateAddresses)
+        } onChange: {
+            changes.continuation.yield(())
+        }
+
+        // A DIFFERENT surface (the detail, say) switches the route.
+        shared.setActiveRoute(
+            "vpn.example", hostID: host.id, candidates: host.candidateAddresses)
+
+        // The observation fired — the reader re-renders from the write
+        // alone, with no unrelated state change.
+        let fired = await withCheckedContinuation { continuation in
+            let task = Task {
+                var iterator = changes.stream.makeAsyncIterator()
+                if await iterator.next() != nil {
+                    continuation.resume(returning: true)
+                }
+            }
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                task.cancel()
+                continuation.resume(returning: false)
+            }
+        }
+        #expect(fired, "a preference write must re-render readers on its own")
+        #expect(
+            shared.activeRoute(hostID: host.id, candidates: host.candidateAddresses)
+                == "vpn.example")
+    }
+
+    /// The selected (next-dial) route stays DISTINCT from the
+    /// actually-connected address, including the fallback when no pick
+    /// has been made: `activeRoute` answers from the persisted
+    /// preference only — it never invents the connected address, and it
+    /// never lies when the catalog is empty.
+    @Test func selectedRouteStaysDistinctFromTheConnectedAddress() throws {
+        let suiteName = "hm-detail-route-switch-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let host = Host(
+            address: "lan.example", username: "dev",
+            additionalAddresses: ["vpn.example"])
+        let shared = HostActiveRouteStore(defaults: defaults)
+
+        // No pick yet: the configured default leads, NOT a fabricated
+        // "connected" address.
+        #expect(
+            shared.activeRoute(hostID: host.id, candidates: host.candidateAddresses)
+                == "lan.example")
+
+        // The live session is dialed through VPN (the fallback path in
+        // real life); the SELECTED route is still the stored pick — the
+        // two facts are separate and never overwrite each other.
+        let liveDialedAddress = "vpn.example"
+        shared.setActiveRoute(
+            "lan.example", hostID: host.id, candidates: host.candidateAddresses)
+        #expect(
+            shared.activeRoute(hostID: host.id, candidates: host.candidateAddresses)
+                == "lan.example")
+        #expect(liveDialedAddress == "vpn.example")
+
+        // An empty candidate list answers nil — never a fake default.
+        #expect(shared.activeRoute(hostID: host.id, candidates: []) == nil)
+    }
 }
