@@ -66,22 +66,27 @@ internal struct PendingInteraction: Sendable, Equatable, Identifiable {
 }
 
 /// One resolved ask, rendered as a quiet block in the transcript flow:
-/// 'You answered: <labels>' when this device answered, the honest
-/// outcome note otherwise (answered in terminal / from another
-/// device / cancelled / expired). Conversation history, not chrome —
-/// visible at every detail level. The block renders AFTER the
-/// transcript's rows and BEFORE any pending card: the client cannot
-/// order it against the agent's streamed turns by local receipt
-/// time (arrival time proves nothing about conversation position),
-/// and the broker carries no position for a resolution — parking at
-/// the live edge is the honest deterministic placement.
+/// 'You answered: <labels>' when this device's acknowledged answer
+/// won, the honest outcome note otherwise (answered in terminal /
+/// remotely / cancelled / expired). Conversation history, not
+/// chrome — visible at every detail level. PLACEMENT: the block
+/// anchors to its QUESTION — it renders right after the transcript
+/// message that contains the ask's question text, before the
+/// agent's reply that follows it (the correct order: question →
+/// answer → reply). Arrival time is never used to order it. An ask
+/// whose question text is unknown (legacy records) parks after the
+/// transcript's rows, before any pending card.
 internal struct ResolvedAsk: Sendable, Equatable, Identifiable {
     let id: String
     let body: String
+    /// The answered question's own text — the anchor: the block
+    /// renders after the message containing this text.
+    var questionText: String?
 
-    init(id: String, body: String) {
+    init(id: String, body: String, questionText: String? = nil) {
         self.id = id
         self.body = body
+        self.questionText = questionText
     }
 }
 
@@ -264,6 +269,14 @@ internal enum ChatFiltering {
             }
         }
 
+        // The resolved asks split by anchor: those whose question text
+        // appears in a visible message render right AFTER that message
+        // (question → answer → the agent's reply that follows it);
+        // those with no match park at the transcript's end, before
+        // the pending cards (legacy/unknown questions — never
+        // interleaved into a turn they don't belong to).
+        var unanchoredAsks = resolvedAsks
+
         var rows: [ChatRow] = []
         for message in messages {
             switch message.role {
@@ -329,10 +342,39 @@ internal enum ChatFiltering {
                     }
                 }
             }
+
+            // ANCHOR: after this message's rows, render every ask
+            // whose question text this message contains — the block
+            // sits at the question's point in the flow, BEFORE the
+            // agent's reply that follows it.
+            if !unanchoredAsks.isEmpty {
+                let messageText = message.blocks
+                    .compactMap { block -> String? in
+                        guard case .text(let text) = block else { return nil }
+                        return text
+                    }
+                    .joined(separator: "\n")
+                if !messageText.isEmpty {
+                    var remaining: [ResolvedAsk] = []
+                    for ask in unanchoredAsks {
+                        if let anchor = ask.questionText,
+                            !anchor.isEmpty,
+                            messageText.contains(anchor)
+                        {
+                            rows.append(.resolvedAsk(ask))
+                        } else {
+                            remaining.append(ask)
+                        }
+                    }
+                    unanchoredAsks = remaining
+                }
+            }
         }
-        // Resolved asks: after the transcript's rows, before the pending
-        // cards (deterministic placement — see ResolvedAsk).
-        rows.append(contentsOf: resolvedAsks.map(ChatRow.resolvedAsk))
+        // Asks whose anchor never matched (unknown/legacy question
+        // text, or the question's message is outside the visible
+        // page): park after the transcript's rows, before the
+        // pending cards — deterministic.
+        rows.append(contentsOf: unanchoredAsks.map(ChatRow.resolvedAsk))
 
         // Window-boundary orphans: results whose call is not among the
         // visible messages, after the transcript so they never interleave

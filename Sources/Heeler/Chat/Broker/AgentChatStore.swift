@@ -740,7 +740,8 @@ final class AgentChatStore {
                 }) {
                     recordResolution(AgentChatInteractionResolution(
                         staleRequestId: interaction.requestId,
-                        generationInvalidated: error.isStaleGeneration))
+                        generationInvalidated: error.isStaleGeneration,
+                        questionText: interaction.questions.first?.text))
                 }
                 try? await refreshInteractions()
             } else {
@@ -801,13 +802,18 @@ final class AgentChatStore {
                         instanceId: registration.instanceId,
                         generation: registration.generation),
                         params: .object(["requestId": .string(requestId)])))
-            // Accepted: the ask is cancelled broker-side. Clear the
-            // card and record the honest block (the resolved event
-            // may be lost under event-queue pressure).
+            // Accepted: the ask is cancelled broker-side. Capture the
+            // question text while the pending interaction is still
+            // held, clear the card, record the honest block (the
+            // resolved event may be lost under event-queue pressure).
+            let cancelledQuestionText = interactions.first(where: {
+                $0.requestId == requestId
+            })?.questions.first?.text
             interactions.removeAll { $0.requestId == requestId }
             resolvedInteractionTombstones.insert(requestId)
             recordResolution(AgentChatInteractionResolution(
-                requestId: requestId, kind: .cancelled, labels: nil))
+                requestId: requestId, kind: .cancelled,
+                questionText: cancelledQuestionText, labels: nil))
         } catch let error as AgentChatError {
             if staleAnswerKind(error) != nil {
                 interactions.removeAll { $0.requestId == requestId }
@@ -821,7 +827,10 @@ final class AgentChatStore {
                 }) {
                     recordResolution(AgentChatInteractionResolution(
                         staleRequestId: requestId,
-                        generationInvalidated: error.isStaleGeneration))
+                        generationInvalidated: error.isStaleGeneration,
+                        questionText: interactions.first(where: {
+                            $0.requestId == requestId
+                        })?.questions.first?.text))
                 }
             }
             throw error
@@ -890,6 +899,12 @@ final class AgentChatStore {
         case .interaction(.opened(let interaction)):
             upsertInteraction(interaction)
         case .interaction(.resolved(let requestId, let outcome, let source)):
+            // The ask's own question text, captured while the pending
+            // interaction is still held — the transcript anchor for
+            // whatever resolution this event produces.
+            let questionText = interactions.first(where: {
+                $0.requestId == requestId
+            })?.questions.first?.text
             // Tombstone first: the snapshot install consults it, so a
             // resolution racing interactions.list can never resurrect.
             resolvedInteractionTombstones.insert(requestId)
@@ -915,7 +930,7 @@ final class AgentChatStore {
                 // record stands — honest: we cannot prove we won.
                 recordResolution(AgentChatInteractionResolution(
                     requestId: requestId, kind: .answeredRemotely,
-                    labels: nil))
+                    questionText: questionText, labels: nil))
                 return
             }
             if submittedAnswers[requestId] != nil {
@@ -936,7 +951,8 @@ final class AgentChatStore {
             // (answered+remote reads NEUTRAL 'Answered remotely.' —
             // the store cannot prove which remote client won).
             recordResolution(AgentChatInteractionResolution(
-                requestId: requestId, wireOutcome: outcome, wireSource: source))
+                requestId: requestId, wireOutcome: outcome,
+                wireSource: source, questionText: questionText))
         }
     }
 
