@@ -62,6 +62,9 @@ interface LocalPi {
 	/** Present in current omp builds; optional so older hosts still load. */
 	registerTool?(tool: unknown): void;
 	getAllTools?(): ReadonlyArray<AskNativeToolInfo>;
+	/** Durable hidden custom entry (omp: sessionManager.appendCustomEntry).
+	 *  Used for send-correlation markers; optional so older hosts still load. */
+	appendEntry?(customType: string, data: unknown): string | undefined;
 	/** Public @oh-my-pi/pi-utils VERSION re-export; optional for older hosts. */
 	readonly VERSION?: string;
 }
@@ -108,6 +111,8 @@ const RECONNECT_MIN_MS = 250;
 const RECONNECT_MAX_MS = 5_000;
 /** Prompt requestKey dedup cache bound, per generation. */
 const DEDUP_MAX = 512;
+/** Bound on pending send-correlation markers (a stuck FIFO cannot grow unbounded). */
+const PENDING_SENDS_MAX = 64;
 
 export default function ompChatAdapterExtension(pi: LocalPi): void {
 	const log = (...args: unknown[]) => pi.logger?.warn("[omp-chat-adapter]", ...args);
@@ -130,6 +135,30 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 	const dedupSeen = new Set<string>();
 	/** Provisional stream IDs in flight; cleared on generation change. */
 	const activeStreams = new Set<string>();
+
+	/**
+	 * Broker-originated sends awaiting their committed user record, in send
+	 * order. At each user message_end the head is popped and its requestKey
+	 * is durably correlated to the committed record id (marker entry +
+	 * send.confirmed event). FIFO discipline is exact for sequential sends;
+	 * interleaved local/CLI user messages simply never match a key.
+	 */
+	const pendingSends: Array<string> = [];
+
+	/** Correlate a committed user record to its send's requestKey.
+	 * Pops the FIFO head (the oldest in-flight prompt.send), binds it
+	 * durably to the committed record id via sessionManager.appendCustomEntry,
+	 * and emits a send.confirmed event so the client can authoritatively
+	 * match its echo to the landed record. */
+	function correlateCommittedSend(): void {
+		const requestKey = pendingSends.shift();
+		if (requestKey === undefined) return;
+		if (sessionFile !== undefined) {
+			const marker = { type: "send.confirmed", requestKey, timestamp: Date.now() };
+			const recordId = ctx.sessionManager?.appendEntry?.("heeler:send", marker);
+			if (recordId !== undefined) emitEvent("send.confirmed", { requestKey, recordId: String(recordId) });
+		}
+	}
 
 	// -- socket + bounded outgoing queue ---------------------------------------
 	let socket: net.Socket | null = null;
@@ -632,6 +661,11 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 						const oldest = dedupSeen.keys().next().value;
 						if (typeof oldest === "string") dedupSeen.delete(oldest);
 					}
+					// Queue for send-correlation: when this prompt's user record is
+					// committed (user message_end), its requestKey is durably
+					// bound to the record id. FIFO head matches the next committed
+					// broker-originated user message.
+					if (pendingSends.length < PENDING_SENDS_MAX) pendingSends.push(params.requestKey);
 					// Text-only send: identical string call as before (byte for
 					// byte); structured send: content ARRAY so images reach the
 					// provider as real image content, not inline text.
@@ -965,6 +999,7 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 				emitEvent("message.finished", { streamId });
 			}
 		}
+		if (role === "user") correlateCommittedSend();
 		if (role === "assistant" || role === "user" || role === "toolResult") {
 			emitEvent("history.changed", { revision });
 		}
