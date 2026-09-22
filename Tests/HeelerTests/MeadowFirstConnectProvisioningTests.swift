@@ -336,8 +336,10 @@ struct MeadowFirstConnectProvisioningTests {
             return
         }
         #expect(agents.count == 2)
-        #expect(agents[0].resumeSessionID == "01a0c4ef-6a8b-7169-86cf-265306ac7319")
-        #expect(agents[1].resumeSessionID == nil)
+        // Bounded indexing: a smaller-than-expected list must FAIL the
+        // expectation, never crash the process out from under the suite.
+        #expect(agents.first?.resumeSessionID == "01a0c4ef-6a8b-7169-86cf-265306ac7319")
+        #expect(agents.dropFirst().first?.resumeSessionID == nil)
         #expect(store.resolvedSocketPath == "/home/dev/.local/share/meadow/broker.sock")
         // The provisioning sequence ran: staging, checksum, extract,
         // promote, unit write, enable, shim write.
@@ -405,12 +407,14 @@ struct MeadowFirstConnectProvisioningTests {
         // Exit prompt then same-pane resume with the session id.
         let prompts = await transport.prompts
         #expect(prompts.count == 1)
-        #expect(prompts[0].text == "/exit")
-        #expect(prompts[0].target == "w1:pA")
+        #expect(prompts.first?.text == "/exit")
+        #expect(prompts.first?.target == "w1:pA")
         let restarts = await transport.restarts
         #expect(restarts.count == 1)
-        #expect(restarts[0].paneID == "w1:pA")
-        #expect(restarts[0].arguments == ["--resume", "01a0c4ef-6a8b-7169-86cf-265306ac7319"])
+        #expect(restarts.first?.paneID == "w1:pA")
+        #expect(
+            restarts.first?.arguments
+                == ["--resume", "01a0c4ef-6a8b-7169-86cf-265306ac7319"])
     }
 
     @Test func provisionFailureSurfacesMessageAndStops() async throws {
