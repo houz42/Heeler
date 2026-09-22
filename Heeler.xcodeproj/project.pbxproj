@@ -69,7 +69,6 @@
 		20D4C5FBFAE65D07558E684B /* TerminalThemeSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 921CA559141776BD0F02FDA7 /* TerminalThemeSettingsTests.swift */; };
 		210403DB0109B2C3E58A7975 /* StagingPhaseBarrierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37A3D919A216A921D420F00D /* StagingPhaseBarrierTests.swift */; };
 		2148C7A8E3AD93AD1943AD77 /* AppActivityCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFB39D40748D247CC747A83D /* AppActivityCoordinatorTests.swift */; };
-		21A85F7D140F782D718838E8 /* V1IntegrationReviewUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6519D7891E0D5A6FB5B4B43A /* V1IntegrationReviewUITests.swift */; };
 		21C1CC2E5719E45ACE2B06E8 /* HerdrSidebarSnapshotStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFC6DF70F79FC87DCC2ECE0 /* HerdrSidebarSnapshotStoreTests.swift */; };
 		21EA3C700022C6362774EF1A /* notification-payload-v1.json in Resources */ = {isa = PBXBuildFile; fileRef = EEB863EF2AD319A412DB564A /* notification-payload-v1.json */; };
 		2292C89F605CE42073D49B11 /* Preflight.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE0B6961E10487A3AC3547E9 /* Preflight.swift */; };
@@ -302,7 +301,6 @@
 		91BF879F537B1B0DD0B5E78B /* HostConsoleProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88E1434C9C39A6419A3A0D79 /* HostConsoleProjection.swift */; };
 		9271ADB70DD9860389821A92 /* AgentDetailStatusChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1AA33CB009DE705AC691967 /* AgentDetailStatusChrome.swift */; };
 		94545D0497AD7AC234C37D67 /* AppModelActivityDriverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9F961651EBA7FE1BEE00647 /* AppModelActivityDriverTests.swift */; };
-		946C04345B09B39445DDC474 /* CaptureUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7942333FC65B0AA220B9EF55 /* CaptureUITests.swift */; };
 		9470EE9B9EB5D39E246AD01E /* HostMultiPathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7CA03A7CE9C42D576671992 /* HostMultiPathTests.swift */; };
 		950179DD8580B71A6BBAF0C2 /* HerdrAPITypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F7065C3BE109D2F52AE3BC2 /* HerdrAPITypes.swift */; };
 		9583D6804B8922588AD7F154 /* HostDraftTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9D664871CA1A56418C106BC /* HostDraftTests.swift */; };
@@ -544,13 +542,6 @@
 			remoteGlobalIDString = 081A3B29EFF2C7B2FCAA3248;
 			remoteInfo = Heeler;
 		};
-		7ECD2BDB0D14CF84798BB89C /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 7FF105579DBE63944F1D14F9 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 081A3B29EFF2C7B2FCAA3248;
-			remoteInfo = Heeler;
-		};
 		A74B2C2F551B71BBD490EF6C /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 7FF105579DBE63944F1D14F9 /* Project object */;
@@ -765,7 +756,6 @@
 		62675065132FC6F703D98CBE /* Typing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Typing.swift; sourceTree = "<group>"; };
 		64B0C3E8DD054078EF85AB5A /* ImageStagingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageStagingTests.swift; sourceTree = "<group>"; };
 		64D3B8E2EB97A8376B333914 /* AgentNameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentNameTests.swift; sourceTree = "<group>"; };
-		6519D7891E0D5A6FB5B4B43A /* V1IntegrationReviewUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = V1IntegrationReviewUITests.swift; sourceTree = "<group>"; };
 		651D511E8A282C4CB0214098 /* TerminalTitleGlyphs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalTitleGlyphs.swift; sourceTree = "<group>"; };
 		65694F7E35A3A8B1148AC4B2 /* AgentRowRendererTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRowRendererTests.swift; sourceTree = "<group>"; };
 		65CFDDFD7A676ECD4EF29BDE /* SSHSourcePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHSourcePolicyTests.swift; sourceTree = "<group>"; };
@@ -801,7 +791,6 @@
 		775417BCAF4E4110FDEF5A75 /* AgentListFieldsPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentListFieldsPreview.swift; sourceTree = "<group>"; };
 		7780BE78D868DB0A8275E6FB /* Heeler.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Heeler.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		78F85C588963C3CE948AA9E4 /* AgentNotificationBannerStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentNotificationBannerStore.swift; sourceTree = "<group>"; };
-		7942333FC65B0AA220B9EF55 /* CaptureUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureUITests.swift; sourceTree = "<group>"; };
 		794BADD20F0A9DF42D4916C0 /* ConsoleSplitPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsoleSplitPresentation.swift; sourceTree = "<group>"; };
 		79662827F6A91D8EFBF112F7 /* HostListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostListView.swift; sourceTree = "<group>"; };
 		798DC761EAF3462C2161F92F /* ChatModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatModels.swift; sourceTree = "<group>"; };
@@ -1035,7 +1024,6 @@
 		F1E48CC85026679811EF1A18 /* HostAliasTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostAliasTests.swift; sourceTree = "<group>"; };
 		F234ED041A4A2835A59A7510 /* AgentTerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTerminalView.swift; sourceTree = "<group>"; };
 		F261A0911D08819AFC013F1E /* JSONValueTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONValueTests.swift; sourceTree = "<group>"; };
-		F29B42F0F23A8DBDAD45E0C0 /* HeelerProofUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = HeelerProofUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F3A63EFEB7D00E59949CF331 /* HostDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostDraft.swift; sourceTree = "<group>"; };
 		F44E8A7E5D2D96096928B69C /* WeakNetworkProxy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeakNetworkProxy.swift; sourceTree = "<group>"; };
 		F4616CECA2722086A6B8B490 /* ComposerAttachmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerAttachmentTests.swift; sourceTree = "<group>"; };
@@ -1565,7 +1553,6 @@
 			children = (
 				7780BE78D868DB0A8275E6FB /* Heeler.app */,
 				59A749D2AF2390BCACBADED3 /* HeelerNotificationService.appex */,
-				F29B42F0F23A8DBDAD45E0C0 /* HeelerProofUITests.xctest */,
 				FBA937EDF831047EA33892F9 /* HeelerTests.xctest */,
 				24902CC237DF3242D41BA771 /* HeelerUITests.xctest */,
 				AD69BB4579A415BE96578319 /* HeelerWidgets.appex */,
@@ -1802,7 +1789,6 @@
 			children = (
 				80BAAF0BFB8E96E9532F0F06 /* Packages */,
 				15E63192D8890DAC5DAF9873 /* plugin */,
-				D1783B5FA330AF74047B2166 /* ProofUITests */,
 				7A08B9DEC86D2A9EA051704C /* Sources */,
 				329587C4695A14FC4B69458E /* Tests */,
 				615BBEAAA95BF5A909D55F8B /* Products */,
@@ -1831,15 +1817,6 @@
 				7BE9C95E2AC313465A7B38FD /* SealedEnvelopeCodec.swift */,
 			);
 			path = HeelerNotificationCore;
-			sourceTree = "<group>";
-		};
-		D1783B5FA330AF74047B2166 /* ProofUITests */ = {
-			isa = PBXGroup;
-			children = (
-				7942333FC65B0AA220B9EF55 /* CaptureUITests.swift */,
-				6519D7891E0D5A6FB5B4B43A /* V1IntegrationReviewUITests.swift */,
-			);
-			path = ProofUITests;
 			sourceTree = "<group>";
 		};
 		D58AE1771E141F40819928C7 /* Attachments */ = {
@@ -1994,24 +1971,6 @@
 			productReference = AD69BB4579A415BE96578319 /* HeelerWidgets.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
-		872D5A7D555E8F9CE22B11CC /* HeelerProofUITests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 19500EA7B326A2FC190CCFE8 /* Build configuration list for PBXNativeTarget "HeelerProofUITests" */;
-			buildPhases = (
-				FD3547A99DDFD3557A66A9B1 /* Sources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				EB8C6F7B95DC35D861CB9BC7 /* PBXTargetDependency */,
-			);
-			name = HeelerProofUITests;
-			packageProductDependencies = (
-			);
-			productName = HeelerProofUITests;
-			productReference = F29B42F0F23A8DBDAD45E0C0 /* HeelerProofUITests.xctest */;
-			productType = "com.apple.product-type.bundle.ui-testing";
-		};
 		9806EA6C63028F1217417282 /* HeelerTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 0C2FBE71BDCD08590ED957B7 /* Build configuration list for PBXNativeTarget "HeelerTests" */;
@@ -2089,11 +2048,6 @@
 						DevelopmentTeam = AX4Z34XFC2;
 						ProvisioningStyle = Automatic;
 					};
-					872D5A7D555E8F9CE22B11CC = {
-						DevelopmentTeam = AX4Z34XFC2;
-						ProvisioningStyle = Automatic;
-						TestTargetID = 081A3B29EFF2C7B2FCAA3248;
-					};
 					9806EA6C63028F1217417282 = {
 						DevelopmentTeam = AX4Z34XFC2;
 						ProvisioningStyle = Automatic;
@@ -2134,7 +2088,6 @@
 				134E6CD1AC1396155DAB93E2 /* HeelerWidgets */,
 				9806EA6C63028F1217417282 /* HeelerTests */,
 				B28FF2872BC94F0086675154 /* HeelerUITests */,
-				872D5A7D555E8F9CE22B11CC /* HeelerProofUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -2699,15 +2652,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		FD3547A99DDFD3557A66A9B1 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				946C04345B09B39445DDC474 /* CaptureUITests.swift in Sources */,
-				21A85F7D140F782D718838E8 /* V1IntegrationReviewUITests.swift in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -2720,11 +2664,6 @@
 			isa = PBXTargetDependency;
 			target = DFFB82C74B73FA5CBCE6D5D2 /* HeelerNotificationService */;
 			targetProxy = 05FA96BBC3E922819C5630B5 /* PBXContainerItemProxy */;
-		};
-		EB8C6F7B95DC35D861CB9BC7 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 081A3B29EFF2C7B2FCAA3248 /* Heeler */;
-			targetProxy = 7ECD2BDB0D14CF84798BB89C /* PBXContainerItemProxy */;
 		};
 		EE9786E7D9344387DC551FB4 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -2815,40 +2754,6 @@
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
-		};
-		49765251BEF82F1535F91A31 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				GENERATE_INFOPLIST_FILE = YES;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@loader_path/Frameworks",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.houz42.heeler.proofuitests;
-				SDKROOT = iphoneos;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = Heeler;
-			};
-			name = Debug;
-		};
-		501C6D8C4CF7F0575D9A010B /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				GENERATE_INFOPLIST_FILE = YES;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@loader_path/Frameworks",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.houz42.heeler.proofuitests;
-				SDKROOT = iphoneos;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = Heeler;
-			};
-			name = Release;
 		};
 		665BCFA54441159D90F6F629 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -3111,15 +3016,6 @@
 			buildConfigurations = (
 				CBE129DFABF2143ED6382437 /* Debug */,
 				E376CFDD59C6D29C11188A7B /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Debug;
-		};
-		19500EA7B326A2FC190CCFE8 /* Build configuration list for PBXNativeTarget "HeelerProofUITests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				49765251BEF82F1535F91A31 /* Debug */,
-				501C6D8C4CF7F0575D9A010B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

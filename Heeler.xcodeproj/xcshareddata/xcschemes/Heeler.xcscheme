@@ -50,17 +50,6 @@
                ReferencedContainer = "container:Heeler.xcodeproj">
             </BuildableReference>
          </TestableReference>
-         <TestableReference
-            skipped = "NO"
-            parallelizable = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "872D5A7D555E8F9CE22B11CC"
-               BuildableName = "HeelerProofUITests.xctest"
-               BlueprintName = "HeelerProofUITests"
-               ReferencedContainer = "container:Heeler.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
       </Testables>
       <CommandLineArguments>
       </CommandLineArguments>
