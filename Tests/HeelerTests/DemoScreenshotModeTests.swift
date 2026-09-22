@@ -22,12 +22,13 @@
             let agents = hosts.flatMap { profiles[$0.id]?.snapshot.agents ?? [] }
 
             #expect(hosts.map(\.displayName)
-                == ["Studio Mac", "Build Server", "Offline Server"])
+                == ["Studio Mac", "Build Server", "Offline Server", "Field Laptop"])
             #expect(
                 hosts.map(\.id) == [
                     DemoScreenshotFixture.studioHostID,
                     DemoScreenshotFixture.buildHostID,
                     DemoScreenshotFixture.offlineHostID,
+                    DemoScreenshotFixture.fieldHostID,
                 ])
             #expect(Set(agents.map(\.agentStatus)) == [.blocked, .working, .done, .idle])
             #expect(
@@ -43,15 +44,15 @@
             await composition.console.resume()
             defer { composition.console.setHosts([]) }
 
-            // The Offline Server never connects (no demo profile), so
-            // its snapshot legitimately never arrives — wait on the
-            // connectable Hosts only.
+            // The Offline Server and Field Laptop never connect (no demo
+            // profile), so their snapshots legitimately never arrive —
+            // wait on the connectable Hosts only.
             while composition.console.agents.count != 5
                 || composition.hosts.hosts.contains(where: { host in
                     host.id != DemoScreenshotFixture.offlineHostID
+                        && host.id != DemoScreenshotFixture.fieldHostID
                         && composition.console.sidebarSnapshots.snapshot(for: host.id) == nil
-                })
-            {
+            }) {
                 let changes = AsyncStream<Void>.makeStream()
                 withObservationTracking {
                     _ = composition.console.agents
@@ -66,15 +67,20 @@
             #expect(composition.console.agents.count == 5)
             #expect(composition.console.agents.first?.agent.status == .blocked)
             #expect(composition.console.agents.first?.hostName == "Build Server")
-            // The Offline Server never connects by design; the rest
-            // must all be connected.
+            // The Offline Server and Field Laptop never connect by
+            // design (no demo profile); the rest must all be connected.
             #expect(composition.console.hostStatuses
-                .filter { key, _ in key != DemoScreenshotFixture.offlineHostID }
+                .filter { key, _ in
+                    key != DemoScreenshotFixture.offlineHostID
+                        && key != DemoScreenshotFixture.fieldHostID
+                }
                 .values.allSatisfy { $0 == .connected })
             #expect(composition.console.hostStatuses[DemoScreenshotFixture.offlineHostID] != .connected)
+            #expect(composition.console.hostStatuses[DemoScreenshotFixture.fieldHostID] != .connected)
 
             for host in composition.hosts.hosts
-            where host.id != DemoScreenshotFixture.offlineHostID {
+            where host.id != DemoScreenshotFixture.offlineHostID
+                && host.id != DemoScreenshotFixture.fieldHostID {
                 let bytes = try await composition.console.withNotificationTransport(for: host.id) {
                     try await $0.readSidebarLayout()
                 }

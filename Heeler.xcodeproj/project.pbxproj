@@ -431,6 +431,7 @@
 		CE23CFBF3FBC6AF9F7CE2975 /* omp-agent-management.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = 7FA05424A61C04BC03C60794 /* omp-agent-management.jsonl */; };
 		CFAA6CEE9088E0F35A100FFB /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = 2F7667EF54A4B61557148F89 /* MarkdownUI */; };
 		D08663BD250210835FE7ED49 /* PhotosPickerImageSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A3BD235B5209892137FCAF9 /* PhotosPickerImageSelection.swift */; };
+		D0B82971C0803938318BFE30 /* HostActiveRouteStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D805B1E08B83E984A4DB6680 /* HostActiveRouteStore.swift */; };
 		D20C025851965986547FAAB5 /* ClosePaneStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D46328CE795C513FE11AD04 /* ClosePaneStore.swift */; };
 		D2405D8443F085D4E3CD1810 /* NotificationKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC6D0361E0EB15681156D5C7 /* NotificationKeyStore.swift */; };
 		D24F2FE185B641B0AC7B744B /* AccentProofTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7283EE120807BCB6B818B99 /* AccentProofTests.swift */; };
@@ -1017,6 +1018,7 @@
 		D6F5C337F9BC29D46E48E35E /* HeelerSSHJumpHostGateE2ETests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeelerSSHJumpHostGateE2ETests.swift; sourceTree = "<group>"; };
 		D71AF3340B0AA8C5F33EF4B7 /* WorktreeRemoval.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeRemoval.swift; sourceTree = "<group>"; };
 		D71D76912A55B04D1E8038C2 /* ChatRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatRows.swift; sourceTree = "<group>"; };
+		D805B1E08B83E984A4DB6680 /* HostActiveRouteStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostActiveRouteStore.swift; sourceTree = "<group>"; };
 		D98C291FF5279ECEDF232B5D /* TerminalMessageJumpControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalMessageJumpControllerTests.swift; sourceTree = "<group>"; };
 		DA5434768FDE9237B7BD721E /* Snippet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Snippet.swift; sourceTree = "<group>"; };
 		DA59306306EAEAA6DA78E337 /* TerminalAgentSwitcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalAgentSwitcherTests.swift; sourceTree = "<group>"; };
@@ -1460,6 +1462,7 @@
 			isa = PBXGroup;
 			children = (
 				32AE04F29C794799B45E5C68 /* Host.swift */,
+				D805B1E08B83E984A4DB6680 /* HostActiveRouteStore.swift */,
 				0DBBD602AA4969937A9306C3 /* HostCredentialsProvider.swift */,
 				F3A63EFEB7D00E59949CF331 /* HostDraft.swift */,
 				33EF900D8EF7982B54965402 /* HostFormView.swift */,
@@ -2379,6 +2382,7 @@
 				C7453CB760A1AFD53C7BA595 /* HerdrSidebarSnapshotStore.swift in Sources */,
 				BB26A50348D73A7852417D5B /* HerdrWire.swift in Sources */,
 				E89FDBBF01AA72A922ED0F03 /* Host.swift in Sources */,
+				D0B82971C0803938318BFE30 /* HostActiveRouteStore.swift in Sources */,
 				91BF879F537B1B0DD0B5E78B /* HostConsoleProjection.swift in Sources */,
 				FE387FB6FB6CC68E066B23AE /* HostCredentialsProvider.swift in Sources */,
 				83AAFC996DF32402681F38AB /* HostDraft.swift in Sources */,

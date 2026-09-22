@@ -72,10 +72,21 @@ struct HostListView: View {
     /// Which candidate address each Host's live session is dialed through;
     /// the detail page marks exactly that row as in use.
     private let connectedAddresses: [Host.ID: String]
+    /// The ONE observable active-route source: the same instance the
+    /// Host detail reads, so the list's marks and the detail's
+    /// checkmark re-render together on any route switch — they cannot
+    /// disagree. nil keeps the card marks on the live-address signal
+    /// alone (previews; demo surfaces without the app composition).
+    private let activeRouteStore: HostActiveRouteStore?
     /// Hosts whose Host-detail Reconnect request is in flight. Distinct from
     /// `EventsSessionStatus.reconnecting`.
     private let manualReconnectInFlightHostIDs: Set<Host.ID>
+    /// The Console retry action behind a Host detail's Reconnect button;
+    /// nil keeps the detail's Reconnect section hidden.
     private let retryConnection: (@MainActor @Sendable (Host.ID) async -> Void)?
+    /// The Console-backed route switch: persist the pick and reconnect
+    /// through it, driving the single-source connect lifecycle.
+    private let switchRoute: (@MainActor @Sendable (Host.ID, String) async -> Void)?
     /// Sessions/Hosts blending (Phase 5): offers unclaimed sessions found
     /// on connected Hosts' machines. nil keeps the list discovery-free
     /// (previews, Hosts without a Console connection).
@@ -104,8 +115,10 @@ struct HostListView: View {
         standingFailures: [Host.ID: TransportError] = [:],
         latencies: [Host.ID: Duration] = [:],
         connectedAddresses: [Host.ID: String] = [:],
+        activeRouteStore: HostActiveRouteStore? = nil,
         manualReconnectInFlightHostIDs: Set<Host.ID> = [],
         retryConnection: (@MainActor @Sendable (Host.ID) async -> Void)? = nil,
+        switchRoute: (@MainActor @Sendable (Host.ID, String) async -> Void)? = nil,
         discovery: SessionDiscoveryStore? = nil
     ) {
         self.store = store
@@ -114,8 +127,10 @@ struct HostListView: View {
         self.standingFailures = standingFailures
         self.latencies = latencies
         self.connectedAddresses = connectedAddresses
+        self.activeRouteStore = activeRouteStore
         self.manualReconnectInFlightHostIDs = manualReconnectInFlightHostIDs
         self.retryConnection = retryConnection
+        self.switchRoute = switchRoute
         self.discovery = discovery
         _removal = State(initialValue: HostRemovalStore(store: store))
     }
@@ -198,7 +213,12 @@ struct HostListView: View {
                         standingFailure: standingFailures[id],
                         isManualReconnectInFlight: manualReconnectInFlightHostIDs.contains(id),
                         retryConnection: retryAction(for: id),
-                        connectedAddress: connectedAddresses[id])
+                        connectedAddress: connectedAddresses[id],
+                        activeRouteInput: activeRouteStore.flatMap {
+                            $0.activeRoute(
+                                hostID: id, candidates: host.candidateAddresses)
+                        } ?? host.address,
+                        activeRouteStore: activeRouteStore)
                         .id(host)
                 } else {
                     ContentUnavailableView("Host removed", systemImage: "server.rack")
@@ -342,18 +362,27 @@ struct HostListView: View {
             standingFailure: standingFailures[host.id],
             latency: latencies[host.id],
             connectedAddress: connectedAddresses[host.id],
+            activeRoute: activeRouteStore.flatMap {
+                $0.activeRoute(hostID: host.id, candidates: host.candidateAddresses)
+            } ?? host.address,
             isRetryInFlight: manualReconnectInFlightHostIDs.contains(host.id),
             retryConnection: retryConnection.map { retry in
                 { await retry(host.id) }
             },
             openDetail: { path.append(host.id) },
             switchToRoute: { address in
-                // Row tap = switch (user directive): the tapped route
-                // becomes the Host's preferred dial path — the v1
-                // PreferredAddressStore semantics the multi-path work
-                // established. Instant, reversible (tap another route).
-                PreferredAddressStore(hostID: host.id)
-                    .prefer(address, candidates: host.candidateAddresses)
+                // Row tap = switch (user directive), through the ONE
+                // Console-backed action: persist the pick and reconnect
+                // through it, so the connect status/animation/failure
+                // surface through the same single-source map the detail
+                // renders. Falls back to persist-only when this list has
+                // no Console behind it (previews, demo routes).
+                if let switchRoute {
+                    Task { await switchRoute(host.id, address) }
+                } else {
+                    PreferredAddressStore(hostID: host.id)
+                        .prefer(address, candidates: host.candidateAddresses)
+                }
             },
             openRouteInspector: { address in
                 // The inspection item owns its store for the lifetime of
@@ -456,15 +485,27 @@ private struct HostCardSection: View {
     let standingFailure: TransportError?
     let latency: Duration?
     let connectedAddress: String?
+    /// The route the Host's NEXT dial leads with (the persisted active
+    /// route — the same source the detail's checkmark renders). Falls
+    /// back to the configured default when no pick has been made.
+    let activeRoute: String
     let isRetryInFlight: Bool
     let retryConnection: (@MainActor @Sendable () async -> Void)?
     let openDetail: () -> Void
-    /// Row tap = switch: makes the tapped route the Host's preferred dial
-    /// path (v1 PreferredAddressStore semantics; v2 reconciles its own
-    /// selection at integration).
+    /// Row tap = switch: makes the tapped route the Host's active dial
+    /// path and reconnects through it (the Console-backed action).
     let switchToRoute: (String) -> Void
     /// Chevron tap = inspect: opens the route inspector for THAT route.
     let openRouteInspector: (String) -> Void
+
+    /// Whether the card's route rows render the connecting animation:
+    /// true whenever a fresh activation is dialing — a route-switch
+    /// reconnect OR an initial connect. The heading chip keeps its own
+    /// vocabulary (Unavailable while re-serving a standing failure);
+    /// the row shows the dial honestly.
+    private var isConnecting: Bool {
+        connectionStatus == .connecting
+    }
 
     /// Terminal stopped-auto-retry state: failed, or connecting while a
     /// standing failure is being served. Retry offers exactly one dial.
@@ -538,24 +579,41 @@ private struct HostCardSection: View {
             }
 
             // One row per named route. The ROW is a switch (user
-            // directive): tapping makes it the preferred dial path —
-            // instant, reversible. The CHEVRON is the inspector.
+            // directive): tapping makes it the Host's active route and
+            // reconnects through it — the card and the detail read the
+            // SAME active-route source, so the marks always agree. The
+            // CHEVRON is the inspector.
             ForEach(host.candidateAddresses, id: \.self) { address in
                 let route = HostRoutePresentation(
                     host: host, address: address, connectedAddress: connectedAddress)
+                let isActive = address == activeRoute
                 HStack(spacing: 10) {
                     Button {
                         switchToRoute(address)
                     } label: {
                         HStack(spacing: 10) {
-                            // The dot IS the in-use signal (user
-                            // decision: the row stays quiet — no state
-                            // text; the inspector keeps the words).
-                            Image(systemName: "circle.fill")
-                                .font(.system(size: 7))
-                                .foregroundStyle(
-                                    route.usage == .inUse ? Color.accentColor : Color.secondary)
-                                .accessibilityHidden(true)
+                            // The dot: in-use (accent) when the live
+                            // session dialed this route, else the
+                            // active-route mark. While the tap's connect
+                            // runs, the ACTIVE row spins — the route
+                            // switch is landing, not silently waiting.
+                            if isActive, isConnecting {
+                                // The spinner is the connecting signal —
+                                // identified (NOT hidden) so a UI proof
+                                // can see the route-switch connect.
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .accessibilityLabel("Connecting")
+                                    .accessibilityIdentifier(
+                                        "host-route-connecting-\(address)")
+                            } else {
+                                Image(systemName: "circle.fill")
+                                    .font(.system(size: 7))
+                                    .foregroundStyle(
+                                        route.usage == .inUse
+                                            ? Color.accentColor : Color.secondary)
+                                    .accessibilityHidden(true)
+                            }
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(route.name)
                                     .font(.subheadline.weight(.medium))
@@ -568,6 +626,12 @@ private struct HostCardSection: View {
                                     .truncationMode(.middle)
                             }
                             Spacer()
+                            if isActive, route.usage != .inUse {
+                                Image(systemName: "checkmark")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(Color.accentColor)
+                                    .accessibilityHidden(true)
+                            }
                         }
                         .contentShape(Rectangle())
                     }

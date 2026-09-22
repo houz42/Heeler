@@ -34,7 +34,10 @@ enum UITestApp {
         /// card dialed through its primary address, Build Server's card
         /// honestly not-connected).
         case hostList
-        /// The Host detail page mid address-probe.
+        /// The Hosts list wired to the real demo Console: live statuses,
+        /// shared active-route store, route tap = persist + reconnect
+        /// (the unified state-sync + switch-lifecycle proofs).
+        case hostListConsole
         case hostDetailProbing
         /// The Host detail page stopped on the pick between two addresses.
         case hostDetailPick
@@ -53,6 +56,8 @@ enum UITestApp {
             switch self {
             case .console: return ["--demo-screenshots"]
             case .hostList: return ["--demo-screenshots", "--demo-host-list"]
+            case .hostListConsole:
+                return ["--demo-screenshots", "--demo-host-list-console"]
             case .hostForm: return ["--demo-screenshots", "--demo-host-form"]
             case .hostDetailProbing:
                 return ["--demo-screenshots", "--demo-host-detail-probing"]

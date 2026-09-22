@@ -16,6 +16,12 @@ struct HostOnboardingView: View {
     /// The address the live Console session is dialed through right now,
     /// nil while disconnected. Supplied by the Console's single-source map.
     let connectedAddress: String?
+    /// The Host's active route as the Console derives it (the same
+    /// PreferredAddressStore the list card renders). nil keeps the
+    /// store's own view (previews, lists without a Console). When the
+    /// LIST switches the route out-of-band, this input changes and the
+    /// open detail reconciles — both pages read one source of truth.
+    let activeRouteInput: String?
     @State private var store: HostOnboardingStore
     @State private var isEditing = false
     @State private var isConfirmingHostKeyReplacement = false
@@ -33,6 +39,12 @@ struct HostOnboardingView: View {
         /// map (`ConsoleStore.hostConnectedAddresses`) supplies it: at most
         /// one candidate can ever carry the in-use mark.
         connectedAddress: String? = nil,
+        /// The Console-derived active route (single source of truth with
+        /// the Hosts list); nil keeps the store's own read.
+        activeRouteInput: String? = nil,
+        /// The process-wide observable active-route store: the detail's
+        /// taps broadcast through it so the Hosts list's marks re-render.
+        activeRouteStore: HostActiveRouteStore? = nil,
         /// Pre-built store override for demo screenshots; nil builds the
         /// production store keyed to this Host.
         store: HostOnboardingStore? = nil
@@ -43,10 +55,12 @@ struct HostOnboardingView: View {
         self.isManualReconnectInFlight = isManualReconnectInFlight
         self.retryConnection = retryConnection
         self.connectedAddress = connectedAddress
+        self.activeRouteInput = activeRouteInput
         _store = State(
             initialValue: store ?? HostOnboardingStore(
                 host: host,
-                preferredAddresses: PreferredAddressStore(hostID: host.id)))
+                preferredAddresses: PreferredAddressStore(hostID: host.id),
+                activeRouteBroadcaster: activeRouteStore))
     }
 
     var body: some View {
@@ -218,6 +232,18 @@ struct HostOnboardingView: View {
             if store.phase == .idle {
                 await store.runChecks()
             }
+        }
+        .onChange(of: activeRouteInput) { _, _ in
+            // The list (or any other surface) switched this Host's
+            // active route out-of-band; re-read the shared store so this
+            // page's checkmark agrees with the list's mark.
+            store.syncPreferredRoute()
+        }
+        .onChange(of: connectionStatus) { _, _ in
+            // A status tick from the Console can accompany an
+            // out-of-band route switch (the list's tap reconnects); the
+            // persisted pick is cheap to re-read, so reconcile here too.
+            store.syncPreferredRoute()
         }
     }
 

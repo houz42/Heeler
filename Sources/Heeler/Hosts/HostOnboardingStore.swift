@@ -76,6 +76,10 @@ final class HostOnboardingStore {
     /// The transport deliberately has no confirmation timeout (#2); the UI
     /// layer owns it (spec #20). An unanswered candidate is declined.
     @ObservationIgnored private let fingerprintTimeout: Duration
+    /// Broadcasts active-route writes so the Hosts list's marks re-render
+    /// in the same turn (nil in tests/demo compositions — the store's own
+    /// persistence still lands on the shared disk copy).
+    @ObservationIgnored private let activeRouteBroadcaster: HostActiveRouteStore?
     @ObservationIgnored private var fingerprintDecision: CheckedContinuation<Bool, Never>?
     @ObservationIgnored private var fingerprintTimeoutTask: Task<Void, Never>?
 
@@ -88,6 +92,11 @@ final class HostOnboardingStore {
         // from a volatile defaults suite); there is no default because the
         // key depends on the Host.
         preferredAddresses: PreferredAddressStore,
+        /// The process-wide observable active-route store: detail taps
+        /// broadcast through it so the Hosts list's marks re-render in
+        /// the same turn. nil (tests, demo compositions) keeps the
+        /// store's own persistence only.
+        activeRouteBroadcaster: HostActiveRouteStore? = nil,
         fingerprintTimeout: Duration = .seconds(60)
     ) {
         self.host = host
@@ -95,6 +104,7 @@ final class HostOnboardingStore {
         self.knownHosts = knownHosts
         self.credentials = credentials
         self.preferredAddresses = preferredAddresses
+        self.activeRouteBroadcaster = activeRouteBroadcaster
         self.fingerprintTimeout = fingerprintTimeout
         // The persisted pick, if any, is already on disk; read it once so
         // the detail renders the active mark without a probe first.
@@ -109,6 +119,18 @@ final class HostOnboardingStore {
         preferredAddresses.preferredOrder(for: host.candidateAddresses)
     }
 
+    /// Re-reads the persisted active route (the SAME source the Hosts
+    /// list renders and the dial consumes). The list's route tap writes
+    /// it out-of-band through the Console, so an open detail page
+    /// reconciles against the shared store whenever its parent's
+    /// console-derived active-route input changes — the two pages can
+    /// never disagree for longer than one render.
+    func syncPreferredRoute() {
+        preferredRoute =
+            preferredAddresses.preferredOrder(for: host.candidateAddresses).first
+            ?? host.address
+    }
+
     /// TAP = SWITCH, on any candidate, any time: persists `address` as the
     /// Host's active route — the path the NEXT dial leads with (the same
     /// `PreferredAddressStore` order the real dial consumes via
@@ -121,6 +143,10 @@ final class HostOnboardingStore {
         guard host.candidateAddresses.contains(address) else { return }
         preferredAddresses.prefer(address, candidates: host.candidateAddresses)
         preferredRoute = address
+        // Same write through the shared observable store: the Hosts
+        // list's active-route marks re-render in this same turn.
+        activeRouteBroadcaster?.setActiveRoute(
+            address, hostID: host.id, candidates: host.candidateAddresses)
     }
 
     /// Runs the preflight once: probe when the Host has several candidates
@@ -156,6 +182,11 @@ final class HostOnboardingStore {
         guard host.candidateAddresses.contains(address) else { return }
         pendingAddressChoice = nil
         preferredAddresses.prefer(address, candidates: orderedCandidates)
+        preferredRoute = address
+        // Same write through the shared observable store (see
+        // `setActiveRoute`): the list's marks move in the same turn.
+        activeRouteBroadcaster?.setActiveRoute(
+            address, hostID: host.id, candidates: host.candidateAddresses)
         candidateStates[address] = .reachable
         await connectAndCheck(settingsHost: address)
     }
