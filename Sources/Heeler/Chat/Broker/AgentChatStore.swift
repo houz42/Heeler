@@ -99,7 +99,6 @@ struct AgentChatOutgoingMessage: Sendable, Equatable, Identifiable {
     /// (retryable / re-send decision respectively).
     var failureMessage: String?
 
-
     init(
         id: UUID = UUID(), requestKey: String, text: String,
         images: [AgentChatOutgoingImage] = [],
@@ -538,9 +537,9 @@ final class AgentChatStore {
         outgoing.append(echo)
         do {
             try await sendOnWire(echo)
-            // Accepted, not committed: the echo stays .sending until
-            // send.confirmed binds its record (see the doc above).
-            markOutgoing(id: echo.id, state: .sending)
+            // Accepted, not committed: NO state change on the ack —
+            // the echo stays .sending until send.confirmed binds its
+            // record (see the doc above).
             return echo
         } catch {
             let state: AgentChatOutgoingMessage.DeliveryState =
@@ -576,8 +575,8 @@ final class AgentChatStore {
         do {
             try await sendOnWire(echo)
             // Delivery contract (round 5): acceptance ≠ commitment —
-            // .sending until send.confirmed binds the record.
-            markOutgoing(id: echo.id, state: .sending)
+            // NO state change on the ack; send.confirmed binds the
+            // record.
         } catch {
             let state: AgentChatOutgoingMessage.DeliveryState =
                 Self.isAmbiguousLoss(error) ? .ambiguous : .failed
@@ -609,8 +608,8 @@ final class AgentChatStore {
         do {
             try await sendOnWire(echo)
             // Delivery contract (round 5): acceptance ≠ commitment —
-            // .sending until send.confirmed binds the record.
-            markOutgoing(id: echo.id, state: .sending)
+            // NO state change on the ack; send.confirmed binds the
+            // record.
         } catch {
             let state: AgentChatOutgoingMessage.DeliveryState =
                 Self.isAmbiguousLoss(error) ? .ambiguous : .failed
