@@ -654,10 +654,16 @@ final class AgentChatStore {
         let results = AgentChatToolResultCollector.collect(from: hydrated)
         let compacted = AgentChatCompactionCollector.collect(from: hydrated)
         if replaceRecent {
-            // The recent page is authoritative for its OWN window: a
-            // fresh install REPLACES the collected events (older pages
-            // the user has not paged into yet are simply not here).
-            compactionEvents = compacted
+            // A recent refresh covers ONLY its own window — older records
+            // the user already paged in must SURVIVE it (merged by id,
+            // never dropped), because the agent-details history is an
+            // accumulation, not a view of one page.
+            var merged = compacted
+            let freshIDs = Set(compacted.map { $0.id })
+            for event in compactionEvents where !freshIDs.contains(event.id) {
+                merged.insert(event, at: 0)
+            }
+            compactionEvents = merged
             NotificationCenter.default.post(name: Self.compactionUpdate, object: self)
             content = ChatContent(messages: messages, toolResults: results)
         } else {

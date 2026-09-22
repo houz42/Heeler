@@ -423,3 +423,61 @@ struct AgentDetailsReviewFixTests {
         #expect(store.freshness == AgentDetailsStore.Freshness.live)
     }
 }
+
+@Suite("Round-3 semantics")
+@MainActor
+struct AgentDetailsRound3Tests {
+    @Test("a server-originated refusal reaches the notice verbatim")
+    func serverRefusalVerbatim() async {
+        let refusal = "the reported context (496036 tokens) exceeds this model's window (128000); nothing will be trimmed automatically"
+        let store = AgentDetailsStore(
+            wire: .init(request: { _, _ in
+                // The broker answers an agent-refused request with a
+                // response ERROR — the channel surfaces it as a thrown
+                // AgentChatError.wire.
+                throw AgentChatError.wire(
+                    code: "invalid_request", message: refusal, retryable: false)
+            }),
+            telemetrySupported: true)
+        store.seedFixture(
+            context: .init(tokens: 496_036, contextWindow: 1_048_576),
+            currentModel: AgentCatalogModel(id: "balanced", provider: "a"))
+        store.beginConfirmation(
+            picked: AgentCatalogModel(id: "small", provider: "a", contextWindow: 128_000))
+        _ = await store.confirmChange()
+        #expect(store.rejectionNotice == refusal)
+        #expect(store.modelChange.phase == AgentModelChangeState.Phase.idle)
+    }
+
+    @Test("refresh resolves pending BOTH ways — target applied or not")
+    func pendingResolvesBothWays() async {
+        let store = AgentDetailsStore(
+            wire: .init(request: { _, _ in
+                .object([
+                    "model": .object([
+                        "id": .string("balanced"), "provider": .string("a"),
+                    ]),
+                ])
+            }),
+            telemetrySupported: true)
+        store.seedFixture(currentModel: AgentCatalogModel(id: "balanced", provider: "a"))
+        store.seedPendingPhase(
+            from: AgentCatalogModel(id: "balanced", provider: "a"),
+            to: AgentCatalogModel(id: "deep", provider: "b"))
+        await store.refreshTelemetry()
+        #expect(store.modelChange.phase == AgentModelChangeState.Phase.idle)
+        #expect(store.rejectionNotice?.contains("did not apply") == true)
+    }
+
+    @Test("coverage: not queried, then partial once events land")
+    func coverageLifecycle() {
+        let store = AgentDetailsStore(
+            wire: .init(request: { _, _ in .object([:]) }),
+            telemetrySupported: true)
+        #expect(store.compactionsCoverage == AgentDetailsStore.CompactionCoverage.notQueried)
+        #expect(store.compactionsQueried == false)
+        store.setCompactions([])
+        #expect(store.compactionsQueried == true)
+        #expect(store.compactionsCoverage == AgentDetailsStore.CompactionCoverage.partial)
+    }
+}

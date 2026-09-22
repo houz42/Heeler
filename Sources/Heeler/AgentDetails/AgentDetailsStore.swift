@@ -23,6 +23,12 @@ import Observation
 final class AgentDetailsStore {
     // MARK: Observable state
 
+    /// The compaction-history coverage as the chat store reported it.
+    enum CompactionCoverage: Sendable, Equatable {
+        case notQueried
+        case partial
+    }
+
     /// How the currently-shown context/model values were obtained and
     /// when — the inspector's freshness copy is derived from THIS, never
     /// assumed.
@@ -48,12 +54,22 @@ final class AgentDetailsStore {
     private(set) var models: [AgentCatalogModel]?
     /// The explicit model-change flow state.
     private(set) var modelChange = AgentModelChangeState()
+    /// True while a model.set request is on the wire — a concurrent
+    /// telemetry read seeing the OLD model must not resolve a pending
+    /// change that is still genuinely in flight.
+    private var modelSetInFlight = false
     /// The compaction events the transcript exposes (oldest→newest).
     private(set) var compactions: [AgentCompactionEvent] = []
-    /// True once ANY page has delivered its compaction inventory —
-    /// distinguishes "no compactions recorded" from "history not yet
-    /// queried".
+    /// True once a page install has delivered the compaction inventory
+    /// — distinguishes "the agent was asked and reported" from "not yet
+    /// looked". The page window's own coverage limit is honest too:
+    /// see ``compactionsCoverage``.
     private(set) var compactionsQueried = false
+    /// The compaction-history coverage as the chat store reported it:
+    /// the recent window (+ paged-in older records) is PARTIAL until
+    /// older history is read; the inspector never claims "none
+    /// recorded" from a window that hasn't reached the older history.
+    private(set) var compactionsCoverage: CompactionCoverage = .notQueried
     /// One-shot rejection notice shown after a failed change.
     private(set) var rejectionNotice: String?
 
@@ -137,12 +153,21 @@ final class AgentDetailsStore {
             if let model = telemetry.model { currentModel = model }
             if let cwd = telemetry.cwd { workingDirectory = cwd }
             freshness = .live
-            // A pending change resolves from the live report when the
-            // agent confirms it (cancelled/unverifiable sends reconcile).
+            // A pending change resolves from the live report — BOTH ways.
+            // The request is NOT in flight anymore (a cancelled or
+            // transport-lost send left it pending), so the agent's own
+            // current model is authoritative: the target applied, or it
+            // did not. Never leave a resolved outcome pending forever.
             if case .pending(_, let to) = modelChange.phase,
-                let model = telemetry.model, model.wireID == to.wireID {
-                modelChange.phase = .idle
-                rejectionNotice = nil
+                !modelSetInFlight, let model = telemetry.model {
+                if model.wireID == to.wireID {
+                    modelChange.phase = .idle
+                    rejectionNotice = nil
+                } else {
+                    modelChange.phase = .idle
+                    rejectionNotice =
+                        "The change did not apply. The agent's current model is retained."
+                }
             }
         } catch is CancellationError {
         } catch {
@@ -204,6 +229,8 @@ final class AgentDetailsStore {
             return false
         }
         modelChange.phase = .pending(from: current, to: picked)
+        modelSetInFlight = true
+        defer { modelSetInFlight = false }
         do {
             let value = try await wire.request(
                 "model.set", .object(["id": .string(picked.wireID)]))
@@ -221,15 +248,36 @@ final class AgentDetailsStore {
             rejectionNotice =
                 "Provider rejected the change. Previous model retained. Check access before retrying."
             return false
+        } catch let error as AgentChatError {
+            if case .wire(let code, let message, _) = error,
+                code == "invalid_request" {
+                // SERVER-ORIGINATED REFUSAL (the adapter's context-fit gate,
+                // the busy gate, unknown model, unverifiable usage): the
+                // agent answered — show its reason verbatim, never replace
+                // it with generic reconciliation copy.
+                modelChange.phase = .idle
+                rejectionNotice = message
+                return false
+            }
+            // Transport-shaped wire errors: the outcome is UNCERTAIN —
+            // reconcile from the agent's own report before claiming
+            // anything. The request is OVER (we're in its catch): clear
+            // the in-flight flag first or the reconcile's own guard
+            // would block it.
+            modelSetInFlight = false
+            rejectionNotice = nil
+            await reconcilePendingChange()
+            return false
         } catch is CancellationError {
             // A cancelled await leaves pending — the change may still land;
-            // reconcile() on the next refresh resolves it. Never assume
+            // reconcile on the next refresh resolves it. Never assume
             // failure, never assume success.
             return false
         } catch {
             // Transport failure is NOT a provider rejection: the remote
             // MAY have applied the change. Stay pending and reconcile
             // from the agent's own report before claiming anything.
+            modelSetInFlight = false
             rejectionNotice = nil
             await reconcilePendingChange()
             return false
@@ -242,7 +290,7 @@ final class AgentDetailsStore {
     /// pending). An unreadable report leaves pending standing — the
     /// next refresh retries.
     func reconcilePendingChange() async {
-        guard case .pending(_, let to) = modelChange.phase else { return }
+        guard case .pending(_, let to) = modelChange.phase, !modelSetInFlight else { return }
         do {
             let value = try await wire.request("session.telemetry", nil)
             let telemetry = try Self.decode(AgentTelemetry.self, from: value)
@@ -273,6 +321,12 @@ final class AgentDetailsStore {
 
     /// Seeds the observable state in one call. Preview/test fixture
     /// surface ONLY — production paths flow through the wire.
+    /// Fixture seam for the pending phase (tests drive the uncertain
+    /// state directly).
+    func seedPendingPhase(from: AgentCatalogModel, to: AgentCatalogModel) {
+        modelChange.phase = .pending(from: from, to: to)
+    }
+
     func seedFixture(
         context: AgentTelemetry.Context? = nil,
         currentModel: AgentCatalogModel? = nil,
@@ -294,12 +348,14 @@ final class AgentDetailsStore {
 
     // MARK: Compaction history
 
-    /// Installs compaction events parsed from the transcript surface.
-    /// Any install marks the history QUERIED — zero events then means
-    /// "none recorded", not "not looked".
+    /// Installs compaction events collected by the chat store: the
+    /// history WAS queried (the agent answered), and the coverage is
+    /// the recent window plus any paged-in older records — partial by
+    /// construction until the older history is read.
     func setCompactions(_ events: [AgentCompactionEvent]) {
         compactions = events
         compactionsQueried = true
+        compactionsCoverage = .partial
     }
 
     // MARK: Decoding

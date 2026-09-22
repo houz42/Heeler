@@ -787,10 +787,32 @@ extension CaptureUITests {
             NSPredicate(format: "label CONTAINS 'V2 Live Broker'")).firstMatch
         if existing.waitForExistence(timeout: 6) {
             existing.tap()
-            Thread.sleep(forTimeInterval: 10)
+            // A busy Mac can need far longer to complete the SSH +
+            // snapshot sequence; poll for the connected state up to 60s
+            // instead of a fixed sleep.
+            Thread.sleep(forTimeInterval: 6)
             let trustEarly = app.buttons["Trust"].firstMatch
             if trustEarly.waitForExistence(timeout: 20) { trustEarly.tap() }
-            Thread.sleep(forTimeInterval: 6)
+            var connected = false
+            for _ in 0..<12 {
+                Thread.sleep(forTimeInterval: 5)
+                let unavailable = app.staticTexts.matching(
+                    NSPredicate(format: "label == 'Unavailable'")).firstMatch
+                if !unavailable.exists { connected = true; break }
+            }
+            if !connected {
+                let retry = app.buttons["Retry"].firstMatch
+                if retry.exists && retry.isHittable {
+                    retry.tap()
+                    for _ in 0..<12 {
+                        Thread.sleep(forTimeInterval: 5)
+                        let unavailable2 = app.staticTexts.matching(
+                            NSPredicate(format: "label == 'Unavailable'")).firstMatch
+                        if !unavailable2.exists { break }
+                    }
+                }
+            }
+            Thread.sleep(forTimeInterval: 2)
             screenshot("live-host-connected")
             let backEarly = app.navigationBars.buttons.firstMatch
             if backEarly.exists && backEarly.isHittable {
@@ -826,7 +848,16 @@ extension CaptureUITests {
             XCTAssertTrue(entry0.waitForExistence(timeout: 5))
             entry0.tap()
             Thread.sleep(forTimeInterval: 3)
-            // The REAL telemetry root: live context panel + facts.
+            // Wait for the POPULATED root: the live context panel renders
+            // its compact token numbers (never capture the loading frame).
+            let populatedRoot = app.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS 'tokens'")).firstMatch
+            if !populatedRoot.waitForExistence(timeout: 12) {
+                let honestRoot = app.staticTexts.matching(
+                    NSPredicate(format: "label CONTAINS 'Not reported'")).firstMatch
+                _ = honestRoot.waitForExistence(timeout: 5)
+            }
+            Thread.sleep(forTimeInterval: 1)
             screenshot("live-agent-details-telemetry-root")
             // The terminal surface's entry.
             let doneR = app.buttons["Done"].firstMatch
@@ -908,10 +939,16 @@ extension CaptureUITests {
                             }
                             if confirmR.waitForExistence(timeout: 6) {
                                 confirmR.tap()
-                                Thread.sleep(forTimeInterval: 2)
+                                // PENDING: the in-flight card ('Waiting for
+                                // the agent…') — capture at +0.5s, before any
+                                // dismissal/navigation can occur.
+                                Thread.sleep(forTimeInterval: 0.5)
                                 screenshot("live-model-pending")
+                                // OUTCOME: the card resolves in place — the
+                                // confirmed root (or rejection notice ON the
+                                // card) before the harness touches anything.
                                 Thread.sleep(forTimeInterval: 10)
-                                screenshot("live-model-outcome")
+                                screenshot("live-model-outcome-card")
                                 // The fit-refusal variant: go back and pick a
                                 // small-window model (context exceeds it).
                                 let backFit = app.navigationBars.buttons.firstMatch

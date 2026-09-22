@@ -554,8 +554,14 @@ struct AgentModelConfirmView: View {
         Task {
             _ = await store.confirmChange()
             inFlight = false
-            if store.rejectionNotice == nil {
-                dismiss()
+            // Dismiss ONLY on a RESOLVED outcome: confirmed (idle, no
+            // notice) or explicitly rejected (idle + notice shown on the
+            // root). A still-pending change keeps the card open — never
+            // dismiss an unresolved pending as if it confirmed.
+            if case .idle = store.modelChange.phase {
+                if store.rejectionNotice == nil {
+                    dismiss()
+                }
             }
         }
     }
@@ -687,7 +693,8 @@ struct AgentCompactionHistoryView: View {
 
     var body: some View {
         List {
-            if !store.compactionsQueried {
+            switch (store.compactionsQueried, store.compactions.isEmpty) {
+            case (false, _):
                 Section {
                     AgentDetailsNotice(
                         "The compaction history has not been read yet for this agent.",
@@ -695,15 +702,15 @@ struct AgentCompactionHistoryView: View {
                         .listRowInsets(EdgeInsets())
                         .listRowBackground(Color.clear)
                 }
-            } else if store.compactions.isEmpty {
+            case (true, true):
                 Section {
                     AgentDetailsNotice(
-                        "No compactions recorded for this agent.",
+                        "No compactions in the loaded history window for this agent.",
                         style: .neutral)
                         .listRowInsets(EdgeInsets())
                         .listRowBackground(Color.clear)
                 }
-            } else {
+            default:
                 Section {
                     ForEach(store.compactions.reversed()) { event in
                         NavigationLink {
