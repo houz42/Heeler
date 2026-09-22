@@ -128,7 +128,6 @@ struct AppRootView: View {
             .background(
                 DrawerEdgePanBridge(
                     isEnabled: !isWide && isPageFocused && !isDrawerOpen,
-                    isEligible: { !isWide && isPageFocused && !isDrawerOpen },
                     onBegan: { isTrackingDrawer = true },
                     onTranslate: { translation in
                         // The finger tracks the reveal 1:1, rubber

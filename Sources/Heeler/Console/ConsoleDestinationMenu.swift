@@ -379,16 +379,15 @@ private struct DrawerAccessibilityChrome: ViewModifier {
 /// stays the accessible path; the gesture is additive, never the only
 /// affordance.
 struct DrawerEdgePanBridge: UIViewControllerRepresentable {
-    /// The trigger's seam, read LIVE at gesture-arbitration time: the
-    /// value updates keep the recognizer's enabled state roughly in
-    /// step, but the DECISION happens in
-    /// `gestureRecognizerShouldBegin` — where a pushed detail vetoes
-    /// the edge on UIKit ground truth (see the delegate below).
+    /// The recognizer-level pre-gate (the trigger's seam): a disabled
+    /// recognizer never even claims the edge. The AUTHORITATIVE veto
+    /// is UIKit ground truth — the pushed-detail VC-tree walk,
+    /// captured at touch start, retained for the gesture, and
+    /// re-checked live at arbitration (see the delegate below); the
+    /// seam proved unreliable for arbitration (it can report a root
+    /// page focused while a detail is pushed), so it only keeps the
+    /// recognizer from engaging where the drawer could never apply.
     let isEnabled: Bool
-    /// Live seam truth: phone width, a root page owns the window,
-    /// drawer closed. State reads through this closure are LIVE
-    /// (@State storage), so the arbitration moment sees the present.
-    let isEligible: () -> Bool
     let onBegan: () -> Void
     let onTranslate: (_ translationX: CGFloat) -> Void
     let onRelease: (
@@ -409,7 +408,6 @@ struct DrawerEdgePanBridge: UIViewControllerRepresentable {
         _ uiViewController: HostViewController, context: Context
     ) {
         context.coordinator.isEnabled = isEnabled
-        context.coordinator.isEligible = isEligible
         context.coordinator.onBegan = onBegan
         context.coordinator.onTranslate = onTranslate
         context.coordinator.onRelease = onRelease
@@ -456,7 +454,6 @@ struct DrawerEdgePanBridge: UIViewControllerRepresentable {
     @MainActor
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         let recognizer = EdgePan()
-        var isEligible: () -> Bool = { false }
         var onBegan: () -> Void = {}
         var onTranslate: (CGFloat) -> Void = { _ in }
         var onRelease: (CGFloat, CGFloat, Bool) -> Void = { _, _, _ in }
@@ -476,45 +473,48 @@ struct DrawerEdgePanBridge: UIViewControllerRepresentable {
             recognizer.addTarget(self, action: #selector(pan(_:)))
         }
 
-        /// The screen-edge pan itself (v2 revision): records whether
-        /// the seam was eligible AT TOUCH START. A recognizer can
-        /// claim a touch that began BEFORE it was enabled — so an
-        /// interactive back-swipe that POPS the detail mid-drag would
-        /// otherwise see this recognizer come alive and steal the
-        /// still-down finger, opening the drawer over the root the
-        /// moment the pop lands (verified in the proof video: the
-        /// drawer revealed as the pop completed). Recording at
-        /// touchesBegan and vetoing on the recorded value closes
-        /// that hole: a finger that started on a pushed detail NEVER
-        /// opens the drawer, no matter what the pop does underneath.
+        /// The screen-edge pan itself (v2 revision): captures UIKit's
+        /// pushed-detail veto AT TOUCH START and retains it for the
+        /// whole gesture. A recognizer can claim a touch that began
+        /// BEFORE it was enabled — so an interactive back-swipe that
+        /// POPS the detail mid-drag would otherwise see this
+        /// recognizer come alive and steal the still-down finger,
+        /// opening the drawer over the root the moment the pop lands
+        /// (verified in the proof video). The touch-start check is
+        /// the SAME VC-tree walk the arbitration uses — the app's
+        /// focus seam proved unreliable for gesture arbitration
+        /// (instrumented run: it re-enabled the recognizer while a
+        /// detail was pushed) — and it FAILS CLOSED: until the walk
+        /// proves no navigation controller has a pushed detail, the
+        /// touch is not drawer-eligible, so no transient seam state
+        /// can ever open the drawer over a pushed screen.
         final class EdgePan: UIScreenEdgePanGestureRecognizer {
-            var beganEligible = true
+            /// UIKit ground truth captured at touch start, retained
+            /// for the gesture. Starts NOT eligible (fail closed).
+            var beganEligible = false
 
             override func touchesBegan(
                 _ touches: Set<UITouch>, with event: UIEvent
             ) {
-                beganEligible = (delegate as? Coordinator)?.isEligible()
-                    ?? true
+                beganEligible =
+                    (delegate as? Coordinator)?.noPushedDetail(self)
+                    ?? false
                 super.touchesBegan(touches, with: event)
             }
         }
 
-        nonisolated func gestureRecognizerShouldBegin(
+        /// The pushed-detail veto on UIKit ground truth (v2): true
+        /// only when the walk over the window's view-controller tree
+        /// proves NO navigation controller currently has a pushed
+        /// detail. Used at touch START (captured, fail closed) and at
+        /// gesture-arbitration time.
+        nonisolated private func noPushedDetail(
             _ gestureRecognizer: UIGestureRecognizer
         ) -> Bool {
-            guard gestureRecognizer === recognizer else { return true }
-            return MainActor.assumeIsolated {
-                // A finger that began while ineligible NEVER opens the
-                // drawer — even if the seam became eligible mid-touch
-                // (an interactive pop completing under the finger).
-                guard recognizer.beganEligible, isEligible()
-                else { return false }
-                // Ground truth (v2 revision): a pushed detail on ANY
-                // navigation controller in the window vetoes the edge
-                // — its interactive back-swipe owns it.
+            MainActor.assumeIsolated {
                 guard let window = gestureRecognizer.view?.window,
                     let root = window.rootViewController
-                else { return isEligible() }
+                else { return false }
                 var stack = [root]
                 while let next = stack.popLast() {
                     if let nav = next as? UINavigationController,
@@ -527,6 +527,23 @@ struct DrawerEdgePanBridge: UIViewControllerRepresentable {
                     }
                 }
                 return true
+            }
+        }
+
+        nonisolated func gestureRecognizerShouldBegin(
+            _ gestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            guard gestureRecognizer === recognizer else { return true }
+            return MainActor.assumeIsolated {
+                // The touch-start UIKit veto RETAINED: a finger that
+                // started over a pushed detail NEVER opens the
+                // drawer, no matter what state changes underneath
+                // (an interactive pop completing mid-drag included).
+                guard recognizer.beganEligible else { return false }
+                // And the same veto, live at arbitration: a detail
+                // pushed between the touch start and the begin still
+                // owns the edge.
+                return noPushedDetail(gestureRecognizer)
             }
         }
 
