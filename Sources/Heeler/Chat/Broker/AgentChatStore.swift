@@ -60,6 +60,14 @@ struct AgentChatOutgoingMessage: Sendable, Equatable, Identifiable {
         /// honest state: never claims non-delivery, and a re-send
         /// REQUIRES an explicit user decision (it may duplicate).
         case ambiguous
+        /// Re-review round 4, finding 1: a record that CORRELATES by
+        /// text/baseline/ledger BUT the wire carries no authoritative
+        /// producer correlation (requestKey→record) — the honest
+        /// interim state. The echo STAYS (never silently declared
+        /// matched), marked "Delivered (unconfirmed)" — it drops when
+        /// the broker-side correlation contract lands (Main routes the
+        /// adapter extension separately).
+        case unconfirmed
     }
 
     let id: UUID
@@ -697,7 +705,7 @@ final class AgentChatStore {
         switch state {
         case .failed, .ambiguous:
             outgoing[index].failureMessage = message
-        case .sending, .sent:
+        case .sending, .sent, .unconfirmed:
             outgoing[index].failureMessage = nil
         }
         if state == .failed {
@@ -1136,6 +1144,12 @@ final class AgentChatStore {
 enum AgentChatEchoReconcile: Sendable {
     /// One reconcile step. `consumedRecordIDs` is the persistent
     /// ledger IN/OUT — pass the same array across refreshes.
+    /// Re-review round 4, finding 1: a correlated record transitions
+    /// the echo to .unconfirmed — it NEVER silently drops the echo
+    /// (text/baseline/ledger correlation cannot PROVE which send
+    /// produced the record; the authoritative requestKey→record
+    /// contract is pending broker-side). The echo renders "Delivered
+    /// (unconfirmed)" until that contract exists.
     static func reconcile(
         echoes: [AgentChatOutgoingMessage],
         committed: [ChatMessage],
@@ -1165,7 +1179,7 @@ enum AgentChatEchoReconcile: Sendable {
         var survivors: [AgentChatOutgoingMessage] = []
         for echo in echoes.sorted(by: { $0.sentAt < $1.sentAt }) {
             switch echo.state {
-            case .failed, .ambiguous:
+            case .failed, .ambiguous, .unconfirmed:
                 survivors.append(echo)
                 continue
             case .sending, .sent:
@@ -1188,7 +1202,12 @@ enum AgentChatEchoReconcile: Sendable {
             }
             if let match = fresh.min(by: { $0.id.uuidString < $1.id.uuidString }) {
                 consumedRecordIDs.insert(match.id)
-                // Confirmed: the committed record replaces the echo.
+                // Correlated — but NOT authoritatively (finding 1):
+                // keep the echo, marked unconfirmed. Never silently
+                // declare the match.
+                var updated = echo
+                updated.state = .unconfirmed
+                survivors.append(updated)
             } else {
                 survivors.append(echo)
             }

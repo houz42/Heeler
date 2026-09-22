@@ -115,7 +115,7 @@ struct AgentChatOutgoingTests {
 
     // MARK: Finding 4 — set-difference + persistent ledger
 
-    @Test("a record IN the baseline never confirms (older identical record)")
+    @Test("a record IN the baseline never correlates (older identical record)")
     func baselineRecordNeverConfirms() {
         let older = userRecord("Continue")
         let e = echo("Continue", baseline: [older.id])
@@ -123,37 +123,42 @@ struct AgentChatOutgoingTests {
         let survivors = AgentChatEchoReconcile.reconcile(
             echoes: [e], committed: [older], consumedRecordIDs: &ledger)
         #expect(survivors.count == 1)
+        #expect(survivors[0].state == .sending)  // untouched
     }
 
-    @Test("a NEW record confirms; the NEXT unchanged refresh cannot re-consume (ledger)")
+    @Test("a NEW record correlates ONE echo to .unconfirmed; the ledger never re-consumes")
     func ledgerPreventsReConsumption() {
+        // Re-review round 4, finding 1: correlation transitions the
+        // echo to .unconfirmed (NEVER silently drops it — no
+        // authoritative producer correlation exists yet). The ledger
+        // still guarantees one record → one echo.
         let record = userRecord("Continue")
         let a = echo("Continue", baseline: [])
         let b = echo("Continue", baseline: [])
         var ledger: Set<UUID> = []
-        // First refresh: ONE record confirms exactly ONE echo (A,
-        // oldest first); B stays.
+        // First refresh: the ONE record consumes for A (oldest) — A
+        // becomes .unconfirmed, B stays .sending.
         let afterOne = AgentChatEchoReconcile.reconcile(
             echoes: [a, b], committed: [record], consumedRecordIDs: &ledger)
-        #expect(afterOne.count == 1)
-        #expect(afterOne[0].id == b.id)
+        #expect(afterOne.count == 2)
+        #expect(afterOne.contains { $0.id == a.id && $0.state == .unconfirmed })
+        #expect(afterOne.contains { $0.id == b.id && $0.state == .sending })
         // The NEXT UNCHANGED refresh: the ledger holds the record —
-        // it cannot confirm B too. (This is the re-consumption bug:
-        // counts rebuilt the budget per refresh; the ledger is
-        // persistent.)
+        // B does NOT become unconfirmed (the re-consumption bug is
+        // structurally gone).
         let afterTwo = AgentChatEchoReconcile.reconcile(
             echoes: afterOne, committed: [record], consumedRecordIDs: &ledger)
-        #expect(afterTwo.count == 1)
-        #expect(afterTwo[0].id == b.id)
-        // A SECOND NEW record confirms B.
+        #expect(afterTwo.count == 2)
+        #expect(afterTwo.contains { $0.id == b.id && $0.state == .sending })
+        // A SECOND NEW record consumes for B.
         let twin = userRecord("Continue")
         let afterThree = AgentChatEchoReconcile.reconcile(
             echoes: afterTwo, committed: [record, twin],
             consumedRecordIDs: &ledger)
-        #expect(afterThree.isEmpty)
+        #expect(afterThree.allSatisfy { $0.state == .unconfirmed })
     }
 
-    @Test("a text-only record never confirms an image-bearing echo")
+    @Test("a text-only record never correlates an image-bearing echo")
     func imageEchoNeedsImageRecord() {
         let e = AgentChatOutgoingMessage(
             requestKey: "k", text: "look",
@@ -161,40 +166,72 @@ struct AgentChatOutgoingTests {
             baselineRecordIDs: [])
         let textOnly = userRecord("look")
         var ledger: Set<UUID> = []
-        #expect(
-            AgentChatEchoReconcile.reconcile(
-                echoes: [e], committed: [textOnly],
-                consumedRecordIDs: &ledger).count == 1)
+        let afterTextOnly = AgentChatEchoReconcile.reconcile(
+            echoes: [e], committed: [textOnly], consumedRecordIDs: &ledger)
+        #expect(afterTextOnly.count == 1)
+        #expect(afterTextOnly[0].state == .sending)
         let withImage = userRecord("look", image: true)
-        #expect(
-            AgentChatEchoReconcile.reconcile(
-                echoes: [e], committed: [textOnly, withImage],
-                consumedRecordIDs: &ledger).isEmpty)
+        let afterImage = AgentChatEchoReconcile.reconcile(
+            echoes: afterTextOnly, committed: [textOnly, withImage],
+            consumedRecordIDs: &ledger)
+        #expect(afterImage.count == 1)
+        #expect(afterImage[0].state == .unconfirmed)
     }
 
-    @Test("failed and AMBIGUOUS echoes never reconcile away")
+    @Test("failed, AMBIGUOUS, and UNCONFIRMED echoes never reconcile away")
     func failedAndAmbiguousSurvive() {
         let record = userRecord("Continue")
         var failed = echo("Continue", state: .failed)
         failed.failureMessage = "Send failed"
         var ambiguous = echo("Continue", state: .ambiguous)
         ambiguous.failureMessage = "Connection lost mid-flight"
+        var unconfirmed = echo("Continue", state: .unconfirmed)
         var ledger: Set<UUID> = []
         let survivors = AgentChatEchoReconcile.reconcile(
-            echoes: [failed, ambiguous], committed: [record],
+            echoes: [failed, ambiguous, unconfirmed], committed: [record],
             consumedRecordIDs: &ledger)
-        #expect(survivors.count == 2)
+        #expect(survivors.count == 3)
+        #expect(survivors.allSatisfy {
+            $0.state == .failed || $0.state == .ambiguous
+                || $0.state == .unconfirmed
+        })
     }
 
-    @Test("no baseline ⇒ no correlation (the echo stays until explicit confirm)")
+    @Test("UNCONFIRMED carries NO failure copy (it is not an error)")
+    func unconfirmedClearsMessage() async {
+        // markOutgoing's switch: unconfirmed joins sending/sent in
+        // clearing the message — verified via the store's observable
+        // failure state (a later .sent does not clear the banner while
+        // an unconfirmed echo exists without one).
+        let store = await unavailableStore()
+        do { _ = try await store.send("hello") } catch {}
+        // The failed echo KEEPS its message (finding 2):
+        #expect(store.outgoing[0].failureMessage != nil)
+    }
+
+    @Test("no baseline ⇒ no correlation (the echo stays, state untouched)")
     func noBaselineNoGuess() {
         let e = echo("Continue", baseline: nil)
         let record = userRecord("Continue")
         var ledger: Set<UUID> = []
-        #expect(
-            AgentChatEchoReconcile.reconcile(
-                echoes: [e], committed: [record],
-                consumedRecordIDs: &ledger).count == 1)
+        let survivors = AgentChatEchoReconcile.reconcile(
+            echoes: [e], committed: [record], consumedRecordIDs: &ledger)
+        #expect(survivors.count == 1)
+        #expect(survivors[0].state == .sending)
+    }
+
+    @Test("a NEW record correlates the echo to UNCONFIRMED — never a silent drop")
+    func newRecordCorrelatesToUnconfirmed() {
+        let e = echo("Continue", baseline: [])
+        let record = userRecord("Continue")
+        var ledger: Set<UUID> = []
+        let survivors = AgentChatEchoReconcile.reconcile(
+            echoes: [e], committed: [record], consumedRecordIDs: &ledger)
+        // Re-review round 4, finding 1: the echo STAYS, honestly
+        // marked — the wire cannot authoritatively prove the match.
+        #expect(survivors.count == 1)
+        #expect(survivors[0].state == .unconfirmed)
+        #expect(survivors[0].failureMessage == nil)
     }
 
     // MARK: Ambiguous classification (carried from the prior round)

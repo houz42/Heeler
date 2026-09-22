@@ -444,7 +444,7 @@ struct AgentDetailView: View {
                         case .ambiguous:
                             try await store
                                 .resendAcknowledgingPossibleDuplicate(echoID: echoID)
-                        case .sending, .sent:
+                        case .sending, .sent, .unconfirmed:
                             break
                         }
                     }
@@ -571,11 +571,26 @@ struct AgentDetailView: View {
             // sent image previews as a real image block on the user's
             // own bubble (the correct destination, never a draft-
             // inbox surface).
+            // Re-review round 4, finding 2: an inline-sent image
+            // (base64 `data`) carries its REAL BYTES on the echo —
+            // the renderer draws them directly. NO fabricated refs: a
+            // ref-sent image uses its real blob ref; an inline image
+            // never invents an unfetchable id.
             for image in echo.images {
-                blocks.append(.image(ChatImageRef(
-                    ref: image.ref ?? image.data.map { _ in echo.id.uuidString } ?? "",
-                    mimeType: image.mimeType,
-                    byteLength: image.byteLength)))
+                switch (image.ref, image.data) {
+                case (let ref?, nil):
+                    blocks.append(.image(ChatImageRef(
+                        ref: ref, mimeType: image.mimeType,
+                        byteLength: image.byteLength)))
+                case (_, let data?):
+                    blocks.append(.image(ChatImageRef(
+                        ref: "inline:\(echo.id.uuidString)",
+                        mimeType: image.mimeType,
+                        byteLength: image.byteLength,
+                        inlineData: data)))
+                default:
+                    break
+                }
             }
             switch echo.state {
             case .failed:
@@ -588,17 +603,23 @@ struct AgentDetailView: View {
                         level: "error"))
                 }
             case .ambiguous:
-                // Re-review round 3, finding 3: acceptance UNKNOWN —
-                // the re-send MAY DUPLICATE. The explicit-decision
-                // copy; the tap routes to the resend seam, never a
-                // "safe retry" claim.
+                // Re-review round 4, finding 3: acceptance UNKNOWN —
+                // the re-send MAY DUPLICATE. Distinct "resend" level
+                // so the AX hint names the risk, never "retry".
                 if let message = echo.failureMessage {
                     blocks.append(.notice(
                         text: "\(message) Send again — may duplicate.",
-                        level: "error"))
+                        level: "resend"))
                 }
             case .sending, .sent:
                 break
+            case .unconfirmed:
+                // Re-review round 4, finding 1: correlated but NOT
+                // authoritatively — the honest marker, never a silent
+                // match claim.
+                blocks.append(.notice(
+                    text: "Delivered (unconfirmed) — the agent's record for this send cannot be verified yet.",
+                    level: "warning"))
             }
             // Re-review round 3, finding 1: the message id IS the
             // ORIGINAL outgoing UUID — no derivation (a derived id

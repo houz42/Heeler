@@ -46,6 +46,13 @@ struct ChatImageRef: Sendable, Equatable, Identifiable {
     let ref: String
     let mimeType: String
     var byteLength: Int?
+    /// Inline bytes (re-review round 4, finding 2): a locally-sent
+    /// image whose REAL BYTES the client already holds — an inline
+    /// send (base64 `data`, no img: blob ref). When set, renderers
+    /// use these bytes directly and NEVER go through the fetch seam
+    /// (a fabricated ref cannot be fetched). nil = the wire's blob
+    /// ref path (fetch resolves it).
+    var inlineData: Data?
 
     var id: String { ref }
 }
