@@ -19,7 +19,7 @@ import UIKit
 //
 // The tests drive the real `ChatInputUITextView` and its coordinator the
 // way the wiring in `ChatScreen.inputFrame` does — the same pattern
-// ChatPrefixKeysTests uses for the prefix bar.
+// the field-sizing tests in ChatInputFieldSizingTests share.
 
 private func makeDependencies() -> ComposerRouterStore.Dependencies {
     ComposerRouterStore.Dependencies(
@@ -60,7 +60,7 @@ struct ChatSuggestionAcceptTests {
         // The text view applies text and caret together.
         let textView = ChatInputUITextView()
         let reported = Recorder<(String, Int)>()
-        textView.onPrefixInsert = { draft, caret in
+        textView.onExternalDraft = { draft, caret in
             reported.append((draft, caret))
         }
         textView.applyExternalDraft(accept!.draft, caret: accept!.caret)
@@ -97,7 +97,7 @@ struct ChatSuggestionAcceptTests {
             let field = self
             coordinator.onEdit = { newText, _ in field.draft = newText }
             textView.delegate = coordinator
-            textView.onPrefixInsert = { newText, _ in field.draft = newText }
+            textView.onExternalDraft = { newText, _ in field.draft = newText }
             // ChatScreen.inputFrame's onReturnKey, verbatim: the owner's
             // draft updates IN THE ACTION — a @State write during the
             // representable's update pass is dropped, which is exactly
