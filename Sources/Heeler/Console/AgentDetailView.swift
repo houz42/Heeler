@@ -569,29 +569,16 @@ struct AgentDetailView: View {
             var blocks: [ChatBlock] = [.text(echo.text)]
             // Structured images ride the echo too (review gap 7): the
             // sent image previews as a real image block on the user's
-            // own bubble (the correct destination, never a draft-
-            // inbox surface).
-            // Re-review round 4, finding 2: an inline-sent image
-            // (base64 `data`) carries its REAL BYTES on the echo —
-            // the renderer draws them directly. NO fabricated refs: a
-            // ref-sent image uses its real blob ref; an inline image
-            // never invents an unfetchable id.
-            for image in echo.images {
-                switch (image.ref, image.data) {
-                case (let ref?, nil):
-                    blocks.append(.image(ChatImageRef(
-                        ref: ref, mimeType: image.mimeType,
-                        byteLength: image.byteLength)))
-                case (_, let data?):
-                    blocks.append(.image(ChatImageRef(
-                        ref: "inline:\(echo.id.uuidString)",
-                        mimeType: image.mimeType,
-                        byteLength: image.byteLength,
-                        inlineData: data)))
-                default:
-                    break
-                }
-            }
+            // own bubble. Projection lives in
+            // AgentChatMapper.echoImageBlocks (re-review round 5,
+            // inline-ref finding): an inline-sent image carries its
+            // REAL BYTES (the renderer draws them directly; no
+            // fabricated fetchable id), and each image gets its OWN
+            // "inline:\(echoID)-\(index)" ref so multiple images in
+            // one echo stay DISTINCT rows.
+            blocks.append(
+                contentsOf: AgentChatMapper.echoImageBlocks(
+                    echoID: echo.id, images: echo.images))
             switch echo.state {
             case .failed:
                 // The broker answered NO: a replay is duplicate-SAFE

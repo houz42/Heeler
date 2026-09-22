@@ -143,6 +143,35 @@ enum AgentChatMapper: Sendable {
         guard let iso else { return nil }
         return ISO8601DateFormatter().date(from: iso)
     }
+
+    /// Projects one echo's images onto chat image blocks (re-review
+    /// round 5, inline-ref finding): an inline-sent image (base64
+    /// `data`) carries its REAL BYTES on the echo — the renderer draws
+    /// them directly, no fabricated fetchable id. A ref-sent image
+    /// keeps its real blob ref. Each image gets its OWN synthetic ref —
+    /// "inline:\(echoID)-\(index)" — so multiple images in one echo are
+    /// DISTINCT ChatImageRef ids (a shared ref collapsed them into one
+    /// row identity: Identifiable dedup, wrong image-per-row pairing).
+    static func echoImageBlocks(
+        echoID: UUID, images: [AgentChatOutgoingImage]
+    ) -> [ChatBlock] {
+        images.enumerated().compactMap { index, image in
+            switch (image.ref, image.data) {
+            case (let ref?, nil):
+                return .image(ChatImageRef(
+                    ref: ref, mimeType: image.mimeType,
+                    byteLength: image.byteLength))
+            case (_, let data?):
+                return .image(ChatImageRef(
+                    ref: "inline:\(echoID.uuidString)-\(index)",
+                    mimeType: image.mimeType,
+                    byteLength: image.byteLength,
+                    inlineData: data))
+            default:
+                return nil
+            }
+        }
+    }
 }
 
 /// Extracts the standalone ToolResult list from a page's items — the

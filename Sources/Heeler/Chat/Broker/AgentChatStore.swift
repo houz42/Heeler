@@ -64,9 +64,9 @@ struct AgentChatOutgoingMessage: Sendable, Equatable, Identifiable {
         /// text/baseline/ledger BUT the wire carries no authoritative
         /// producer correlation (requestKey→record) — the honest
         /// interim state. The echo STAYS (never silently declared
-        /// matched), marked "Delivered (unconfirmed)" — it drops when
-        /// the broker-side correlation contract lands (Main routes the
-        /// adapter extension separately).
+        /// matched), marked "Delivered (unconfirmed)". Once the
+        /// delivery contract's send.confirmed lands (round 5), it
+        /// supersedes this state with the authoritative .sent.
         case unconfirmed
     }
 
@@ -89,9 +89,16 @@ struct AgentChatOutgoingMessage: Sendable, Equatable, Identifiable {
     /// only drops on an explicit confirm).
     var baselineRecordIDs: Set<UUID>?
     var state: DeliveryState = .sending
+    /// The AUTHORITATIVE correlation (delivery contract, round 5):
+    /// the committed record id the adapter bound to this send's
+    /// requestKey via send.confirmed. Present exactly when state is
+    /// .sent — the echo drops the moment the committed page carries
+    /// THIS record (no text/baseline guessing).
+    var confirmedRecordID: String?
     /// The honest failure copy when state == .failed or .ambiguous
     /// (retryable / re-send decision respectively).
     var failureMessage: String?
+
 
     init(
         id: UUID = UUID(), requestKey: String, text: String,
@@ -503,13 +510,20 @@ final class AgentChatStore {
 
     /// Delivers one user message with the honest delivery lifecycle:
     /// the optimistic echo renders IMMEDIATELY as sending (item 11);
-    /// the prompt.send round-trip then confirms or fails it (item 1).
-    /// A failure keeps the echo as failed+retryable — NEVER silent
-    /// (the real silent-loss escalation: prompt.send throwing into a
-    /// swallowed catch, a dead channel, or a broker-offline path all
-    /// land here visibly). The requestKey dedups retries within this
-    /// store's life; a retry reuses the SAME key so the broker cannot
+    /// the prompt.send round-trip then fails it visibly on a broker
+    /// NO. A failure keeps the echo as failed+retryable — NEVER
+    /// silent. The requestKey dedups retries within this store's
+    /// life; a retry reuses the SAME key so the broker cannot
     /// double-deliver.
+    ///
+    /// Delivery contract (round 5): the wire ack alone does NOT mark
+    /// the echo .sent — acceptance means the broker QUEUED the prompt,
+    /// not that the agent committed a user record for it. The
+    /// authoritative transition is the adapter's send.confirmed event
+    /// (requestKey → committed record id), consumed in applyEvent. So
+    /// a clean round-trip leaves the echo .sending; until send.confirmed
+    /// lands it is NEVER declared sent (and text-correlation can only
+    /// ever mark it .unconfirmed, never .sent).
     @discardableResult
     func send(
         _ text: String, images: [AgentChatOutgoingImage] = []
@@ -526,7 +540,9 @@ final class AgentChatStore {
         outgoing.append(echo)
         do {
             try await sendOnWire(echo)
-            markOutgoing(id: echo.id, state: .sent)
+            // Accepted, not committed: the echo stays .sending until
+            // send.confirmed binds its record (see the doc above).
+            markOutgoing(id: echo.id, state: .sending)
             return echo
         } catch {
             let state: AgentChatOutgoingMessage.DeliveryState =
@@ -561,7 +577,9 @@ final class AgentChatStore {
         markOutgoing(id: echo.id, state: .sending, message: nil)
         do {
             try await sendOnWire(echo)
-            markOutgoing(id: echo.id, state: .sent)
+            // Delivery contract (round 5): acceptance ≠ commitment —
+            // .sending until send.confirmed binds the record.
+            markOutgoing(id: echo.id, state: .sending)
         } catch {
             let state: AgentChatOutgoingMessage.DeliveryState =
                 Self.isAmbiguousLoss(error) ? .ambiguous : .failed
@@ -592,7 +610,9 @@ final class AgentChatStore {
         markOutgoing(id: echo.id, state: .sending, message: nil)
         do {
             try await sendOnWire(echo)
-            markOutgoing(id: echo.id, state: .sent)
+            // Delivery contract (round 5): acceptance ≠ commitment —
+            // .sending until send.confirmed binds the record.
+            markOutgoing(id: echo.id, state: .sending)
         } catch {
             let state: AgentChatOutgoingMessage.DeliveryState =
                 Self.isAmbiguousLoss(error) ? .ambiguous : .failed
@@ -951,7 +971,35 @@ final class AgentChatStore {
                 interactionResolutions.removeFirst(
                     interactionResolutions.count - 4)
             }
+        case .sendConfirmed(let requestKey, let recordId):
+            applySendConfirmed(requestKey: requestKey, recordId: recordId)
         }
+    }
+
+    /// Delivery contract (round 5): the authoritative requestKey→record
+    /// correlation. The adapter popped this send's key from its FIFO
+    /// when the agent COMMITTED the user record, so the echo's delivery
+    /// is proven — transition to .sent and bind the record id so the
+    /// echo drops the moment the committed page carries THAT record.
+    /// Any state with a matching key resolves: a .sending echo is the
+    /// normal case; a .unconfirmed echo's text-correlation is
+    /// superseded by the proof; a .ambiguous echo (lost ACK) is proven
+    /// delivered — the may-duplicate affordance goes away. A .failed
+    /// echo never sees its key confirmed (the adapter rejected the
+    /// send BEFORE queueing the key), so no special-casing is needed.
+    private func applySendConfirmed(requestKey: String, recordId: String) {
+        guard let index = outgoing.firstIndex(where: {
+            $0.requestKey == requestKey
+        }) else {
+            // Unknown key (echo already dropped via reconcile, a
+            // retry minted a fresh key, or a pre-contract echo): the
+            // durable marker still binds the pair broker-side; nothing
+            // to transition here.
+            return
+        }
+        outgoing[index].state = .sent
+        outgoing[index].confirmedRecordID = recordId
+        outgoing[index].failureMessage = nil
     }
 
     private func upsertInteraction(_ interaction: AgentChatInteraction) {
@@ -1178,6 +1226,20 @@ enum AgentChatEchoReconcile: Sendable {
         }
         var survivors: [AgentChatOutgoingMessage] = []
         for echo in echoes.sorted(by: { $0.sentAt < $1.sentAt }) {
+            // Delivery contract (round 5): a .sent echo carries the
+            // AUTHORITATIVE record id from send.confirmed. Drop the
+            // echo the moment the committed page carries THAT record
+            // (exact source-id match — no text/baseline guessing);
+            // the committed record renders in its own position.
+            if echo.state == .sent, let confirmed = echo.confirmedRecordID {
+                if committed.contains(where: {
+                    AgentChatMapper.stableID(for: confirmed) == $0.id
+                }) {
+                    continue  // dropped: the real record renders
+                }
+                survivors.append(echo)
+                continue
+            }
             switch echo.state {
             case .failed, .ambiguous, .unconfirmed:
                 survivors.append(echo)
@@ -1202,9 +1264,11 @@ enum AgentChatEchoReconcile: Sendable {
             }
             if let match = fresh.min(by: { $0.id.uuidString < $1.id.uuidString }) {
                 consumedRecordIDs.insert(match.id)
-                // Correlated — but NOT authoritatively (finding 1):
-                // keep the echo, marked unconfirmed. Never silently
-                // declare the match.
+                // Correlated — but NOT authoritatively (round 4,
+                // finding 1): keep the echo, marked unconfirmed. Never
+                // silently declare the match. When the delivery
+                // contract's send.confirmed lands it supersedes this
+                // state with the authoritative .sent.
                 var updated = echo
                 updated.state = .unconfirmed
                 survivors.append(updated)
