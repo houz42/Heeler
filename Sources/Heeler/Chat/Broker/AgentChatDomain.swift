@@ -412,31 +412,142 @@ struct AgentChatInteractionsResult: Decodable, Sendable, Equatable {
 }
 
 /// One resolved ask (honest state): the card is gone but the WHY
-/// renders — answered (with where: the agent's terminal vs this
-/// client), cancelled, or expired.
-struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable {
+/// renders — as a quiet block in the conversation flow. The KIND is
+/// what the app actually knows, never the ambiguous wire `source`
+/// ('remote' means any remote client — this device or another).
+struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codable {
+    /// What happened, from the app's point of view. The wire's
+    /// outcome/source pair maps here at capture time; a resolution
+    /// this device recorded itself is `youAnswered` (with labels).
+    enum Kind: String, Sendable, Equatable, Codable {
+        /// THIS device answered and the broker's acknowledgement
+        /// CONFIRMED this client's submission; `labels` carries the
+        /// chosen option LABELS (resolved against the interaction's
+        /// questions at submit time — the wire's `idx:<n>` ids are
+        /// never user-facing).
+        case youAnswered
+        /// Answered at the agent's own terminal.
+        case answeredInTerminal
+        /// Answered by SOME remote client — this device or another:
+        /// the broadcast event cannot identify the winner, so before
+        /// our own acknowledgement confirms the claim the honest
+        /// record is neutral. Only the ack (accepted) upgrades this
+        /// to `youAnswered`; a refusal keeps or replaces it.
+        case answeredRemotely
+        /// Cancelled (terminal or a remote client).
+        case cancelled
+        /// Expired before it was answered (generation churn or
+        /// timeout).
+        case expired
+        /// The broker says the ask is no longer pending but the
+        /// outcome is UNKNOWN (item_changed/item_not_found on a
+        /// stale-answer self-heal — settled somewhere, proof of no
+        /// particular outcome).
+        case settledElsewhere
+    }
+
     let requestId: String
-    /// The wire outcome: answered / cancelled / expired.
-    let outcome: String
-    /// The wire source: remote (this client) / terminal.
-    let source: String
+    let kind: Kind
+    /// The chosen option labels, one line per answered question
+    /// (`youAnswered` only).
+    var labels: [String]?
 
     var id: String { requestId }
 
-    /// The user-facing note.
-    var message: String {
-        switch outcome {
-        case "answered":
-            source == "remote"
-                ? "Answered from this device."
-                : "Answered in the agent's terminal."
-        case "cancelled":
-            "The question was cancelled."
-        case "expired":
-            "The question expired before it was answered."
-        default:
-            "The question was resolved."
+    /// The transcript block's body: the quiet resolved record in the
+    /// conversation flow.
+    var transcriptBody: String {
+        switch kind {
+        case .youAnswered:
+            if let labels, !labels.isEmpty {
+                return "You answered: " + labels.joined(separator: " + ")
+            }
+            return "You answered."
+        case .answeredInTerminal:
+            return "Answered in the agent's terminal."
+        case .answeredRemotely:
+            return "Answered remotely."
+        case .cancelled:
+            return "The question was cancelled."
+        case .expired:
+            return "The question expired before it was answered."
+        case .settledElsewhere:
+            return "This question was already answered or cancelled elsewhere."
         }
+    }
+
+    /// Builds the resolution for an answer submitted by THIS device,
+    /// resolving option ids to their user-facing labels against the
+    /// interaction's questions. An id with no matching option is
+    /// dropped, never rendered raw. Only the store's ACKNOWLEDGED
+    /// answer path may record this kind — the broadcast event cannot
+    /// identify the winner, so an unconfirmed submit never claims it.
+    init(
+        answered interaction: AgentChatInteraction,
+        answers: [AgentChatAnswer]
+    ) {
+        self.init(
+            requestId: interaction.requestId,
+            kind: .youAnswered,
+            labels: Self.answeredLabels(
+                interaction: interaction, answers: answers))
+    }
+
+    /// Maps a broker `interaction.resolved` event. source 'remote'
+    /// means SOME remote client answered — this device or another —
+    /// and the broadcast carries no winner correlation, so the
+    /// honest pre-ack record is NEUTRAL: 'Answered remotely.' Only
+    /// this store's own accepted acknowledgement upgrades the record
+    /// to `youAnswered` (the store's ack path replaces this entry);
+    /// a refused/uncertain submit never claims labels.
+    init(requestId: String, wireOutcome: String, wireSource: String) {
+        let kind: Kind
+        switch wireOutcome {
+        case "answered":
+            kind = wireSource == "remote"
+                ? .answeredRemotely : .answeredInTerminal
+        case "cancelled":
+            kind = .cancelled
+        case "expired":
+            kind = .expired
+        default:
+            kind = .settledElsewhere
+        }
+        self.init(requestId: requestId, kind: kind, labels: nil)
+    }
+
+    /// The stale-answer self-heal: the broker refused the answer
+    /// because the ask is no longer pending. The refusal's code says
+    /// WHICH honest note applies — never a blanket 'expired'.
+    init(staleRequestId: String, generationInvalidated: Bool) {
+        self.init(
+            requestId: staleRequestId,
+            kind: generationInvalidated ? .expired : .settledElsewhere,
+            labels: nil)
+    }
+
+    init(requestId: String, kind: Kind, labels: [String]?) {
+        self.requestId = requestId
+        self.kind = kind
+        self.labels = labels
+    }
+
+    private static func answeredLabels(
+        interaction: AgentChatInteraction, answers: [AgentChatAnswer]
+    ) -> [String]? {
+        var lines: [String] = []
+        for answer in answers {
+            // Match the answer's question, then its options, by the
+            // stable ids the interaction published.
+            guard let question = interaction.questions.first(where: {
+                $0.id == answer.questionId
+            }) else { continue }
+            let labels = answer.optionIds.compactMap { optionId in
+                question.options.first(where: { $0.id == optionId })?.label
+            }
+            if !labels.isEmpty { lines.append(labels.joined(separator: " + ")) }
+        }
+        return lines.isEmpty ? nil : lines
     }
 }
 

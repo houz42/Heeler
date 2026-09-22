@@ -48,6 +48,8 @@ struct ChatRowView: View {
             // Item 19: the quiet system row — never dropped; the wash
             // strengthens with the level.
             ChatNoticeRow(text: text, level: level)
+        case .resolvedAsk(let ask):
+            ChatResolvedAskRow(ask: ask)
         case .image:
             // Handled by the screen (fetch seam + reader); the plain
             // row renderer never sees it.
@@ -364,6 +366,30 @@ struct ChatPendingRow: View {
             in: RoundedRectangle(cornerRadius: 10))
     }
 }
+
+/// A resolved ask's quiet record in the transcript flow: 'You
+/// answered: <labels>' (this client's answer) or the honest outcome
+/// note (answered in the agent's terminal / cancelled / expired).
+/// Full-width, secondary, checkmark-led — it is conversation history,
+/// not an alert; it never carries interactive affordances.
+struct ChatResolvedAskRow: View {
+    let ask: ResolvedAsk
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "checkmark.circle")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(ask.body)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+}
+
 
 // MARK: - Linkified chat text (openers)
 
