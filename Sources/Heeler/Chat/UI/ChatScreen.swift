@@ -996,8 +996,20 @@ struct ChatScreen: View {
             .accessibilityLabel("Send")
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        // Compact resting state (v2 device note): empty/unfocused draft
+        // AND keyboard down — the composer shrinks to the tightest row
+        // so the transcript keeps maximum content area. Keyboard up
+        // keeps the full working padding.
+        .padding(.vertical, isResting ? 4 : 8)
         }
+    }
+
+    /// The composer's most compact state: an empty (or unfocused) draft
+    /// with the keyboard down. Focused typing keeps the working frame;
+    /// a non-empty draft with the keyboard down keeps the middle
+    /// padding so a held draft never looks squeezed.
+    private var isResting: Bool {
+        !inputFocused && keyboardInset.height == 0 && draft.isEmpty
     }
 
     /// The input frame: a bottom bar with the draft field. The router owns
@@ -1060,9 +1072,10 @@ struct ChatScreen: View {
                         .padding(.horizontal, 12)
                         .padding(.top, 6)
                 }
+                // The row carries its own horizontal+vertical padding;
+                // the frame adds NO second vertical band (the resting
+                // state is the row's tight padding alone).
                 composerRow
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
             }
             .background(.bar)
             .overlay(alignment: .top) { Divider() }

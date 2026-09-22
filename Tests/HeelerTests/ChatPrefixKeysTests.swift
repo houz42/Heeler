@@ -160,10 +160,11 @@ struct ChatPrefixKeysTests {
 
     @MainActor
     @Test func theFieldHugsOneLineInsteadOfBallooning() {
-        // The clamp contract: one short line claims the 36 pt floor (the
-        // same floor the Composer's editor uses), never the whole
-        // safe-area inset a scroll-enabled text view would otherwise
-        // stretch to.
+        // The clamp contract: one short line claims the 36 pt floor in
+        // the WORKING (uncollapsed) frame; the v2 compact-resting change
+        // tightened only the COLLAPSED floor (28, the row's control
+        // height). Never the whole safe-area inset a scroll-enabled text
+        // view would otherwise stretch to.
         let textView = ChatInputUITextView()
         textView.applyChatInputConfiguration()
         textView.text = "one short line"
@@ -200,10 +201,11 @@ struct ChatPrefixKeysTests {
         let size = ChatInputTextView.measuredSize(
             for: textView, width: 300, collapsed: true)
         let lineHeight = textView.font?.lineHeight ?? 20
-        // Collapsed = the one-line floor regardless of content: never
-        // grows to a second line; content beyond it scrolls in place.
-        // The draft text itself is untouched (never cleared on blur).
-        #expect(size.height == 36)
+        // Collapsed = the one-line floor regardless of content (28 pt,
+        // the compact resting row's control height): never grows to a
+        // second line; content beyond it scrolls in place. The draft
+        // text itself is untouched (never cleared on blur).
+        #expect(size.height == 28)
         #expect(size.height < lineHeight * 2)
         #expect(textView.isScrollEnabled)
         #expect(textView.text == longLine)

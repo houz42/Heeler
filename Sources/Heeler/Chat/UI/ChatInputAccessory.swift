@@ -540,7 +540,11 @@ struct ChatInputTextView: UIViewRepresentable {
         textView.isScrollEnabled = wasScrollEnabled
         let lineHeight = textView.font?.lineHeight ?? 20
         if collapsed {
-            let height = max(36, min(measured.height, lineHeight))
+            // Compact resting row (v2 device note): the collapsed floor
+            // matches the row's 28pt controls (chevron/add/send), so the
+            // resting composer is one tight row — the transcript keeps
+            // maximum content area when no keyboard is up.
+            let height = max(28, min(measured.height, lineHeight))
             textView.isScrollEnabled = measured.height > lineHeight
             return CGSize(width: width, height: height)
         }
