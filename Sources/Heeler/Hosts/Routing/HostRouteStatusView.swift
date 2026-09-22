@@ -15,6 +15,10 @@ final class HostRouteStatusStore {
     private(set) var probes: [String: HostRouteProbeResult] = [:]
     private(set) var network: HostRouteNetworkState
     private(set) var isProbing = false
+    /// The Host's LIVE connection state, kept current by the presenting
+    /// view (onChange of the console status). Evaluations and the
+    /// retry-adjacent gate read THIS — never a captured snapshot.
+    private(set) var isConnectedNow = false
     /// Actionable explanation when a check could not even start
     /// (credential failures are about the Host, not the path). nil while
     /// checks ran. The user's press must never appear to do nothing.
@@ -68,111 +72,141 @@ final class HostRouteStatusStore {
         network = HostRouteNetworkSnapshot.current
     }
 
-    /// Starts observing the shared monitor's COALESCED path changes:
-    /// each transition updates `network` (the surface re-renders its
-    /// Skipped/eligible rows honestly) and, per the policy's
-    /// re-evaluation gate, an UNCONNECTED host re-evaluates with the
-    /// cooldown backoff — this is also the recovery path for the
-    /// all-ineligible off-Wi-Fi state: when Wi-Fi arrives, the gated
-    /// routes become eligible and the host redials through the plan.
-    /// A CONNECTED host never re-evaluates (stickiness). No continuous
-    /// background promises — the monitor is passive and the store lives
-    /// only while a route surface is on screen.
-    func observePathChanges(isConnected: @escaping @MainActor () -> Bool) {
+    /// The presenting view keeps this current (onChange of the console
+    /// status). All evaluation gates read it LIVE.
+    func updateConnectionState(_ connected: Bool) {
+        isConnectedNow = connected
+    }
+
+
+    /// Starts observing the shared monitor's COALESCED path changes.
+    /// The `changeRevision` counter increments once per DEBOUNCED path
+    /// transition; the observer compares revisions and evaluates only
+    /// on an actual increment, so the cooldown gates REAL transitions,
+    /// not a tick. Each transition updates `network` (the surface
+    /// re-renders its Skipped/eligible rows honestly) and, per the
+    /// policy's re-evaluation gate, an UNCONNECTED host re-evaluates
+    /// with the cooldown backoff — the recovery path for the
+    /// all-ineligible off-Wi-Fi state. A CONNECTED host never
+    /// re-evaluates (stickiness).
+    ///
+    /// Lifetime: `stopObservingPathChanges()` cancels explicitly (the
+    /// presenting view calls it on disappearance); this method is
+    /// idempotent and restarts cleanly. The loop holds only a weak self.
+    func observePathChanges() {
         guard monitorTask == nil else { return }
         monitorTask = Task { [weak self] in
-            guard let self else { return }
-            for await _ in self.monitorPathStream() {
+            var lastRevision = await self?.monitor?.changeRevision ?? 0
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(200))
+                guard !Task.isCancelled, let self, let monitor = self.monitor
+                else { return }
+                let revision = await monitor.changeRevision
+                // Coalesce: one evaluation per actual debounced
+                // transition — ticks without a revision change are
+                // discarded.
+                guard revision != lastRevision else { continue }
+                lastRevision = revision
                 self.syncNetworkFromMonitor()
                 guard HostRoutePolicy.shouldReevaluateOnPathChange(
-                    isConnected: isConnected(), network: self.network)
+                    isConnected: self.isConnectedNow, network: self.network)
                 else { continue }
                 try? await Task.sleep(for: self.cooldown)
                 guard !Task.isCancelled else { return }
-                await self.evaluateAndMaybeRedial(isConnected: isConnected)
+                await self.evaluateAndMaybeRedial()
             }
         }
     }
 
-    /// The monitor's coalesced change stream: its `changeRevision`
-    /// increments once per debounced path transition. Demo builds with
-    /// no monitor yield an empty stream (the demo stores script state).
-    private func monitorPathStream() -> AsyncStream<Void> {
-        guard let monitor else {
-            return AsyncStream { $0.finish() }
-        }
-        return AsyncStream { continuation in
-            let task = Task { [weak self] in
-                while !Task.isCancelled {
-                    let tick = { @MainActor in monitor.changeRevision }
-                    _ = await tick()
-                    continuation.yield(())
-                    // Poll the coalesced revision — one yield per
-                    // coalesced transition, no busy loop.
-                    try? await Task.sleep(for: .milliseconds(200))
-                }
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
+    /// Cancels the path-change observer (the presenting view calls this
+    /// on disappearance). Restartable: `observePathChanges` re-arms.
+    func stopObservingPathChanges() {
+        monitorTask?.cancel()
+        monitorTask = nil
     }
 
     /// One re-evaluation: sweep, apply the policy's cooldown backoff
     /// (reset on a reachable verdict, doubled otherwise), and redial
-    /// through the plan when unconnected and a route carries SSH.
-    func evaluateAndMaybeRedial(isConnected: @escaping @MainActor () -> Bool) async {
+    /// through the plan when unconnected and a route carries SSH. The
+    /// connection state is read AGAIN immediately before the retry —
+    /// a host that connected mid-sweep (another surface's redial, say)
+    /// is never yanked into a second dial.
+    func evaluateAndMaybeRedial() async {
         await checkRoutes()
         let foundReachable = probes.values.contains {
             $0.outcome.provesPathCarriesSSH
         }
         cooldown = HostRoutePolicy.nextCooldown(
             afterPrevious: cooldown, foundReachable: foundReachable)
-        guard !isConnected(), foundReachable, let retryConnection else { return }
+        guard !isConnectedNow, foundReachable, let retryConnection else { return }
         await retryConnection()
     }
 
     /// The design contract's "Check routes": one bounded sweep of the
-    /// configured routes in priority order. The busy state is owned HERE
-    /// (overlapping presses are refused rather than serialized), and
-    /// results land per-route as the sweep goes — the caller observing
-    /// `probes` sees each route's verdict the moment it concludes, never
-    /// an all-or-nothing snapshot at the end.
+    /// ELIGIBLE configured routes in priority order — eligibility is
+    /// applied BEFORE probing, so a Wi-Fi-only route is never CONTACTED
+    /// while off Wi-Fi (the same gate the dial plan enforces; probing a
+    /// gated route would bypass the user's setting). Gated routes show
+    /// their honest "Skipped · Wi-Fi only" row state instead. The busy
+    /// state is owned HERE (overlapping presses are refused rather than
+    /// serialized), and results land per-route as the sweep goes.
     func checkRoutes() async {
         guard !isProbing else { return }
         isProbing = true
         checkFailedExplanation = nil
+        // The CURRENT catalog host: an edit made since this store was
+        // built is honored — the sweep probes what is saved NOW.
+        let currentHost = currentCatalogHost
+        let eligible = currentHost.candidateAddresses
+            .filter { address in
+                HostRoutePolicy.isEligible(
+                    currentHost.routeEligibility(for: address),
+                    network: network)
+            }
         do {
-            try await prober.probe(addresses: host.candidateAddresses, host: host) {
+            try await prober.probe(addresses: eligible, host: currentHost) {
                 [weak self] address, result in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     // A result for an address this Host no longer
                     // carries (edited mid-sweep) is dropped, never
                     // resurrected.
-                    guard self.host.candidateAddresses.contains(address) else { return }
+                    guard self.currentCatalogHost.candidateAddresses.contains(address)
+                    else { return }
                     self.probes[address] = result
                 }
             }
         } catch HostCredentialsError.passwordNotSet {
             checkFailedExplanation =
-                "The check could not run: no password is saved for \(host.displayAliasName)."
+                "The check could not run: no password is saved for \(currentHost.displayAliasName)."
         } catch DeviceKeyStoreError.storedKeyCorrupt {
             checkFailedExplanation =
                 "The check could not run: the Device Key could not be loaded. "
                 + "Open Edit and replace it if it is corrupt."
         } catch {
             checkFailedExplanation =
-                "The check could not run: \(host.displayAliasName)'s credentials "
+                "The check could not run: \(currentHost.displayAliasName)'s credentials "
                 + "could not be loaded."
         }
         isProbing = false
     }
 
+    /// The CURRENT catalog host — the saved state right now, not the
+    /// snapshot captured when this store was built. Pin, unpin, and the
+    /// sweep all mutate and read THROUGH this, so a concurrent edit can
+    /// never be overwritten by a stale copy.
+    private var currentCatalogHost: Host {
+        catalog?.hosts.first(where: { $0.id == host.id }) ?? host
+    }
+
     /// "Choose manually" → pin one route. Persists immediately; the pin
     /// is never silently overridden, and it dials exactly its address
-    /// through the dial plan.
+    /// through the dial plan. Mutates the CURRENT catalog host — a
+    /// concurrent edit (name change, address reorder) is preserved,
+    /// never overwritten by this store's older snapshot.
     func pin(_ address: String) throws {
         guard let catalog else { return }
-        var updated = host
+        var updated = currentCatalogHost
         updated.routeSelection = .manual(address: address)
         try catalog.update(updated)
         // Pinning adopts the v2 surface; any legacy v1 preferred pick is
@@ -181,16 +215,14 @@ final class HostRouteStatusStore {
     }
 
     /// "Return to automatic": drops the pin. The next connect follows the
-    /// saved priority order.
+    /// saved priority order. Mutates the CURRENT catalog host.
     func returnToAutomatic() throws {
         guard let catalog else { return }
-        var updated = host
+        var updated = currentCatalogHost
         updated.routeSelection = .automatic
         try catalog.update(updated)
-        // TEMP probe: surface the catalog state post-update.
-        checkFailedExplanation = "PROBE after update: \(catalog.hosts.first(where: { $0.id == host.id })?.routeSelection ?? .automatic)"
-        // Pinning adopts the v2 surface; any legacy v1 preferred pick is
-        // cleared once, here — the pin is now the single dialing truth.
+        // Unpinning keeps the v2 surface adopted; any legacy v1
+        // preferred pick stays cleared — the saved order governs.
         PreferredAddressStore(hostID: host.id).clear()
     }
 

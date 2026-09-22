@@ -59,6 +59,122 @@ struct HostOnboardingView: View {
     }
 
     var body: some View {
+        routeObservation(
+            trustAndSessionChrome(
+                navigationChrome(listContent)))
+    }
+
+    /// Navigation title, toolbar, and the Edit sheet — its own
+    /// expression to keep the type-checker's budget small.
+    private func navigationChrome(_ content: some View) -> some View {
+        content
+            .navigationTitle(store.host.displayName)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("Edit") { isEditing = true }
+                    }
+                }
+                .sheet(isPresented: $isEditing) {
+                    HostFormView(store: catalog, editing: store.host)
+                }
+    }
+
+    /// The trust/session/route alerts and the host-key replacement
+    /// dialog.
+    private func trustAndSessionChrome(_ content: some View) -> some View {
+        content
+                .alert(
+                    "Trust this Host?",
+                    isPresented: fingerprintAlertPresented,
+                    presenting: store.pendingFingerprint
+                ) { _ in
+                    Button("Trust") { store.confirmFingerprint(trusted: true) }
+                    Button("Don't Trust", role: .cancel) { store.confirmFingerprint(trusted: false) }
+                } message: { candidate in
+                    Text(fingerprintMessageLine(candidate))
+                }
+                .confirmationDialog(
+                    "Replace the trusted Host key?",
+                    isPresented: $isConfirmingHostKeyReplacement,
+                    titleVisibility: .visible
+                ) {
+                    Button("Trust New Key", role: .destructive) {
+                        Task { await store.trustPresentedHostKey() }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    if let replacement = store.pendingHostKeyReplacement {
+                        Text(hostKeyReplacementLine(replacement))
+                    }
+                }
+                .alert(
+                    "Could Not Select Session",
+                    isPresented: sessionErrorPresented
+                ) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text(sessionSelectionError ?? "")
+                }
+                .alert(
+                    "Could Not Save Route Selection",
+                    isPresented: routeErrorPresented
+                ) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text(routeError ?? "")
+                }
+    }
+
+    /// The route-surface lifecycle: arrival task, live connection sync,
+    /// foreground recheck, and explicit observer teardown.
+    private func routeObservation(_ content: some View) -> some View {
+        content
+                .task {
+                    // The route surface renders its statuses from the
+                    // store's probe results; build it on arrival, seed
+                    // the live connection state, sync the CURRENT network
+                    // hint, and observe the shared monitor's coalesced
+                    // path changes (unconnected re-evaluation with the
+                    // policy's cooldown — the recovery path for the
+                    // all-ineligible off-Wi-Fi state).
+                    let routeStore = ensureRouteStore()
+                    routeStore.updateConnectionState(connectionStatus == .connected)
+                    routeStore.syncNetworkFromMonitor()
+                    routeStore.observePathChanges()
+                    if store.phase == .idle {
+                        await store.runChecks()
+                    }
+                }
+                // Keep the store's LIVE connection state current: the
+                // evaluation gates read it at call time, never a
+                // snapshot captured at appearance.
+                .onChange(of: connectionStatus) { _, status in
+                    routeStore?.updateConnectionState(status == .connected)
+                }
+                // The design contract's recheck on foreground: when the
+                // app returns, re-run one bounded evaluation — sweep,
+                // cooldown backoff, and (when unconnected and a route
+                // answers) a redial through the same dial plan every real
+                // dial uses.
+                .onChange(of: scenePhase, { previous, phase in
+                    // A real foreground return only: the launch
+                    // transition into active is not a recheck trigger.
+                    guard previous != .active, phase == .active, let routeStore,
+                        !routeStore.isProbing
+                    else { return }
+                    Task { await routeStore.evaluateAndMaybeRedial() }
+                })
+                // The observer is explicitly cancelled on disappearance
+                // (no strong cycle through the store); re-arrival re-arms.
+                .onDisappear {
+                    routeStore?.stopObservingPathChanges()
+                }
+    }
+
+    /// The List itself, factored out so the body's modifier chain stays
+    /// within the type-checker's budget.
+    private var listContent: some View {
         List {
             Section {
                 LabeledContent("Address", value: addressLine)
@@ -125,10 +241,7 @@ struct HostOnboardingView: View {
                 } header: {
                     Text("Route failed")
                 } footer: {
-                    Text(
-                        "The connection did not go through. "
-                            + "You can try one of this Host's other saved routes "
-                            + "or return to automatic selection.")
+                    Text(routeFailedFooter)
                 }
             }
 
@@ -199,15 +312,7 @@ struct HostOnboardingView: View {
                 }
             } footer: {
                 if let info = store.serverInfo {
-                    // The notice is advisory and the checks still pass: a Host
-                    // newer than this build is usable, just not fully known.
-                    Text(
-                        info.exceedsGeneratedProtocol
-                            ? "herdr \(info.version) · protocol \(info.protocolVersion) — "
-                                + "newer than this app was built against, so features added "
-                                + "after protocol \(HeelerSSHTransport.generatedProtocolVersion) "
-                                + "may be unavailable."
-                            : "herdr \(info.version) · protocol \(info.protocolVersion)")
+                    Text(preflightFooterLine(info))
                 }
             }
 
@@ -231,111 +336,37 @@ struct HostOnboardingView: View {
                     Text("Only continue after verifying the new fingerprint with the Host owner.")
                 }
             }
-
         }
-        .navigationTitle(store.host.displayName)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button("Edit") { isEditing = true }
-            }
-        }
-        .sheet(isPresented: $isEditing) {
-            HostFormView(store: catalog, editing: store.host)
-        }
-        .alert(
-            "Trust this Host?",
-            isPresented: fingerprintAlertPresented,
-            presenting: store.pendingFingerprint
-        ) { _ in
-            Button("Trust") { store.confirmFingerprint(trusted: true) }
-            Button("Don't Trust", role: .cancel) { store.confirmFingerprint(trusted: false) }
-        } message: { candidate in
-            Text(
-                "First connection to \(candidate.host):\(String(candidate.port)).\n\n"
-                    + "Key fingerprint:\n\(candidate.fingerprint.displayString)\n\n"
-                    + "Verify it matches the Host's key before trusting.")
-        }
-        .confirmationDialog(
-            "Replace the trusted Host key?",
-            isPresented: $isConfirmingHostKeyReplacement,
-            titleVisibility: .visible
-        ) {
-            Button("Trust New Key", role: .destructive) {
-                Task { await store.trustPresentedHostKey() }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            if let replacement = store.pendingHostKeyReplacement {
-                Text(
-                    "Trusted: \(replacement.known.displayString)\n\n"
-                        + "Presented: \(replacement.presented.displayString)\n\n"
-                        + "A changed key can indicate a reinstalled Host or an attack.")
-            }
-        }
-        .alert(
-            "Could Not Select Session",
-            isPresented: Binding(
-                get: { sessionSelectionError != nil },
-                set: { if !$0 { sessionSelectionError = nil } })
-        ) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(sessionSelectionError ?? "")
-        }
-        .alert(
-            "Could Not Save Route Selection",
-            isPresented: Binding(
-                get: { routeError != nil },
-                set: { if !$0 { routeError = nil } })
-        ) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(routeError ?? "")
-        }
-        .task {
-            // The route surface renders its statuses from the store's
-            // probe results; build it on arrival, sync the CURRENT
-            // network hint, and observe the shared monitor's coalesced
-            // path changes (unconnected re-evaluation with the policy's
-            // cooldown backoff — the recovery path for the
-            // all-ineligible off-Wi-Fi state).
-            let routeStore = ensureRouteStore()
-            routeStore.syncNetworkFromMonitor()
-            routeStore.observePathChanges { [connectionStatus] in
-                connectionStatus == .connected
-            }
-            if store.phase == .idle {
-                await store.runChecks()
-            }
-        }
-        // The design contract's recheck on foreground: when the app
-        // returns, re-run one bounded evaluation — sweep, cooldown
-        // backoff, and (when unconnected and a route answers) a redial
-        // through the same dial plan every real dial uses. No
-        // continuous background promises — this fires because the user
-        // came back.
-        .onChange(of: scenePhase, { previous, phase in
-            // A real foreground return only: the launch transition into
-            // active is not a recheck trigger.
-            guard previous != .active, phase == .active, let routeStore,
-                !routeStore.isProbing
-            else { return }
-            Task {
-                await routeStore.evaluateAndMaybeRedial { [connectionStatus] in
-                    connectionStatus == .connected
-                }
-            }
-        })
     }
 
     /// Presentation tracks the pending candidate; dismissal is decided by
     /// the buttons (or the store's own timeout), never by the binding, so a
     /// dismiss-then-answer race cannot double-resolve the decision.
+
+    /// The preflight footer: advisory when the Host is newer than this
+    /// build was built against, plain version otherwise.
+    private func preflightFooterLine(_ info: ServerInfo) -> String {
+        guard info.exceedsGeneratedProtocol else {
+            return "herdr \(info.version) · protocol \(info.protocolVersion)"
+        }
+        return
+            "herdr \(info.version) · protocol \(info.protocolVersion) — "
+            + "newer than this app was built against, so features added "
+            + "after protocol \(HeelerSSHTransport.generatedProtocolVersion) "
+            + "may be unavailable."
+    }
     private var fingerprintAlertPresented: Binding<Bool> {
         Binding(
             get: { store.pendingFingerprint != nil },
             set: { _ in })
+    }
+
+    /// The replace-host-key dialog's message: trusted vs presented
+    /// fingerprints, with the honest warning.
+    private func hostKeyReplacementLine(_ replacement: HostKeyReplacement) -> String {
+        "Trusted: \(replacement.known.displayString)\n\n"
+            + "Presented: \(replacement.presented.displayString)\n\n"
+            + "A changed key can indicate a reinstalled Host or an attack."
     }
 
     /// The summary line: user@primary:port, plus a count hint when more
@@ -349,11 +380,39 @@ struct HostOnboardingView: View {
         return line
     }
 
+    /// The first-connect trust alert's message.
+    private func fingerprintMessageLine(_ candidate: HostKeyCandidate) -> String {
+        "First connection to \(candidate.host):\(String(candidate.port)).\n\n"
+            + "Key fingerprint:\n\(candidate.fingerprint.displayString)\n\n"
+            + "Verify it matches the Host's key before trusting."
+    }
+
     private var sessionLine: String {
         if case .namedSession(let name) = store.host.socketLocation {
             return name
         }
         return "default"
+    }
+
+    /// The Route-failed offer's footer.
+    private var routeFailedFooter: String {
+        "The connection did not go through. "
+            + "You can try one of this Host's other saved routes "
+            + "or return to automatic selection."
+    }
+
+    /// Presentation of the route-save failure alert.
+    private var routeErrorPresented: Binding<Bool> {
+        Binding(
+            get: { routeError != nil },
+            set: { if !$0 { routeError = nil } })
+    }
+
+    /// Presentation of the session-selection failure alert.
+    private var sessionErrorPresented: Binding<Bool> {
+        Binding(
+            get: { sessionSelectionError != nil },
+            set: { if !$0 { sessionSelectionError = nil } })
     }
 
     /// One line per address with its probe state. When the Host has v2

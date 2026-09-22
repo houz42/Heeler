@@ -591,6 +591,32 @@ struct HostRouteSelectionTests {
         #expect(updated.routeSelection == .automatic)
     }
 
+    @Test func theSweepProbesOnlyEligibleRoutes() async throws {
+        // The reviewer's eligibility-bypass finding: the automatic sweep
+        // must apply eligibility BEFORE probing — a Wi-Fi-only route is
+        // never CONTACTED while off Wi-Fi, exactly like the dial plan.
+        let host = makeHost(eligibility: ["lan.example": .wifiOnly])
+        let connector = DialRecordingConnector(reachable: ["tailnet.example"])
+        let store = HostRouteStatusStore(
+            host: host,
+            network: .nonWiFi,
+            prober: HostRouteProber(
+                connector: connector,
+                credentials: HostCredentialsProvider(
+                    deviceKeys: DeviceKeyStore(secrets: InMemorySecretStore()),
+                    secrets: InMemorySecretStore()),
+                knownHosts: InMemoryKnownHostsStore(),
+                probeTimeout: .seconds(1)))
+        try? await store.checkRoutes()
+
+        // Only the eligible routes were contacted.
+        #expect(await connector.dialed == ["tailnet.example", "vpn.example"])
+        // And the gated route renders its honest Skipped state.
+        #expect(
+            store.probes["lan.example"] == nil
+                || store.probes["lan.example"]?.outcome == .unknown)
+    }
+
     private struct UnreachableProbeConnector: TransportConnector {
         func connect(settings: SSHTransportSettings) async throws -> any Transport {
             throw TransportError.sshUnreachable(detail: "never dials")
