@@ -31,15 +31,25 @@
 // macOS + Linux: dataRoot = ${XDG_DATA_HOME:-~/.local/share}/meadow;
 // stateRoot = ${XDG_STATE_HOME:-~/.local/state}/meadow on both.
 
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import net from "node:net";
+import os from "node:os";
+import path from "node:path";
+import process from "node:process";
+import { fileURLToPath } from "node:url";
+
 export function meadowDataRoot() {
   return path.join(process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local", "share"), "meadow");
 }
 
+export const BROKER_VERSION = "0.1.0"; // agent-chat package version bundled in the plugin
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PLUGIN_ROOT = path.resolve(__dirname, "..");
+
 export function meadowStateRoot() {
-  if (process.platform === "darwin") {
-    return path.join(os.homedir(), ".local", "state", "meadow");
-  }
-  return path.join(process.env.XDG_STATE_HOME ?? meadowDataRoot());
+  return path.join(process.env.XDG_STATE_HOME ?? path.join(os.homedir(), ".local", "state"), "meadow");
 }
 
 export function brokerSocketPath() {
@@ -50,8 +60,12 @@ export function brokerLogPath() {
   return path.join(meadowDataRoot(), "logs", "broker.log");
 }
 
-export function lockFilePath() {
-  return path.join(meadowStateRoot(), "broker.lock.json");
+export function ownerSocketPath() {
+  return path.join(meadowStateRoot(), "broker.owner.sock");
+}
+
+export function ownerRecordPath() {
+  return path.join(meadowStateRoot(), "broker.owner.json");
 }
 
 export function runtimeDir() {
@@ -209,40 +223,7 @@ export function probeBroker({ socketPath = brokerSocketPath(), timeoutMs = 1500 
 // reads the owner record, sees the lock alive, and does NOT spawn a
 // second broker — no pidfiles to trust, no racy unlock step.
 
-export function ownerSocketPath() {
-  return path.join(meadowStateRoot(), "broker.owner.sock");
-}
 
-export function ownerRecordPath() {
-  return path.join(meadowStateRoot(), "broker.owner.json");
-}
-
-/**
- * Bind the owner socket and write the owner record. Resolves with the
- * bound server (the caller keeps it referenced for process lifetime);
- * rejects with code 'owner_taken' when another supervisor owns it.
- */
-export async function claimOwnership({ info } = {}) {
-  const ownerPath = ownerSocketPath();
-  fs.mkdirSync(path.dirname(ownerPath), { recursive: true });
-  const ownerInfo = {
-    role: "meadow-broker-supervisor",
-    startedAt: new Date().toISOString(),
-    brokerPid: null,
-    ...info,
-  };
-  const server = net.createServer((conn) => {
-    // Answer any ownership probe with the live owner record, then hang up.
-    conn.end(JSON.stringify({ ...ownerInfo, pid: process.pid }) + "\n");
-  });
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(ownerPath, resolve);
-  });
-  fs.chmodSync(ownerPath, 0o600);
-  fs.writeFileSync(ownerRecordPath(), JSON.stringify({ ...ownerInfo, pid: process.pid }, null, 2) + "\n");
-  return server;
-}
 
 /** Ask the current owner for its record; null when no live owner exists. */
 export function readOwner({ timeoutMs = 1000 } = {}) {
