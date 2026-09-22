@@ -6,53 +6,32 @@
 //     separately installed product and not part of herdr core.
 //   - ONE broker per host serves ALL agent types and every herdr session.
 //     herdr runs [[startup]] hooks per session, so genuine host-wide
-//     single-instance ownership is enforced with a lock file + fcntl
-//     exclusive lock held by a detached supervisor process for the
-//     broker's lifetime: a second herdr session probes, sees the lock
-//     held and the socket alive, and does NOT spawn another broker.
+//     single-instance ownership is enforced with an owner SOCKET bound
+//     (and held) by a detached supervisor process for the broker's
+//     lifetime: a second herdr session probes, sees the owner alive and
+//     the broker socket answering, and does NOT spawn another broker.
 //   - Plugin startup may run in N sessions concurrently; none of them
 //     may ever bounce the other's broker.
 //
-// Layout (all under the Meadow data root, which is ALSO the live socket
-// dir the app already dials — credentials/pairing/socket are preserved):
-//   <meadowRoot>/broker.sock        the wire socket (unchanged path)
-//   <meadowRoot>/logs/broker.log    broker stdout/stderr + wire-observability
-//   <stateRoot>/broker.lock.json    owner lock file (fcntl-held)
-//   <stateRoot>/runtime/            synchronized broker runtime (see
+// Layout — the socket PATH is the migration invariant: it is the standard
+// path the live deployment already uses (the launchd plist's --socket
+// expansion and the omp loader shim's HEELER_CHAT_SOCKET default agree
+// on it), so a plugin takeover happens without re-pairing anything:
+//   <dataRoot>/broker.sock         the wire socket (unchanged path)
+//   <dataRoot>/logs/broker.log     broker stdout/stderr + wire-observability
+//   <stateRoot>/broker.owner.sock  the single-instance ownership socket
+//   <stateRoot>/broker.owner.json  human-readable owner record
+//   <stateRoot>/runtime/           synchronized broker runtime (see
 //                                   syncRuntime — agent adapters are loaded
-//                                   from here, never from the plugin checkout,
-//                                   so GitHub-managed plugin updates and
-//                                   herdr plugin link swaps never yank code
-//                                   out from under a running broker).
-// macOS: meadowRoot = ~/Library/Application Support/meadow
-//        stateRoot = ~/.local/state/meadow
-// Linux: both = ${XDG_DATA_HOME:-~/.local/share}/meadow
-//        (state under XDG_STATE_HOME when set, else the data root)
-
-import { spawn } from "node:child_process";
-import fs from "node:fs";
-import net from "node:net";
-import os from "node:os";
-import path from "node:path";
-import process from "node:process";
-import { fileURLToPath } from "node:url";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PLUGIN_ROOT = path.resolve(__dirname, "..");
-export const BROKER_VERSION = "0.1.0"; // agent-chat package version bundled in the plugin
-
-// ---------------------------------------------------------------------------
-// Paths
+//                                   from here, never from the plugin
+//                                   checkout, so GitHub-managed plugin
+//                                   updates and herdr plugin link swaps
+//                                   never yank code from a live broker)
+//
+// macOS + Linux: dataRoot = ${XDG_DATA_HOME:-~/.local/share}/meadow;
+// stateRoot = ${XDG_STATE_HOME:-~/.local/state}/meadow on both.
 
 export function meadowDataRoot() {
-  if (process.platform === "darwin") {
-    return path.join(
-      os.homedir(),
-      "Library",
-      "Application Support",
-      "meadow",
-    );
-  }
   return path.join(process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local", "share"), "meadow");
 }
 
@@ -96,6 +75,14 @@ export function syncRuntime() {
   copyTree(path.join(src, "src"), path.join(staged, "broker", "src"));
   copyTree(path.join(src, "adapters"), path.join(staged, "broker", "adapters"));
   copyTree(path.join(src, "bin"), path.join(staged, "broker", "bin"));
+  // The supervisor is self-contained in the runtime too: if the plugin
+  // checkout disappears (uninstall, worktree cleanup), the running
+  // supervisor can still supervise; a NEW one can be spawned by the next
+  // plugin install.
+  fs.copyFileSync(
+    path.join(PLUGIN_ROOT, "src", "broker-supervisor.mjs"),
+    path.join(staged, "broker", "broker-supervisor.mjs"),
+  );
   fs.copyFileSync(path.join(src, "package.json"), path.join(staged, "broker", "package.json"));
   fs.writeFileSync(
     path.join(staged, "broker", "manifest.json"),
@@ -292,7 +279,12 @@ export function readOwner({ timeoutMs = 1000 } = {}) {
  * with backoff, and releases ownership on SIGTERM/SIGINT (broker drain:
 // the supervisor stops the broker cleanly, adapters reconnect on their own).
  */
-export const SUPERVISOR_MODULE = path.join(PLUGIN_ROOT, "src", "broker-supervisor.mjs");
+// Prefer the runtime's copy (self-contained; survives plugin uninstall).
+export function supervisorModule() {
+  const runtimeCopy = path.join(runtimeDir(), "broker", "broker-supervisor.mjs");
+  if (fs.existsSync(runtimeCopy)) return runtimeCopy;
+  return path.join(PLUGIN_ROOT, "src", "broker-supervisor.mjs");
+}
 
 /**
  * Ensure the host's broker is up. Idempotent and session-safe:
@@ -321,7 +313,7 @@ export async function ensureBroker({ log } = {}) {
   fs.mkdirSync(path.dirname(logPath), { recursive: true });
   const out = fs.openSync(logPath, "a");
   const err = fs.openSync(logPath, "a");
-  const child = spawn(process.execPath, [SUPERVISOR_MODULE], {
+  const child = spawn(process.execPath, [supervisorModule()], {
     stdio: ["ignore", out, err],
     detached: true,
     env: {
