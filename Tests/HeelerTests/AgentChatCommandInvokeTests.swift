@@ -58,7 +58,11 @@ actor ScriptedBrokerPipe: AgentChatBytePipe {
             else { continue }
 
             if let body = nextReplyFor(method: method) {
-                let reply = body.replacingOccurrences(of: "%ID%", with: id)
+                // The wire response envelope: result OR error, with the
+                // correlation id (bare result bodies never match a
+                // pending request).
+                let reply =
+                    #"{"type":"response","id":"\#(id)","result":\#(body)}"#
                 inject(reply)
             }
         }
@@ -121,14 +125,10 @@ struct AgentChatCommandInvokeTests {
     /// (prompt + commands + streaming + history), located at the pane's
     /// session file so the matcher resolves exactly one.
     private static let sessionFile = "/cmd-proof/session.jsonl"
-    private static let registrationJSON = """
-        {"instanceId":"inst-1","sessionId":"s-1","generation":1,
-         "locator":{"sessionFile":"\(sessionFile)"},
-         "agent":{"kind":"omp","version":"18"},
-         "capabilities":{"history":true,"streaming":true,"prompt":true,
-           "interrupt":true,"interactions":false,"commands":true,
-           "attachments":false,"branches":false}}
-        """
+    /// ONE physical line — NDJSON-safe: a multi-line pretty JSON would
+    /// be undecodable frames on the wire and the store would never match.
+    private static let registrationJSON =
+        #"{"instanceId":"inst-1","sessionId":"s-1","generation":1,"locator":{"sessionFile":"\#(sessionFile)"},"agent":{"kind":"omp","version":"18"},"capabilities":{"history":true,"streaming":true,"prompt":true,"interrupt":true,"interactions":false,"commands":true,"attachments":false,"branches":false}}"#
 
     private func readyStore(
         pipe: ScriptedBrokerPipe
