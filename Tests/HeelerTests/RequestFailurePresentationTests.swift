@@ -13,11 +13,11 @@ struct RequestFailurePresentationTests {
         #expect(
             NotificationPreferencesStore.message(
                 for: NotificationRegistrationError.pluginNotInstalled)
-                == "Install the Heeler plugin on this Host, then check again.")
+                == "Install the Meadow plugin on this Host, then check again.")
         #expect(
             NotificationPreferencesStore.message(
                 for: NotificationRegistrationError.pluginProbeFailed(detail: "boom"))
-                == "Could not check the Heeler plugin on this Host. "
+                == "Could not check the Meadow plugin on this Host. "
                 + "Check the connection and try again.")
         #expect(
             NotificationPreferencesStore.message(

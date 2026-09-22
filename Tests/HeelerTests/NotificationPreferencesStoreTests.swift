@@ -136,7 +136,7 @@ struct NotificationPreferencesStoreTests {
             Issue.record("expected .unavailable, got \(String(describing: store.states[host.id]))")
             return
         }
-        #expect(message == "Install the Heeler plugin on this Host, then check again.")
+        #expect(message == "Install the Meadow plugin on this Host, then check again.")
     }
 
     @Test func removingAHostFromTheCatalogDropsItsState() async throws {
