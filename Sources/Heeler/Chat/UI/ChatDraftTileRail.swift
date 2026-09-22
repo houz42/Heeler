@@ -161,10 +161,18 @@ extension ChatDraftComposer {
 struct ChatDraftTile<Content: View>: View {
     let content: Content
     let remove: (() -> Void)?
+    /// Review round 4, finding 1: the attachment failed the send — the
+    /// tile is MARKED with an error ring so the error copy's ordinal
+    /// maps to a visible tile.
+    var failed: Bool = false
 
-    init(@ViewBuilder content: () -> Content, remove: (() -> Void)? = nil) {
+    init(
+        @ViewBuilder content: () -> Content, remove: (() -> Void)? = nil,
+        failed: Bool = false
+    ) {
         self.content = content()
         self.remove = remove
+        self.failed = failed
     }
 
     var body: some View {
@@ -173,7 +181,11 @@ struct ChatDraftTile<Content: View>: View {
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(Color.secondary.opacity(0.3), lineWidth: 0.5))
+                    .strokeBorder(
+                        failed
+                            ? Color.red.opacity(0.85)
+                            : Color.secondary.opacity(0.3),
+                        lineWidth: failed ? 1.5 : 0.5))
             .overlay(alignment: .topTrailing) {
                 if let remove {
                     // Fully INSIDE the tile's corner (the old +6/-6
@@ -221,6 +233,10 @@ struct ChatDraftTileOverflow: View {
 /// overflow (count > fits) and takes the last fitting slot.
 struct ChatDraftTileRail: View {
     var items: [ChatDraftItem]
+    /// Review round 4, finding 1: the tile whose attachment failed the
+    /// send — MARKED with an error ring so the ordinal in the error
+    /// copy maps to a visible tile.
+    var failedItemID: String? = nil
     var removeItem: (String) -> Void
     var openPreview: (ChatDraftItem) -> Void
     var openCollection: () -> Void
@@ -278,9 +294,13 @@ struct ChatDraftTileRail: View {
                         }
                     }
                 },
-                remove: { removeItem(item.id) })
+                remove: { removeItem(item.id) },
+                failed: item.id == failedItemID)
                 .onTapGesture { openPreview(item) }
-                .accessibilityLabel(item.accessibilityLabel)
+                .accessibilityLabel(
+                    item.id == failedItemID
+                        ? "\(item.accessibilityLabel), failed to send"
+                        : item.accessibilityLabel)
         case .file(_, let name, _):
             ChatDraftTile(
                 content: {
@@ -308,9 +328,13 @@ struct ChatDraftTileRail: View {
                             .foregroundStyle(.secondary)
                     }
                 },
-                remove: { removeItem(item.id) })
+                remove: { removeItem(item.id) },
+                failed: item.id == failedItemID)
                 .onTapGesture { openPreview(item) }
-                .accessibilityLabel(item.accessibilityLabel)
+                .accessibilityLabel(
+                    item.id == failedItemID
+                        ? "\(item.accessibilityLabel), failed to send"
+                        : item.accessibilityLabel)
         }
     }
 }

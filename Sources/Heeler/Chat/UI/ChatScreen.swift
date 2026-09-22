@@ -944,6 +944,11 @@ struct ChatScreen: View {
     /// A picker firing before the bundle exists: honest error, no silent
     /// no-op.
     @State private var attachmentErrorMessage: String?
+    /// Round 4, finding 1: the tile whose attachment failed the send —
+    /// MARKED in the rail (red ring) so the error copy's ordinal maps
+    /// to a visible tile. CLEARS when that tile is removed or a retry
+    /// succeeds (finding 3).
+    @State private var failedAttachmentItemID: String?
     /// The file picker's last selection (name for the rail tile).
     @State private var pendingFileURL: URL?
     /// The photo picker's item data (the tile's preview thumbnail).
@@ -1121,6 +1126,7 @@ struct ChatScreen: View {
                 if !draftItems.isEmpty {
                     ChatDraftTileRail(
                         items: draftItems,
+                        failedItemID: failedAttachmentItemID,
                         removeItem: { id in removeDraftItem(id) },
                         openPreview: { item in previewedDraftItem = item },
                         openCollection: { showsDraftCollection = true })
@@ -1221,6 +1227,10 @@ struct ChatScreen: View {
         draft = ""
         draftItems = []
         draftStore.clear(paneID: draftKey)
+        // Round 4, finding 3: a successful send resolved every
+        // attachment — the tile mark and its error clear with the draft.
+        failedAttachmentItemID = nil
+        attachmentErrorMessage = nil
     }
 
     /// The pane's persisted draft (item 18): loaded on appear (and on
@@ -1309,6 +1319,12 @@ struct ChatScreen: View {
 
     private func removeDraftItem(_ id: String) {
         draftItems.removeAll { $0.id == id }
+        // Round 4, finding 3: removing the failed tile clears its
+        // error — a retained error can't outlive the problem.
+        if failedAttachmentItemID == id {
+            failedAttachmentItemID = nil
+            attachmentErrorMessage = nil
+        }
     }
 
     private func sendDraft() {
@@ -1354,14 +1370,14 @@ struct ChatScreen: View {
                         showSentConfirmation = false
                     }
                 } catch let error as ChatAttachmentSendError {
-                    // Review round 3, finding 2: the failure names the
-                    // attachment, renders BESIDE the tile rail
-                    // (attachmentErrorMessage is the composer's own
-                    // error row), and the WHOLE draft (text + items)
-                    // stays. Local preparation/reads — never an
-                    // uncertain network delivery.
+                    // Review rounds 3-4: the failure names the
+                    // attachment AND marks its tile; the error row
+                    // renders beside the tile rail, and the WHOLE draft
+                    // (text + items) stays. Local preparation/reads —
+                    // never an uncertain network delivery.
                     deliveryError = nil
                     attachmentErrorMessage = error.message
+                    failedAttachmentItemID = error.itemID
                 } catch {
                     // Visible + retryable: the draft (and items) stay.
                     deliveryError = "Send failed — your message may not have been delivered. Retry when ready."
@@ -1415,50 +1431,58 @@ struct ChatScreen: View {
     ///    staged).
     private func buildOutgoingImages() async throws -> [AgentChatOutgoingImage] {
         var images: [AgentChatOutgoingImage] = []
+        // Round 4, finding 1: images are named by their ORDINAL among
+        // the held image tiles (image 1, image 2, …) so the error copy
+        // identifies WHICH tile failed even with several picked.
+        var imageOrdinal = 0
         for item in draftItems {
             guard case .image(let id, let remotePath, let localData) = item
             else { continue }
-            // Resolve THIS attachment's bytes — any of the three sources,
-            // in order; none of them is the upload.
-            var bytes: Data?
-            if let localData, !localData.isEmpty {
-                bytes = localData
-            } else if let pickerItem = pendingPickerItems[id] {
-                bytes = try? await pickerItem.loadTransferable(type: Data.self) ?? nil
-            } else if !remotePath.isEmpty, let fetch {
-                bytes = try? await fetch(remotePath)
-            }
-            guard let bytes, !bytes.isEmpty else {
-                // Findings 1+3 (review round 3, finding 2): a resolvable-
-                // but-failed attachment is NEVER silently skipped — the
-                // send aborts, the draft stays, and the failure names
-                // WHICH attachment failed.
-                throw ChatAttachmentSendError.unreadableAttachment(
-                    name: Self.attachmentDisplayName(item))
-            }
-            // Finding 4: normalize through the shared local preparation
-            // (supported formats, bounded, oriented) — never raw picker
-            // data with a guessed MIME.
-            let prepared: PreparedImage
+            imageOrdinal += 1
+            let displayName = "image \(imageOrdinal)"
             do {
-                prepared = try await Self.imagePreparer.prepare(
+                // Resolve THIS attachment's bytes — any of the three
+                // sources, in order; none of them is the upload.
+                var bytes: Data?
+                if let localData, !localData.isEmpty {
+                    bytes = localData
+                } else if let pickerItem = pendingPickerItems[id] {
+                    bytes = try await pickerItem.loadTransferable(type: Data.self) ?? nil
+                } else if !remotePath.isEmpty, let fetch {
+                    bytes = try await fetch(remotePath)
+                }
+                guard let bytes, !bytes.isEmpty else {
+                    // A resolvable-but-failed attachment is NEVER
+                    // silently skipped — the send aborts, the draft
+                    // stays, and the failure is identified per tile.
+                    throw ChatAttachmentSendError(
+                        itemID: id, displayName: displayName)
+                }
+                // Finding 4: normalize through the shared local
+                // preparation (supported formats, bounded, oriented) —
+                // never raw picker data with a guessed MIME.
+                let prepared = try await Self.imagePreparer.prepare(
                     DataImageSelection(data: bytes))
+                defer { try? prepared.remove() }
+                // Round 4, finding 2: the prepared-file READ is INSIDE
+                // this attachment's error boundary — a read failure is
+                // a typed LOCAL failure naming THIS tile, never a
+                // generic uncertain-delivery error (nothing was
+                // submitted).
+                let preparedBytes = try Data(contentsOf: prepared.fileURL)
+                images.append(AgentChatOutgoingImage(
+                    data: preparedBytes,
+                    mimeType: prepared.format == .png
+                        ? "image/png" : "image/jpeg",
+                    byteLength: preparedBytes.count))
+                // The tile keeps its live preview; the send used the
+                // normalized bytes.
+            } catch let error as ChatAttachmentSendError {
+                throw error
             } catch {
-                // Round 3, finding 2: preparation failure is LOCAL
-                // (bad/unsupported content), not an uncertain network
-                // delivery — named per attachment.
-                throw ChatAttachmentSendError.unreadableAttachment(
-                    name: Self.attachmentDisplayName(item))
+                throw ChatAttachmentSendError(
+                    itemID: id, displayName: displayName)
             }
-            defer { try? prepared.remove() }
-            let preparedBytes = try Data(contentsOf: prepared.fileURL)
-            images.append(AgentChatOutgoingImage(
-                data: preparedBytes,
-                mimeType: prepared.format == .png
-                    ? "image/png" : "image/jpeg",
-                byteLength: preparedBytes.count))
-            // The tile keeps its live preview; the send used the
-            // normalized bytes.
         }
         return images
     }
@@ -1515,21 +1539,21 @@ struct ChatScreen: View {
     }
 }
 
-/// A structured-send attachment failure that NAMES the attachment
-/// (review round 3, finding 2): local read/preparation failures — the
-/// draft is always retained whole; distinct from uncertain network
-/// delivery, which keeps the generic retryable delivery copy.
+/// A structured-send attachment failure that IDENTIFIES the attachment
+/// (review rounds 3-4): carries the failing tile's ITEM ID (so the
+/// tile can be MARKED, not just a composer row) and a distinguishing
+/// display name (images are named by their ordinal among the held
+/// image tiles — image 1, image 2 — so several picks are
+/// distinguishable; files carry their own name). Local
+/// read/preparation failures — the draft is always retained whole;
+/// distinct from uncertain network delivery, which keeps the generic
+/// retryable delivery copy.
 struct ChatAttachmentSendError: Error, Sendable, Equatable {
-    let name: String
-
-    /// One attachment's user-facing name for error copy: images are
-    /// "image", files carry their own name, quotes excerpt their text.
-    static func unreadableAttachment(name: String) -> ChatAttachmentSendError {
-        ChatAttachmentSendError(name: name)
-    }
+    let itemID: String
+    let displayName: String
 
     var message: String {
-        "The attachment \(name) could not be read for sending — it stays in your draft. Remove it or try again."
+        "The attachment \(displayName) could not be read for sending — it stays in your draft. Remove it or try again."
     }
 }
 

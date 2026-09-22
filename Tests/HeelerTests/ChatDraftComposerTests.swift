@@ -238,3 +238,30 @@ struct ChatSendNeverWaitsTests {
         #expect(quoteIdx < proseIdx && proseIdx < fileIdx)
     }
 }
+
+// MARK: - Send-never-waits review round 4 (error-path details)
+
+struct ChatAttachmentSendErrorTests {
+    /// The typed failure identifies its tile: the error carries the
+    /// failing item's ID and an ordinal display name so the SECOND of
+    /// two images is distinguishable from the first in the copy.
+    @Test func errorIdentifiesItemAndOrdinal() {
+        let first = ChatAttachmentSendError(itemID: "a", displayName: "image 1")
+        let second = ChatAttachmentSendError(itemID: "b", displayName: "image 2")
+        #expect(first.itemID == "a")
+        #expect(second.itemID == "b")
+        #expect(second.message.contains("image 2"))
+        #expect(!second.message.contains("image 1"))
+        // The copy always states the retention contract.
+        #expect(second.message.contains("stays in your draft"))
+    }
+
+    /// Distinct from uncertain network delivery: the attachment error
+    /// is LOCAL copy (read/preparation), never 'may not have been
+    /// delivered' — nothing was submitted.
+    @Test func errorCopyIsLocalNotDelivery() {
+        let error = ChatAttachmentSendError(itemID: "x", displayName: "image 1")
+        #expect(!error.message.contains("delivered"))
+        #expect(error.message.contains("could not be read"))
+    }
+}
