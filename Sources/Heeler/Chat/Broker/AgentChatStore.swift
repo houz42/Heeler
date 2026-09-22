@@ -41,11 +41,13 @@ struct AgentChatStreamTail: Sendable, Equatable {
 
 /// One just-sent user message's local echo (items 1 + 11): the bubble
 /// the user sees IMMEDIATELY, plus its honest delivery state. The
-/// requestKey is the broker's dedup key — a retry reuses it, so an
-/// ambiguous first attempt can never double-deliver. Reconciliation:
-/// when an authoritative history page contains the message, the echo
-/// drops (the committed record renders in its own position — order is
-/// never reordered by the echo, item 15).
+/// requestKey is the broker's dedup key; a retry reuses it ONLY while
+/// the live registration still matches the one the key was minted
+/// against (generation churn or dedup eviction would un-scope the
+/// guarantee — the retry mints a fresh key then, review gap 5).
+/// Reconciliation: an authoritative history page that contains the
+/// message drops the echo (the committed record renders in its own
+/// position).
 struct AgentChatOutgoingMessage: Sendable, Equatable, Identifiable {
     enum DeliveryState: Sendable, Equatable {
         case sending
@@ -61,20 +63,35 @@ struct AgentChatOutgoingMessage: Sendable, Equatable, Identifiable {
     let images: [AgentChatOutgoingImage]
     /// The send's wall-clock moment: the echo's chronological anchor.
     let sentAt: Date
+    /// The registration the requestKey was minted against (review
+    /// gap 5): the broker's dedup cache is bounded and cleared on
+    /// generation change, so key reuse is only safe while this still
+    /// matches the live registration.
+    let sendRegistration: AgentChatRegistrationSnapshot?
     var state: DeliveryState = .sending
     /// The honest failure copy when state == .failed (retryable).
     var failureMessage: String?
 
     init(
         id: UUID = UUID(), requestKey: String, text: String,
-        images: [AgentChatOutgoingImage] = []
+        images: [AgentChatOutgoingImage] = [],
+        sendRegistration: AgentChatRegistrationSnapshot? = nil
     ) {
         self.id = id
         self.requestKey = requestKey
         self.text = text
         self.images = images
+        self.sendRegistration = sendRegistration
         self.sentAt = Date()
     }
+}
+
+/// The (instanceId, generation) pair an outgoing requestKey is scoped
+/// to. A plain struct so AgentChatOutgoingMessage stays Equatable and
+/// the snapshot is comparable.
+struct AgentChatRegistrationSnapshot: Sendable, Equatable {
+    let instanceId: String
+    let generation: Int
 }
 
 /// One image on a structured prompt.send (wire contract, live on the
@@ -266,12 +283,14 @@ final class AgentChatStore {
         phase = .connecting
         lifecycleTask = Task { [weak self] in
             await self?.run(
-                socketPath: socketPath, pane: pane, storeGeneration: myGeneration)
+                socketPath: socketPath, pane: pane, storeGeneration: myGeneration,
+                holdsContent: heldContent != nil)
         }
     }
 
     private func run(
-        socketPath: String, pane: HerdrPaneSessionIdentity, storeGeneration: Int
+        socketPath: String, pane: HerdrPaneSessionIdentity, storeGeneration: Int,
+        holdsContent: Bool
     ) async {
         do {
             let pipe = try await pipeFactory.open(socketPath)
@@ -288,7 +307,14 @@ final class AgentChatStore {
             print("AGENTCHAT-DIAG channel negotiated v1")
             guard generation == storeGeneration else { return }
 
-            phase = .loading
+            // Review gap 6: with held content the phase STAYS
+            // .disconnected (renderable) through the whole re-match —
+            // session lookup and history load happen behind the
+            // retained page; the view never blanks mid-reconnect.
+            // Only a fresh open (no content to hold) shows .loading.
+            if !holdsContent {
+                phase = .loading
+            }
             // 1. sessions.list
             let sessionsValue = try await channel.request(
                 AgentChatRequest(id: "", method: "sessions.list"))
@@ -502,7 +528,8 @@ final class AgentChatStore {
         _ text: String, images: [AgentChatOutgoingImage] = []
     ) async throws -> AgentChatOutgoingMessage {
         let echo = AgentChatOutgoingMessage(
-            id: UUID(), requestKey: UUID().uuidString, text: text, images: images)
+            id: UUID(), requestKey: UUID().uuidString, text: text, images: images,
+            sendRegistration: Self.snapshot(of: registration))
         outgoing.append(echo)
         do {
             try await sendOnWire(echo)
@@ -517,14 +544,28 @@ final class AgentChatStore {
         }
     }
 
-    /// Retries a failed echo through the SAME requestKey: the broker's
-    /// dedup makes a retry-after-ambiguous-failure safe (it either
-    /// redelivers nothing or delivers once). The echo returns to
-    /// sending, then lands sent or failed again — never silently.
+    /// Retries a failed echo. Key safety (review gap 5): the requestKey
+    /// is reused ONLY while the live registration still matches the
+    /// one the key was minted against — the adapter's dedup cache is
+    /// bounded and cleared on generation change, so reusing a key
+    /// across churn could double-deliver. On churn the retry mints a
+    /// FRESH key (a new user action by definition; the old send's
+    /// acceptance state is reconciled by the history page).
     func retry(_ message: AgentChatOutgoingMessage) async throws {
-        guard let echo = outgoing.first(where: { $0.id == message.id }),
-            echo.state == .failed
+        guard let index = outgoing.firstIndex(where: { $0.id == message.id }),
+            outgoing[index].state == .failed
         else { return }
+        var echo = outgoing[index]
+        let liveRegistration = Self.snapshot(of: registration)
+        if echo.sendRegistration != liveRegistration {
+            // Generation churn (or a first send that never matched):
+            // the old key's dedup guarantee is gone. Fresh key, scoped
+            // to the live registration.
+            echo = AgentChatOutgoingMessage(
+                id: echo.id, requestKey: UUID().uuidString, text: echo.text,
+                images: echo.images, sendRegistration: liveRegistration)
+        }
+        outgoing[index] = echo
         markOutgoing(id: echo.id, state: .sending, message: nil)
         do {
             try await sendOnWire(echo)
@@ -588,17 +629,30 @@ final class AgentChatStore {
                 params: .object(params)))
     }
 
+    private static func snapshot(
+        of registration: AgentChatRegistration?
+    ) -> AgentChatRegistrationSnapshot? {
+        registration.map {
+            AgentChatRegistrationSnapshot(
+                instanceId: $0.instanceId, generation: $0.generation)
+        }
+    }
+
 
     private func markOutgoing(
         id: UUID, state: AgentChatOutgoingMessage.DeliveryState, message: String? = nil
     ) {
+        // The echo's OWN state/failure first (the auto-repair-mangled
+        // first version silently dropped this — every echo stayed
+        // .sending forever; review gap 1).
+        guard let index = outgoing.firstIndex(where: { $0.id == id }) else { return }
+        outgoing[index].state = state
+        outgoing[index].failureMessage = state == .failed ? message : nil
         if state == .failed {
             lastSendFailure = message
-        } else if state == .sent {
+        } else if outgoing.allSatisfy({ $0.state != .failed }) {
             // A later success supersedes the stale failure banner.
-            if outgoing.allSatisfy({ $0.state != .failed }) {
-                lastSendFailure = nil
-            }
+            lastSendFailure = nil
         }
     }
 
@@ -609,14 +663,17 @@ final class AgentChatStore {
         if let error = error as? AgentChatError {
             switch error {
             case .connectionClosed:
-                return "The connection to the agent was lost — your message was not delivered. Retry when ready."
+                // Ambiguous (review gap 5): the request may have reached
+                // the broker before the wire died. Never claim
+                // non-delivery — reconciliation will settle it.
+                return "The connection to the agent was lost — your message may not have been delivered. Retry when ready."
             case .timedOut:
                 return "The agent did not answer in time — your message may not have been delivered. Retry when ready."
             default:
-                return "Send failed — your message was not delivered. Retry when ready."
+                return "Send failed — your message may not have been delivered. Retry when ready."
             }
         }
-        return "Send failed — your message was not delivered. Retry when ready."
+        return "Send failed — your message may not have been delivered. Retry when ready."
     }
 
 
@@ -1063,27 +1120,11 @@ final class AgentChatStore {
         }
     }
 
-    /// Echo → committed reconciliation (items 1/11/15): an echo whose
-    /// text now appears as a committed USER message in the
-    /// authoritative page is confirmed — the echo drops and the real
-    /// record renders in its natural position (never beside its own
-    /// duplicate, never out of order). Text match is the only stable
-    /// correlation v1 offers (the wire carries no client echo id on
-    /// the committed record).
+    /// Echo → committed reconciliation: delegates to the pure
+    /// ``AgentChatEchoReconcile`` (unit-testable without a channel).
     private func reconcileOutgoing(against messages: [ChatMessage]) {
-        let committedUserTexts = Set(
-            messages
-                .filter { $0.role == .user }
-                .map { message in
-                    message.blocks.compactMap {
-                        if case .text(let text) = $0 { return text }
-                        return nil
-                    }.joined(separator: "\n")
-                })
-        guard !committedUserTexts.isEmpty else { return }
-        outgoing.removeAll { echo in
-            echo.state != .failed && committedUserTexts.contains(echo.text)
-        }
+        outgoing = AgentChatEchoReconcile.reconcile(
+            echoes: outgoing, committed: messages)
         if outgoing.allSatisfy({ $0.state != .failed }) {
             lastSendFailure = nil
         }
@@ -1138,5 +1179,52 @@ final class AgentChatStore {
         _ type: T.Type, from value: JSONValue
     ) throws -> T {
         try JSONDecoder().decode(type, from: JSONEncoder().encode(value))
+    }
+}
+
+/// The echo→committed reconciliation as a PURE function (review gap 3
+/// regression proof, unit-testable without a broker channel): v1's
+/// committed records carry no client echo id, so correlation is
+/// text-based — but POSITIONAL, not set-membership:
+/// - an echo only matches a committed user record whose timestamp is
+///   at/after the echo's send (an older identical 'Continue' can
+///   never eat a newer echo);
+/// - each committed record consumes AT MOST ONE echo, oldest echo
+///   first (two identical sends never collapse into one drop);
+/// - failed echoes NEVER drop (the retry affordance stays).
+/// Records without a parseable timestamp are eligible (the page's
+/// ordering is chronological; the time check refines, never gates).
+enum AgentChatEchoReconcile: Sendable {
+    static func reconcile(
+        echoes: [AgentChatOutgoingMessage], committed: [ChatMessage]
+    ) -> [AgentChatOutgoingMessage] {
+        var unmatched: [(text: String, at: Date?)] = []
+        for message in committed where message.role == .user {
+            let text = message.blocks.compactMap {
+                if case .text(let value) = $0 { return value }
+                return nil
+            }.joined(separator: "\n")
+            guard !text.isEmpty else { continue }
+            unmatched.append((text, message.timestamp))
+        }
+        guard !unmatched.isEmpty else { return echoes }
+        var survivors: [AgentChatOutgoingMessage] = []
+        for echo in echoes.sorted(by: { $0.sentAt < $1.sentAt }) {
+            if echo.state == .failed {
+                survivors.append(echo)
+                continue
+            }
+            if let index = unmatched.firstIndex(where: { record in
+                record.text == echo.text
+                    && (record.at == nil
+                        || record.at! >= echo.sentAt.addingTimeInterval(-1))
+            }) {
+                unmatched.remove(at: index)
+                // Consumed: the committed record replaces the echo.
+            } else {
+                survivors.append(echo)
+            }
+        }
+        return survivors
     }
 }

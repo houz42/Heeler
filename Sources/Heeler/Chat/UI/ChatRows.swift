@@ -481,10 +481,15 @@ struct ChatLinkText: View {
 struct LinkifiedChatRow: View {
     let row: ChatRow
     let router: OpenRouterCore
+    /// Review gap 2: a failed send's retry affordance. Non-nil makes a
+    /// FAILED-echo error notice row tappable (retry the send); nil keeps
+    /// the row inert (previews, unwired surfaces).
+    var onRetry: (() -> Void)? = nil
 
-    init(row: ChatRow, router: OpenRouterCore) {
+    init(row: ChatRow, router: OpenRouterCore, onRetry: (() -> Void)? = nil) {
         self.row = row
         self.router = router
+        self.onRetry = onRetry
     }
 
     var body: some View {
@@ -498,6 +503,15 @@ struct LinkifiedChatRow: View {
             ) {
                 ChatLinkText(text, style: .thinking, router: router)
             }
+        case .notice(_, _, _, let level) where level == "error" && onRetry != nil:
+            // A failed send's honest failure copy: TAP = retry.
+            Button {
+                onRetry?()
+            } label: {
+                ChatRowView(row: row)
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Retries the failed send")
         default:
             ChatRowView(row: row)
         }
