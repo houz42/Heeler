@@ -10,7 +10,7 @@ import Testing
 /// classification, honest display lines, cooldown backoff, and the
 /// persistence/migration rules for the new Host fields.
 @MainActor
-@Suite("Host route selection")
+@Suite("Host route selection", .serialized)
 struct HostRouteSelectionTests {
     // MARK: Fixtures
 
@@ -615,6 +615,76 @@ struct HostRouteSelectionTests {
         #expect(
             store.probes["lan.example"] == nil
                 || store.probes["lan.example"]?.outcome == .unknown)
+    }
+
+    @Test func evaluationRefreshesNetworkBeforeProbing() async throws {
+        // The reviewer's finding 1: the network hint sampled at cooldown
+        // start must NOT be the one the sweep gates against. The store's
+        // evaluation path refreshes the hint at evaluation start; this
+        // test exercises the same seam — a Wi-Fi→cellular change BETWEEN
+        // the sampling and the sweep means the wifiOnly route is NOT
+        // probed (gated under the CURRENT hint).
+        HostRouteNetworkSnapshot.update(.wifi)
+        defer { HostRouteNetworkSnapshot.update(.offline) }
+        let host = makeHost(
+            eligibility: [
+                "lan.example": .wifiOnly,
+                "tailnet.example": .wifiOnly,
+                "vpn.example": .wifiOnly,
+            ])
+        let connector = DialRecordingConnector(reachable: ["lan.example"])
+        let store = HostRouteStatusStore(
+            host: host,
+            network: .wifi,
+            prober: HostRouteProber(
+                connector: connector,
+                credentials: HostCredentialsProvider(
+                    deviceKeys: DeviceKeyStore(secrets: InMemorySecretStore()),
+                    secrets: InMemorySecretStore()),
+                knownHosts: InMemoryKnownHostsStore(),
+                probeTimeout: .seconds(1)),
+            monitor: HostRouteMonitor())
+
+        // The transition happens "during the cooldown": the snapshot
+        // flips to non-Wi-Fi, then the evaluation refreshes from it.
+        HostRouteNetworkSnapshot.update(.nonWiFi)
+        let sweepResults = await store.evaluateAndMaybeRedialForTesting()
+
+        // Every route is Wi-Fi-only and the CURRENT hint is non-Wi-Fi:
+        // the sweep probed nothing.
+        #expect(await connector.dialed == [])
+        #expect(sweepResults.isEmpty)
+    }
+
+    @Test func retryUsesCurrentEvaluationResultsOnly() async throws {
+        // The reviewer's finding 2: an old successful probe must not
+        // trigger a retry from a cancelled/failed sweep. The store's
+        // evaluation returns THIS sweep's collected results only; a
+        // stale `probes` entry from an earlier sweep is invisible to the
+        // decision.
+        let host = makeHost()
+        let connector = DialRecordingConnector(reachable: [])
+        let store = HostRouteStatusStore(
+            host: host,
+            network: .wifi,
+            prober: HostRouteProber(
+                connector: connector,
+                credentials: HostCredentialsProvider(
+                    deviceKeys: DeviceKeyStore(secrets: InMemorySecretStore()),
+                    secrets: InMemorySecretStore()),
+                knownHosts: InMemoryKnownHostsStore(),
+                probeTimeout: .seconds(1)))
+        // A stale "reachable" entry from an earlier sweep.
+        store.scriptStaleProbeForTesting(
+            address: "lan.example",
+            result: HostRouteProbeResult(outcome: .reachable, checkedAt: Date()))
+
+        // This sweep finds everything unreachable.
+        let sweepResults = await store.evaluateAndMaybeRedialForTesting()
+
+        // The decision sees ONLY the current sweep: no reachable route,
+        // no retry — despite the stale reachable entry.
+        #expect(!sweepResults.values.contains { $0.outcome.provesPathCarriesSSH })
     }
 
     private struct UnreachableProbeConnector: TransportConnector {

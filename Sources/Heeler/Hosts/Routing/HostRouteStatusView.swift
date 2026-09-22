@@ -88,10 +88,14 @@ final class HostRouteStatusStore {
     /// policy's re-evaluation gate, an UNCONNECTED host re-evaluates
     /// with the cooldown backoff — the recovery path for the
     /// all-ineligible off-Wi-Fi state. A CONNECTED host never
-    /// re-evaluates (stickiness).
+    /// re-evaluates (stickiness). The network state is refreshed AGAIN
+    /// at evaluation start (after the cooldown) — a Wi-Fi→cellular
+    /// transition during the cooldown is honored: eligibility gates and
+    /// the sweep read the CURRENT hint, never the one sampled at
+    /// cooldown start.
     ///
     /// Lifetime: `stopObservingPathChanges()` cancels explicitly (the
-    /// presenting view calls it on disappearance); this method is
+    /// presenting view calls this on disappearance); this method is
     /// idempotent and restarts cleanly. The loop holds only a weak self.
     func observePathChanges() {
         guard monitorTask == nil else { return }
@@ -125,21 +129,46 @@ final class HostRouteStatusStore {
         monitorTask = nil
     }
 
-    /// One re-evaluation: sweep, apply the policy's cooldown backoff
-    /// (reset on a reachable verdict, doubled otherwise), and redial
-    /// through the plan when unconnected and a route carries SSH. The
-    /// connection state is read AGAIN immediately before the retry —
-    /// a host that connected mid-sweep (another surface's redial, say)
-    /// is never yanked into a second dial.
+    /// One re-evaluation: refresh the network hint (the cooldown may
+    /// have straddled a transition), re-check the connection state
+    /// BEFORE starting (a host that connected during the cooldown is
+    /// stickiness-kept, never re-dialed), sweep the eligible routes,
+    /// apply the cooldown backoff from THIS evaluation's results, and
+    /// redial only when THIS sweep proved a route carries SSH — never
+    /// from probes accumulated by an older, cancelled, or failed sweep.
     func evaluateAndMaybeRedial() async {
-        await checkRoutes()
-        let foundReachable = probes.values.contains {
+        syncNetworkFromMonitor()
+        // Stickiness gate at evaluation start: re-read the CURRENT
+        // connection state, not the one sampled at trigger time.
+        guard !isConnectedNow else { return }
+        // This evaluation's results only: a clean slate so a cancelled
+        // or failed sweep can never contribute old successful probes.
+        let sweepResults = await checkRoutesCollectingResults()
+        guard !Task.isCancelled else { return }
+        let foundReachable = sweepResults.values.contains {
             $0.outcome.provesPathCarriesSSH
         }
         cooldown = HostRoutePolicy.nextCooldown(
             afterPrevious: cooldown, foundReachable: foundReachable)
+        // The retry-adjacent gate: connection state re-read
+        // immediately before the retry.
         guard !isConnectedNow, foundReachable, let retryConnection else { return }
         await retryConnection()
+    }
+
+    /// Runs the eligibility-filtered sweep and returns THIS run's
+    /// results (also published per-route as they land). The only source
+    /// the redial decision reads — `checkRoutes` alone can leave stale
+    /// entries from earlier sweeps.
+    private func checkRoutesCollectingResults() async -> [String: HostRouteProbeResult] {
+        // THIS run's results only: capture the verdicts as they land in
+        // the per-result callback (which is per-THIS-sweep by
+        // construction), and return those — entries accumulated in
+        // `probes` by older, cancelled, or failed sweeps are never
+        // consulted.
+        let collected = ProbeResultBox()
+        await checkRoutes(into: collected)
+        return await collected.collected
     }
 
     /// The design contract's "Check routes": one bounded sweep of the
@@ -150,18 +179,24 @@ final class HostRouteStatusStore {
     /// their honest "Skipped · Wi-Fi only" row state instead. The busy
     /// state is owned HERE (overlapping presses are refused rather than
     /// serialized), and results land per-route as the sweep goes.
-    func checkRoutes() async {
+    /// `into` (when given) receives every verdict THIS sweep produced —
+    /// the caller can then decide purely on current-evaluation results.
+    func checkRoutes(into collector: ProbeResultBox? = nil) async {
         guard !isProbing else { return }
         isProbing = true
         checkFailedExplanation = nil
         // The CURRENT catalog host: an edit made since this store was
         // built is honored — the sweep probes what is saved NOW.
         let currentHost = currentCatalogHost
+        // Eligibility is applied against the CURRENT network hint,
+        // sampled HERE at sweep start — never one sampled at cooldown
+        // start.
+        let networkNow = network
         let eligible = currentHost.candidateAddresses
             .filter { address in
                 HostRoutePolicy.isEligible(
                     currentHost.routeEligibility(for: address),
-                    network: network)
+                    network: networkNow)
             }
         do {
             try await prober.probe(addresses: eligible, host: currentHost) {
@@ -174,6 +209,7 @@ final class HostRouteStatusStore {
                     guard self.currentCatalogHost.candidateAddresses.contains(address)
                     else { return }
                     self.probes[address] = result
+                    await collector?.record(address, result)
                 }
             }
         } catch HostCredentialsError.passwordNotSet {
@@ -198,6 +234,29 @@ final class HostRouteStatusStore {
     private var currentCatalogHost: Host {
         catalog?.hosts.first(where: { $0.id == host.id }) ?? host
     }
+
+    #if DEBUG
+        /// Test-only seam for the evaluation path (unit tests): the same
+        /// refresh→gate→sweep→decide sequence as the production
+        /// `evaluateAndMaybeRedial`, returning THIS evaluation's collected
+        /// results so tests assert on current-sweep verdicts alone. The
+        /// production path performs its own retry; this seam skips the
+        /// retry (tests assert on the decision inputs instead).
+        func evaluateAndMaybeRedialForTesting() async -> [String: HostRouteProbeResult] {
+            syncNetworkFromMonitor()
+            guard !isConnectedNow else { return [:] }
+            return await checkRoutesCollectingResults()
+        }
+
+        /// Test-only: plants a probe verdict as if produced by an
+        /// earlier sweep, to prove the redial decision ignores entries
+        /// outside the current evaluation.
+        func scriptStaleProbeForTesting(
+            address: String, result: HostRouteProbeResult
+        ) {
+            probes[address] = result
+        }
+    #endif
 
     /// "Choose manually" → pin one route. Persists immediately; the pin
     /// is never silently overridden, and it dials exactly its address
@@ -234,4 +293,15 @@ final class HostRouteStatusStore {
         await retryConnection?()
     }
 
+}
+
+/// Collects one sweep's per-route verdicts as they land — the
+/// current-evaluation-only source the redial decision reads. An actor:
+/// the prober's callback hops executors.
+actor ProbeResultBox {
+    private(set) var collected: [String: HostRouteProbeResult] = [:]
+
+    func record(_ address: String, _ result: HostRouteProbeResult) {
+        collected[address] = result
+    }
 }
