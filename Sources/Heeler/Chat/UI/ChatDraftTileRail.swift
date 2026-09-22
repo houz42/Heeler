@@ -146,7 +146,12 @@ extension ChatDraftComposer {
     /// text AND no attachments) are refused — never with fabricated
     /// filler text.
     static func isSendable(text: String, items: [ChatDraftItem]) -> Bool {
-        if carriesAttachments(items: items) { return true }
+        // Review finding 5 (send-never-waits round): EVERY held item
+        // kind makes the draft sendable — images (inline content),
+        // files ('@path' prose), AND quotes (blockquoted prose). A
+        // quote-only or file-only draft has valid content; Send must
+        // not stay gray.
+        if !items.isEmpty { return true }
         return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }

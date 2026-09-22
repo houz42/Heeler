@@ -91,8 +91,10 @@ struct ChatDraftComposerTests {
         #expect(!ChatDraftComposer.isSendable(text: "  \n ", items: []))
         // Text alone still sends as before.
         #expect(ChatDraftComposer.isSendable(text: "hello", items: []))
-        // A quote alone is not an attachment-bearing prompt.
-        #expect(!ChatDraftComposer.isSendable(
+        // Review finding 5 (send-never-waits round): a quote ALONE is
+        // sendable content (its blockquoted text composes the message)
+        // — the old pin held the pre-fix image/file-only contract.
+        #expect(ChatDraftComposer.isSendable(
             text: "", items: [.quote(id: "q", text: "hi", author: "Heeler")]))
     }
 }
@@ -198,5 +200,41 @@ struct SentAttachmentTextSplitTests {
     @Test func midTextPathsStayProse() {
         let split = SentAttachmentText.split("the config at /etc/app.conf changed")
         #expect(split == nil)
+    }
+}
+
+// MARK: - Send-never-waits review round (findings 1-5 on 1d437286)
+
+struct ChatSendNeverWaitsTests {
+    /// Finding 5: FILE-ONLY and QUOTE-ONLY drafts are sendable — canSend
+    /// (via the composer contract) recognizes EVERY held item kind, not
+    /// just images.
+    @Test func fileOnlyAndQuoteOnlyDraftsAreSendable() {
+        let file = ChatDraftItem.file(id: "f1", name: "doc.md", remotePath: "/tmp/doc.md")
+        #expect(ChatDraftComposer.isSendable(text: "", items: [file]))
+        let quote = ChatDraftItem.quote(id: "q1", text: "quoted", author: "Heeler")
+        #expect(ChatDraftComposer.isSendable(text: "", items: [quote]))
+        // A composed quote-only message carries the blockquoted text.
+        let composed = ChatDraftComposer.messageText(items: [quote], draft: "")
+        #expect(composed.contains("> quoted"))
+        // Genuinely empty: nothing.
+        #expect(!ChatDraftComposer.isSendable(text: "", items: []))
+        #expect(!ChatDraftComposer.isSendable(text: "  \n ", items: []))
+    }
+
+    /// Findings 2+3 (the compositional half): the composed message keeps
+    /// quote → prose → file order regardless of attachment kinds — the
+    /// structured images array is built in the SAME draft order in the
+    /// view (buildOutgoingImages iterates draftItems in order; the
+    /// review's B-before-A reorder cannot recur because resolution is
+    /// per-item in place, not ready-first).
+    @Test func composedOrderIsQuoteProseFiles() {
+        let quote = ChatDraftItem.quote(id: "q", text: "the quote", author: "Heeler")
+        let file = ChatDraftItem.file(id: "f", name: "x.md", remotePath: "/tmp/x.md")
+        let composed = ChatDraftComposer.messageText(items: [file, quote], draft: "my reply")
+        let quoteIdx = composed.range(of: "> the quote")!.lowerBound
+        let proseIdx = composed.range(of: "my reply")!.lowerBound
+        let fileIdx = composed.range(of: "@/tmp/x.md")!.lowerBound
+        #expect(quoteIdx < proseIdx && proseIdx < fileIdx)
     }
 }

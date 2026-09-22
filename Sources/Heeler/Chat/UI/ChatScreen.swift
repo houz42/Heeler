@@ -1345,11 +1345,7 @@ struct ChatScreen: View {
                     // bytes' magic numbers (Self.sniffImageMIME), never
                     // hardcoded, and the img: ref is the broker's blob
                     // id — never the host filesystem path.
-                    let images: [AgentChatOutgoingImage] = await withCheckedContinuation {
-                        (continuation: CheckedContinuation<[AgentChatOutgoingImage], Never>)
-                        in
-                        buildOutgoingImages(continuation: continuation)
-                    }
+                    let images: [AgentChatOutgoingImage] = try await buildOutgoingImages()
                     try await deliverWithImages(text, images)
                     clearDraftAfterSend()
                     showSentConfirmation = true
@@ -1357,6 +1353,13 @@ struct ChatScreen: View {
                         try? await Task.sleep(for: .seconds(2))
                         showSentConfirmation = false
                     }
+                } catch let error as CocoaError where
+                    error.code == .fileReadCorruptFile {
+                    // An attachment could not be resolved (findings
+                    // 1+3): the WHOLE draft stays — text and items —
+                    // and the failed attachment is named, not
+                    // silently skipped.
+                    deliveryError = "One attachment could not be read for sending — it stays in your draft. Remove it or try again."
                 } catch {
                     // Visible + retryable: the draft (and items) stay.
                     deliveryError = "Send failed — your message may not have been delivered. Retry when ready."
@@ -1387,54 +1390,69 @@ struct ChatScreen: View {
     }
 
     /// Builds the structured-send image array (send-never-waits, user
-    /// directive + re-review finding 4). Images always ride INLINE
-    /// base64 — the picked bytes are in hand at pick time — with the
-    /// MIME SNIFFED from the bytes' magic numbers (Self.sniffImageMIME,
-    /// never hardcoded): a LANDED staging path is a HOST filesystem
-    /// path, NOT the adapter's img: blob id, so it must never be sent
-    /// as `ref` (finding 4's blob-id confusion). The blob upload
-    /// continues in the background purely for the history record; it
-    /// never gates the send. A Send racing the picker's LOCAL byte
-    /// read (a moment, not the upload) awaits just that read via the
-    /// stored PhotosPickerItem.
-    private func buildOutgoingImages(
-        continuation: CheckedContinuation<[AgentChatOutgoingImage], Never>
-    ) {
+    /// directive + review round on 1d437286, findings 1-4). Every image
+    /// rides INLINE base64, ALWAYS in the ORIGINAL DRAFT ORDER, with
+    /// bytes normalized through the SAME local preparation the upload
+    /// path uses (bounded, orientation-applied, metadata-stripped,
+    /// supported formats only — raw picker data never bypasses prep),
+    /// and the MIME from the PREPARED format. THROWS when an attachment
+    /// cannot be resolved (a failed local read, an unrecoverable
+    /// restored image): the draft is RETAINED and the failed
+    /// attachment reported — never a silent partial send, never a
+    /// silently omitted image. The blob upload continues in the
+    /// background purely for the history record; it never gates this.
+    ///
+    /// Sources per item, in draft order:
+    /// 1. the tile's local bytes (paste: in hand; picker: the async
+    ///    read has usually landed);
+    /// 2. the stored PhotosPickerItem (a Send racing the picker's
+    ///    LOCAL read awaits just that read — a moment, not the upload);
+    /// 3. the staged HOST path via the fetch seam (a RESTORED image
+    ///    after a surface reopen — its upload may have landed while
+    ///    the surface was away; the bytes are the same file the upload
+    ///    staged).
+    private func buildOutgoingImages() async throws -> [AgentChatOutgoingImage] {
         var images: [AgentChatOutgoingImage] = []
-        var awaitIDs: [(String, PhotosPickerItem)] = []
         for item in draftItems {
-            guard case .image(let id, _, let localData) = item
+            guard case .image(let id, let remotePath, let localData) = item
             else { continue }
+            // Resolve THIS attachment's bytes — any of the three sources,
+            // in order; none of them is the upload.
+            var bytes: Data?
             if let localData, !localData.isEmpty {
-                images.append(AgentChatOutgoingImage(
-                    data: localData,
-                    mimeType: Self.sniffImageMIME(localData),
-                    byteLength: localData.count))
+                bytes = localData
             } else if let pickerItem = pendingPickerItems[id] {
-                awaitIDs.append((id, pickerItem))
+                bytes = try? await pickerItem.loadTransferable(type: Data.self) ?? nil
+            } else if !remotePath.isEmpty, let fetch {
+                bytes = try? await fetch(remotePath)
             }
-            // No bytes and no picker item: an impossible tile
-            // (defensive) — skipped, never a contentless image.
-        }
-        guard !awaitIDs.isEmpty else {
-            continuation.resume(returning: images)
-            return
-        }
-        Task { @MainActor in
-            for (id, pickerItem) in awaitIDs {
-                if let data = try? await pickerItem.loadTransferable(type: Data.self) ?? nil,
-                    !data.isEmpty
-                {
-                    images.append(AgentChatOutgoingImage(
-                        data: data,
-                        mimeType: Self.sniffImageMIME(data),
-                        byteLength: data.count))
-                    updateDraftItemImage(id: id, previewData: data)
-                }
+            guard let bytes, !bytes.isEmpty else {
+                // Finding 1+3: a resolvable-but-failed attachment is
+                // NEVER silently skipped — the send aborts, the draft
+                // stays, the failure is visible.
+                throw CocoaError(.fileReadCorruptFile)
             }
-            continuation.resume(returning: images)
+            // Finding 4: normalize through the shared local preparation
+            // (supported formats, bounded, oriented) — never raw picker
+            // data with a guessed MIME.
+            let prepared = try await Self.imagePreparer.prepare(
+                DataImageSelection(data: bytes))
+            defer { try? prepared.remove() }
+            let preparedBytes = try Data(contentsOf: prepared.fileURL)
+            images.append(AgentChatOutgoingImage(
+                data: preparedBytes,
+                mimeType: prepared.format == .png
+                    ? "image/png" : "image/jpeg",
+                byteLength: preparedBytes.count))
+            // The tile keeps its live preview; the send used the
+            // normalized bytes.
         }
+        return images
     }
+
+    /// The shared image preparation instance for the inline send path
+    /// (the same default configuration the staging pipeline uses).
+    private static let imagePreparer = ImagePreparer()
 
     /// Review gap 7: the structured-send path for attachment-bearing
     /// sends. The deliver closure stays text-only (the router's
