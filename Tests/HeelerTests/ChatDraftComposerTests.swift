@@ -69,6 +69,32 @@ struct ChatDraftComposerTests {
         #expect(lines.last == "my reply")
         #expect(ChatQuote.draft(for: "quoted body") == "> quoted body\n\n")
     }
+
+    // MARK: Review round 7 — the image-only send regression
+
+    @Test func imageOnlyDraftIsSendable() {
+        // Empty text + image items IS a valid prompt (the old
+        // nonempty-text guard made image-only sends silently do
+        // nothing).
+        #expect(ChatDraftComposer.isSendable(
+            text: "",
+            items: [image("/staged/shot.png")]))
+        // Whitespace-only text with images still sends.
+        #expect(ChatDraftComposer.isSendable(
+            text: "   ",
+            items: [image("/staged/shot.png")]))
+    }
+
+    @Test func genuinelyEmptyDraftIsNotSendable() {
+        // No text AND no attachments: the only refused submission.
+        #expect(!ChatDraftComposer.isSendable(text: "", items: []))
+        #expect(!ChatDraftComposer.isSendable(text: "  \n ", items: []))
+        // Text alone still sends as before.
+        #expect(ChatDraftComposer.isSendable(text: "hello", items: []))
+        // A quote alone is not an attachment-bearing prompt.
+        #expect(!ChatDraftComposer.isSendable(
+            text: "", items: [.quote(id: "q", text: "hi", author: "Heeler")]))
+    }
 }
 
 struct ChatDraftTileRailArithmeticTests {

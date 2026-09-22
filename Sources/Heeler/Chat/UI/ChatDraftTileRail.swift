@@ -136,6 +136,19 @@ extension ChatDraftComposer {
             return false
         }
     }
+
+    /// Whether one composed submission is a valid prompt (review
+    /// round 7, the image-only regression): NONEMPTY text OR valid
+    /// image content. An image-only draft composes EMPTY text (the
+    /// images ride the structured array, never prose) — it is still
+    /// a real prompt and MUST send; the old nonempty-text guard made
+    /// it silently do nothing. Only genuinely-empty submissions (no
+    /// text AND no attachments) are refused — never with fabricated
+    /// filler text.
+    static func isSendable(text: String, items: [ChatDraftItem]) -> Bool {
+        if carriesAttachments(items: items) { return true }
+        return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 }
 
 /// One square draft tile: content (thumbnail or type glyph) with a

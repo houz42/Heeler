@@ -1216,7 +1216,14 @@ struct ChatScreen: View {
 
     private func sendDraft() {
         let text = composedMessageText()
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        // Review round 7: an IMAGE-ONLY draft is a valid prompt — the
+        // structured images array carries the content, so empty text
+        // with image items MUST send (the old nonempty-text guard made
+        // image-only sends silently do nothing). The decision lives in
+        // ChatDraftComposer.isSendable (unit-testable): nonempty text
+        // OR attachments; only genuinely-empty is refused — never
+        // with fabricated filler text.
+        guard ChatDraftComposer.isSendable(text: text, items: draftItems),
             !isSending, let router
         else { return }
         isSending = true

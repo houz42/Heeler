@@ -682,6 +682,49 @@ struct AgentChatDeliveryContractE2ETests {
                 #"{"type":"response","id":"\#(id)","result":{}}"#)
         }
     }
+
+    /// Review round 7 (the image-only regression): an image-only
+    /// draft composes EMPTY text — the send is still a valid prompt
+    /// (the images array carries the content; NO fabricated filler
+    /// text) and the full lifecycle holds: wire ack → .sending,
+    /// send.confirmed → .sent with the bound record, page → echo
+    /// dropped.
+    @Test("an IMAGE-ONLY send (empty text + images) delivers, confirms, and drops its echo")
+    func imageOnlySendLifecycle() async throws {
+        let store = try await connectedStore()
+        defer { Task { await store.tearDown() } }
+        // The composer's image-only product: empty text (proven by
+        // the composer tests) + one inline image.
+        let composedText = ChatDraftComposer.messageText(
+            items: [.image(id: "i", remotePath: "/staged/shot.png", previewData: nil)],
+            draft: "")
+        #expect(composedText.isEmpty)  // no filler, no '@path' prose
+        #expect(ChatDraftComposer.isSendable(
+            text: composedText,
+            items: [.image(id: "i", remotePath: "/staged/shot.png", previewData: nil)]))
+        let images = [AgentChatOutgoingImage(
+            data: Data([0x89, 0x50, 0x4E, 0x47]), mimeType: "image/png")]
+        let sentEcho = try await store.store.send(composedText, images: images)
+        // The ack alone keeps the echo .sending (no proof yet).
+        #expect(store.store.outgoing[0].state == .sending)
+        // send.confirmed proves delivery (record "rec-123" — the
+        // scripted history page's record id).
+        await store.pipe.brokerSend(
+            #"{"type":"event","instanceId":"inst-1","generation":1,"seq":2,"event":{"type":"send.confirmed","requestKey":"\#(sentEcho.requestKey)","recordId":"rec-123"}}"#)
+        for _ in 0..<100
+        where store.store.outgoing.first?.state != .sent {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(store.store.outgoing[0].state == .sent)
+        #expect(store.store.outgoing[0].confirmedRecordID == "rec-123")
+        // The page carrying the record drops the echo.
+        await store.pipe.brokerSend(
+            #"{"type":"event","instanceId":"inst-1","generation":1,"seq":3,"event":{"type":"history.changed","revision":"rev-2"}}"#)
+        for _ in 0..<100 where !store.store.outgoing.isEmpty {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(store.store.outgoing.isEmpty)
+    }
 }
 
 /// Older-history paging over the scripted broker (the v2 device
