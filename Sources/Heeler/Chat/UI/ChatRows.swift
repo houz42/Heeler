@@ -15,6 +15,8 @@ fileprivate enum ChatWash {
     static func turn(isDark: Bool) -> Double { isDark ? 0.16 : 0.07 }
     /// The orange wash behind the blocked-agent pending card.
     static func pending(isDark: Bool) -> Double { isDark ? 0.12 : 0.06 }
+    /// The tinted wash behind the resolved-ask special element.
+    static func resolved(isDark: Bool) -> Double { isDark ? 0.14 : 0.07 }
 }
 
 /// One full-width chat row. Rows are plain (no bubbles, no avatars) — the
@@ -319,27 +321,85 @@ struct ChatPendingRow: View {
     }
 }
 
-/// A resolved ask's quiet record in the transcript flow: 'You
-/// answered: <labels>' (this client's answer) or the honest outcome
-/// note (answered in the agent's terminal / cancelled / expired).
-/// Full-width, secondary, checkmark-led — it is conversation history,
-/// not an alert; it never carries interactive affordances.
+/// One resolved ask — a compact SPECIAL element at the ask's
+/// anchored position in the flow (question → answer → reply; the
+/// anchor logic in ChatFiltering places it). NOT a chat bubble:
+/// its own glanceable treatment — two compact labeled lines over a
+/// subtle tinted wash: 'Q: <question>' on the LEFT (the agent's
+/// side), 'A: <answer>' RIGHT-ALIGNED (the user's action position)
+/// with the resolved checkmark. Long text CLAMPS (two lines,
+/// ellipsis) — tapping the element toggles the full text
+/// expanded/collapsed, so the summary stays glanceable and the
+/// detail is one tap away. 'You answered: <labels>' when this
+/// device's acknowledged answer won; the honest outcome note
+/// otherwise.
 struct ChatResolvedAskRow: View {
     let ask: ResolvedAsk
 
+    @Environment(\.colorScheme) private var colorScheme
+    private var isDark: Bool { colorScheme == .dark }
+    /// Tap toggles the clamped Q/A lines to their full text.
+    @State private var isExpanded = false
+
+    /// The collapsed clamp: two lines, ellipsis.
+    private static let collapsedLines = 2
+
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: "checkmark.circle")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Text(ask.body)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 6) {
+            // Q — the question recap: left, secondary, compact.
+            // Omitted entirely when the question text is unknown
+            // (legacy records): the A line alone is still honest.
+            if let question = questionDisplay, !question.isEmpty {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("Q")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.tint)
+                    Text(question)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(isExpanded ? nil : Self.collapsedLines)
+                        .truncationMode(.tail)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            // A — the answer: right-aligned (the user's action
+            // position), with the resolved checkmark.
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tint)
+                Text(answerDisplay)
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(isExpanded ? nil : Self.collapsedLines)
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            .tint.opacity(ChatWash.resolved(isDark: isDark)),
+            in: RoundedRectangle(cornerRadius: 12))
+        .contentShape(Rectangle())
+        .onTapGesture { withAnimation(.snappy) { isExpanded.toggle() } }
         .accessibilityElement(children: .combine)
+        .accessibilityHint(
+            isExpanded ? "Tap to collapse" : "Tap to read the full text")
     }
+
+    /// The Q line's text: the answered question's own text, or nil
+    /// when unknown.
+    private var questionDisplay: String? {
+        guard let question = ask.questionText else { return nil }
+        let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// The A line's text: the resolved body ('You answered: …' /
+    /// the honest outcome note).
+    private var answerDisplay: String { ask.body }
 }
 
 
@@ -672,14 +732,22 @@ private enum ChatRowPreviewFixture {
                 question: "Run the full CheckoutFlowTests suite before committing?",
                 options: ["Run the tests", "Commit without tests"]),
         ]
+        let resolvedAsks = [
+            ResolvedAsk(
+                id: "r-preview",
+                body: "You answered: Run the tests",
+                questionText: "Run the suite first?"),
+        ]
         return ChatContent(
-            messages: messages, toolResults: results, pending: pending)
+            messages: messages, toolResults: results, pending: pending,
+            resolvedAsks: resolvedAsks)
     }
 
     static var rows: [ChatRow] {
         ChatFiltering.visibleRows(
             messages: content.messages, toolResults: content.toolResults,
-            pending: content.pending, level: .l3)
+            pending: content.pending, resolvedAsks: content.resolvedAsks,
+            level: .l3)
     }
 }
 
