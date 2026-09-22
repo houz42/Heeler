@@ -629,6 +629,48 @@ final class AgentChatStore {
                 params: .object(params)))
     }
 
+    // MARK: Command invocation (v3 — docs/design/v3-structured-commands-and-image-blocks.md)
+
+    /// One explicitly-selected agent command (a leading-`/` catalog
+    /// command), sent STRUCTURALLY over `command.invoke` — never as
+    /// prompt text for the model to see. `commandId` is an OPAQUE id
+    /// learned from commands.list; the adapter alone maps it to the
+    /// agent-native call.
+    ///
+    /// Delivery is ACCEPTANCE-ONLY (§4a): accepted/error is the
+    /// terminal state — a command lands no user record (or transformed
+    /// text), so the prompt path's text-match confirmation
+    /// structurally cannot apply and no `send.confirmed` ever fires.
+    /// The requestKey namespace is per-session global (shared with
+    /// prompt.send; one key never collides across methods).
+    @discardableResult
+    func sendCommand(
+        commandId: String, arguments: [String] = []
+    ) async throws -> Bool {
+        guard let channel, let registration, registration.capabilities.commands
+        else {
+            throw AgentChatError.wire(
+                code: "unsupported_capability",
+                message: "This agent cannot run commands.",
+                retryable: false)
+        }
+        let requestKey = UUID().uuidString
+        promptRequestKeys.insert(requestKey)
+        let value = try await channel.request(
+            AgentChatRequest(
+                id: "", method: "command.invoke",
+                target: AgentChatTarget(
+                    instanceId: registration.instanceId,
+                    generation: registration.generation),
+                params: .object([
+                    "commandId": .string(commandId),
+                    "requestKey": .string(requestKey),
+                    "arguments": .array(arguments.map { .string($0) }),
+                ])))
+        let result = try Self.decode(AgentChatCommandResult.self, from: value)
+        return result.accepted
+    }
+
     private static func snapshot(
         of registration: AgentChatRegistration?
     ) -> AgentChatRegistrationSnapshot? {
