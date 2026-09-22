@@ -448,6 +448,16 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
 
     let requestId: String
     let kind: Kind
+    /// The answered question's own text — the transcript anchor.
+    /// The broker's resolved event carries no position, but the ask
+    /// itself is IN the transcript (the agent's turn that posed it);
+    /// the resolved block renders right after the message containing
+    /// its question text, before the agent's reply that follows —
+    /// never parked at the transcript's tail (that lands it after
+    /// the very reply it produced). Nil (legacy/hand-built records
+    /// or an unknown question) parks after the transcript rows as
+    /// before.
+    var questionText: String?
     /// The chosen option labels, one line per answered question
     /// (`youAnswered` only).
     var labels: [String]?
@@ -482,6 +492,7 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
     /// dropped, never rendered raw. Only the store's ACKNOWLEDGED
     /// answer path may record this kind — the broadcast event cannot
     /// identify the winner, so an unconfirmed submit never claims it.
+    /// The FIRST question's text anchors the transcript block.
     init(
         answered interaction: AgentChatInteraction,
         answers: [AgentChatAnswer]
@@ -489,6 +500,7 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
         self.init(
             requestId: interaction.requestId,
             kind: .youAnswered,
+            questionText: interaction.questions.first?.text,
             labels: Self.answeredLabels(
                 interaction: interaction, answers: answers))
     }
@@ -499,8 +511,13 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
     /// honest pre-ack record is NEUTRAL: 'Answered remotely.' Only
     /// this store's own accepted acknowledgement upgrades the record
     /// to `youAnswered` (the store's ack path replaces this entry);
-    /// a refused/uncertain submit never claims labels.
-    init(requestId: String, wireOutcome: String, wireSource: String) {
+    /// a refused/uncertain submit never claims labels. The store
+    /// supplies the question text (from the interaction it held)
+    /// when it has one.
+    init(
+        requestId: String, wireOutcome: String, wireSource: String,
+        questionText: String? = nil
+    ) {
         let kind: Kind
         switch wireOutcome {
         case "answered":
@@ -513,22 +530,33 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
         default:
             kind = .settledElsewhere
         }
-        self.init(requestId: requestId, kind: kind, labels: nil)
+        self.init(
+            requestId: requestId, kind: kind,
+            questionText: questionText, labels: nil)
     }
 
     /// The stale-answer self-heal: the broker refused the answer
     /// because the ask is no longer pending. The refusal's code says
-    /// WHICH honest note applies — never a blanket 'expired'.
-    init(staleRequestId: String, generationInvalidated: Bool) {
+    /// WHICH honest note applies — never a blanket 'expired'. The
+    /// store supplies the question text when it held the interaction.
+    init(
+        staleRequestId: String, generationInvalidated: Bool,
+        questionText: String? = nil
+    ) {
         self.init(
             requestId: staleRequestId,
             kind: generationInvalidated ? .expired : .settledElsewhere,
+            questionText: questionText,
             labels: nil)
     }
 
-    init(requestId: String, kind: Kind, labels: [String]?) {
+    init(
+        requestId: String, kind: Kind,
+        questionText: String? = nil, labels: [String]?
+    ) {
         self.requestId = requestId
         self.kind = kind
+        self.questionText = questionText
         self.labels = labels
     }
 

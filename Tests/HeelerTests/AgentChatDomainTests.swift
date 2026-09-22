@@ -970,6 +970,92 @@ struct AgentChatResolvedOutcomeGatingTests {
     }
 }
 
+// MARK: - Question-anchored placement (device bug: block after the reply)
+
+/// The device bug: a resolved ask parked at the transcript's tail
+/// rendered AFTER the agent's reply it produced. The fix: the block
+/// anchors to its question's own text — right after the message
+/// containing the question, BEFORE the reply that follows.
+@Suite("Resolved-ask question anchoring")
+struct ChatResolvedAskAnchorTests {
+    private func message(_ text: String) -> ChatMessage {
+        ChatMessage(role: .assistant, blocks: [.text(text)])
+    }
+
+    @Test("the answer block renders between the question and the agent's reply")
+    func anchorPlacesBlockBetweenQuestionAndReply() {
+        let ask = ResolvedAsk(
+            id: "r-1", body: "You answered: Ship it",
+            questionText: "Ship the v2 ask-history slice?")
+        let rows = ChatFiltering.visibleRows(
+            messages: [
+                message("I need one choice before continuing."),
+                message("Ship the v2 ask-history slice? Pick an option."),
+                message("You picked Ship it. Continuing."),
+            ],
+            toolResults: [], pending: [], resolvedAsks: [ask], level: .l0)
+        let order = rows.map { row -> String in
+            switch row {
+            case .text(_, _, _, let text):
+                return "text:\(text.prefix(24))"
+            case .resolvedAsk(let ask): return "ask:\(ask.body)"
+            default: return "other"
+            }
+        }
+        #expect(order == [
+            "text:I need one choice before",
+            "text:Ship the v2 ask-history ",
+            "ask:You answered: Ship it",
+            "text:You picked Ship it. Cont",
+        ])
+    }
+
+    @Test("an unanchored ask (no question text) still parks at the tail")
+    func unanchoredStillParksAtTail() {
+        let anchored = ResolvedAsk(
+            id: "r-1", body: "You answered: Ship it",
+            questionText: "Ship it?")
+        let unanchored = ResolvedAsk(
+            id: "r-2", body: "The question was cancelled.",
+            questionText: nil)
+        let rows = ChatFiltering.visibleRows(
+            messages: [
+                message("Ship it? Choose now."),
+                message("Done — shipped."),
+            ],
+            toolResults: [], pending: [], resolvedAsks: [anchored, unanchored],
+            level: .l0)
+        let order = rows.map { row -> String in
+            switch row {
+            case .text(_, _, _, let text):
+                return "text:\(text.prefix(12))"
+            case .resolvedAsk(let ask): return "ask:\(ask.body)"
+            default: return "other"
+            }
+        }
+        #expect(order == [
+            "text:Ship it? Cho",
+            "ask:You answered: Ship it",
+            "text:Done — shipp",
+            "ask:The question was cancelled.",
+        ])
+    }
+
+    @Test("an ask whose question is outside the visible page parks at the tail")
+    func anchorOutsidePageParks() {
+        let ask = ResolvedAsk(
+            id: "r-1", body: "You answered: Ship it",
+            questionText: "Question never shown in this page?")
+        let rows = ChatFiltering.visibleRows(
+            messages: [message("Unrelated later turn.")],
+            toolResults: [], pending: [], resolvedAsks: [ask], level: .l0)
+        guard case .resolvedAsk = rows.last else {
+            Issue.record("unmatched anchor must park at the tail")
+            return
+        }
+    }
+}
+
 // MARK: - Stale-error fallback precedence (final review round)
 
 /// A losing answer/cancel ack must never overwrite the authoritative

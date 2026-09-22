@@ -546,14 +546,17 @@ struct AgentDetailView: View {
         // (answered in terminal / answered remotely — the broadcast
         // cannot identify the winner — / cancelled / expired /
         // settled elsewhere). They persist across reconnects and
-        // reopen (the store keeps them for the agent's chat life)
-        // and park deterministically after the transcript's rows,
-        // before any pending card.
+        // reopen (the store keeps them for the agent's chat life).
+        // PLACEMENT: each block anchors to its question's own text
+        // — right after the message that posed the question, BEFORE
+        // the agent's reply that follows it; unanchored records park
+        // after the transcript's rows, before any pending card.
         content.resolvedAsks = brokerChat?.interactionResolutions.map {
             resolution in
             ResolvedAsk(
                 id: resolution.requestId,
-                body: resolution.transcriptBody)
+                body: resolution.transcriptBody,
+                questionText: resolution.questionText)
         } ?? []
         return content
     }
