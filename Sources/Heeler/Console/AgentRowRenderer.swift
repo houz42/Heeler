@@ -48,21 +48,6 @@ enum AgentRowRenderer {
         }
     }
 
-    /// The tab label a configured card does NOT already render, for a
-    /// tree row that merged a single-Agent tab group into the Agent's
-    /// row: herdr's default Row 1 already carries the tab token, so the
-    /// prefix appears only under a layout that leaves the tab out.
-    static func unrenderedTabLabel(
-        _ tabLabel: String?,
-        layout: AgentRowLayout,
-        agent: ConsoleAgent
-    ) -> String? {
-        guard let tabLabel else { return nil }
-        let cardShowsTab = layout.rows(forAgentKind: agent.agent.kind)
-            .contains { row in row.contains { $0.token == .tab } }
-        return cardShowsTab ? nil : tabLabel
-    }
-
     private static func nonempty(_ value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed

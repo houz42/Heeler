@@ -1,47 +1,37 @@
 import SwiftUI
 import UIKit
 
-/// The approved two-line Agent row (redesign §B + review findings): kind
-/// glyph at the leading edge (runtime metadata, neutral fallback — never an
-/// avatar initial), then the agent's actual TITLE + a small colored state
-/// badge on line 1 (compact neutral row: no full-row fills, no time — the
-/// wire carries no timestamps, and none are invented), and host · session ·
-/// workspace · tab as ONE quiet concatenated line. No field labels, no
-/// message brief. All four location values stay on the phone; the full
-/// identity remains accessible on truncation.
+/// The workspace-grouped agent row (v2 layout directive): the agent's
+/// TAB label alone on line 1 — nothing else crowds it — with the agent
+/// TITLE underneath as a smaller secondary subtitle. The workspace header
+/// above the group carries the full `host · session · workspace` path.
+/// The kind glyph and state badge keep their seats: glyph at the leading
+/// edge, badge trailing line 1.
 struct AgentCardView: View {
     let agent: ConsoleAgent
-    var layout: AgentRowLayout = .heelerDefault
     var isPinned: Bool = false
-    /// A leading secondary span ("Label — ") before the title, for contexts
-    /// where a group label was folded into the Agent's own row (tree
-    /// mode's single-Agent tab). Empty by default.
-    var headlinePrefix: String = ""
 
     private var kindBadge: AgentKindBadgeModel {
         AgentKindBadgeModel(agent: agent)
     }
 
-    /// The title line: the agent/conversation TITLE — the server-reported
-    /// name first, then the terminal title. Never the layout-composed
-    /// workspace·agent·tab context (the quiet line below carries all of
-    /// that; repeating it here was review finding #2).
+    /// Line 1: the herdr TAB label ONLY — the group header above carries
+    /// the host/session/workspace path, so repeating them here would
+    /// crowd the tab. See `AgentCardRow.tabLine` for the mapping.
+    private var tabLineText: String {
+        AgentCardRow.tabLine(for: agent)
+    }
+
+    /// Line 2: the agent/conversation TITLE as a secondary subtitle — the
+    /// server-reported name first, then the stripped terminal title, then
+    /// the pane title.
     private var titleText: String {
         AgentCardRowTitle.title(for: agent)
     }
 
-    /// The quiet location line: host · session · workspace · tab, dropping
-    /// only values the snapshot did not carry. Field labels never render.
-    private var locationLine: String {
-        AgentCardLocation.line(for: agent)
-    }
-
-    private var locationParts: [String] {
-        AgentCardLocation.parts(for: agent)
-    }
-
-    /// VoiceOver reads the full identity, not the truncated line: each
-    /// field named, so a truncated phone render never hides identity.
+    /// VoiceOver reads the full identity, not the two rendered lines: the
+    /// tab, the title, and each location field named, so a truncated phone
+    /// render never hides identity.
     private var accessibilityIdentity: String {
         var spoken: [String] = ["Host \(agent.hostName)"]
         spoken.append("session \(AgentCardLocation.sessionLabel(for: agent))")
@@ -63,13 +53,7 @@ struct AgentCardView: View {
                 }
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .center, spacing: 6) {
-                    if !headlinePrefix.isEmpty {
-                        Text(verbatim: headlinePrefix)
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    Text(verbatim: titleText)
+                    Text(verbatim: tabLineText)
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
@@ -82,26 +66,41 @@ struct AgentCardView: View {
                     Spacer(minLength: 8)
                     AgentStateBadge(status: agent.agent.status)
                 }
-                if !locationParts.isEmpty {
-                    Text(verbatim: locationLine)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        // The quiet line truncates tail-first; the full
-                        // identity is only a long-press/AX read away.
-                        .truncationMode(.head)
-                        .help(locationLine)
-                        .contextMenu {
-                            Text(locationLine)
-                        }
-                }
+                Text(verbatim: titleText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    // The subtitle truncates tail-first; the full title is
+                    // a long-press/AX read away.
+                    .truncationMode(.head)
+                    .help(titleText)
+                    .contextMenu {
+                        Text(titleText)
+                    }
             }
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
+        // The spoken order matches the visual order: tab label (line 1),
+        // then the agent title (line 2), then kind and status.
         .accessibilityLabel(
-            "\(titleText), \(kindBadge.accessibilityLabel), status \(agent.agent.status.searchLabel)")
+            "\(tabLineText), \(titleText), \(kindBadge.accessibilityLabel), status \(agent.agent.status.searchLabel)")
         .accessibilityValue(accessibilityIdentity)
+    }
+}
+
+/// The v2 grouped row's line-content mapping, as a pure projection so the
+/// two-line layout stays unit-testable without hosting a view: line 1 is
+/// the herdr TAB label only (falling back to the title when the snapshot
+/// carried no tab identity), line 2 is the agent TITLE.
+enum AgentCardRow {
+    /// Line 1: the snapshot's actual tab identity — the explicit label
+    /// when the user named the tab, else herdr's automatic positional
+    /// name. Nil only when the snapshot carried nothing; then the caller
+    /// falls back to the title so the row never renders an empty line.
+    static func tabLine(for agent: ConsoleAgent) -> String {
+        AgentCardLocation.tabLabel(for: agent)
+            ?? AgentCardRowTitle.title(for: agent)
     }
 }
 
@@ -128,12 +127,10 @@ enum AgentCardRowTitle {
     }
 }
 
-/// The quiet location line's pure projection (review finding #3): host ·
-/// session · workspace · tab, one concatenated string, no field labels.
-/// The DEFAULT session renders by its honest name ("default") rather than
-/// dropping; the tab renders the snapshot's actual tab identity (a missing
-/// explicit label renders the automatic positional name — real identity
-/// from the window layout, not an invented one).
+/// The row's location projections: the session label ("default" is real
+/// identity, not noise) and the tab's actual identity (the explicit label
+/// when the user named the tab, else herdr's automatic positional name —
+/// real identity from the window layout, not an invented one).
 enum AgentCardLocation {
     /// The session label: the named herdr session, or "default" — the
     /// default session is real identity, not noise.
@@ -150,23 +147,6 @@ enum AgentCardLocation {
             !label.isEmpty
         else { return nil }
         return label
-    }
-
-    static func parts(for agent: ConsoleAgent) -> [String] {
-        var parts: [String] = []
-        func append(_ value: String?) {
-            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !trimmed.isEmpty { parts.append(trimmed) }
-        }
-        append(agent.hostName)
-        append(sessionLabel(for: agent))
-        append(agent.workspaceLabel)
-        append(tabLabel(for: agent))
-        return parts
-    }
-
-    static func line(for agent: ConsoleAgent) -> String {
-        parts(for: agent).joined(separator: " · ")
     }
 }
 
