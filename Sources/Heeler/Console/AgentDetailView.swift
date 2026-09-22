@@ -407,6 +407,7 @@ struct AgentDetailView: View {
         case .ready, .disconnected:
             ChatScreen(
                 paneID: agent.agent.paneID,
+                hostID: agent.hostID,
                 agentName: agent.tabLabel ?? agent.agent.displayName,
                 state: brokerAgentState,
                 content: brokerContent,
@@ -529,8 +530,34 @@ struct AgentDetailView: View {
     private var brokerContent: ChatContent {
         var content = brokerChat?.content ?? ChatContent()
         for tail in brokerChat?.streamTails ?? [] where !tail.text.isEmpty {
+            // Deterministic per-stream id: a fresh UUID per delta would
+            // churn the bubble's identity every chunk and flicker the
+            // whole row (item 20). "stream:" prefix keeps provisional
+            // tails from colliding with committed item ids.
             content.messages.append(
-                ChatMessage(role: .assistant, blocks: [.text(tail.text)]))
+                ChatMessage(
+                    id: AgentChatMapper.stableID(for: "stream:\(tail.streamId)"),
+                    role: .assistant, blocks: [.text(tail.text)]))
+        }
+        // Outgoing echoes (items 1/11): each just-sent user message
+        // renders IMMEDIATELY as its own user bubble at the tail —
+        // the optimistic local echo. Deterministic "echo:" ids keep
+        // the row's identity stable across delivery-state transitions
+        // (sending → sent/failed re-renders in place, never a churn).
+        // A confirmed echo drops here the moment the committed page
+        // carries the real record (AgentChatStore.reconcileOutgoing),
+        // so the echo and its confirmed twin never render together.
+        for echo in brokerChat?.outgoing ?? [] {
+            var blocks: [ChatBlock] = [.text(echo.text)]
+            if let message = echo.failureMessage, echo.state == .failed {
+                blocks.append(.notice(
+                    text: "\(message) Tap to retry.",
+                    level: "error"))
+            }
+            content.messages.append(
+                ChatMessage(
+                    id: AgentChatMapper.stableID(for: "echo:\(echo.id.uuidString)"),
+                    role: .user, blocks: blocks, timestamp: echo.sentAt))
         }
         // Real pending asks from the broker interactions map into the
         // chat content's pending surface (the redesigned question card).

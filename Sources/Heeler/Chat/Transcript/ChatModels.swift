@@ -55,6 +55,10 @@ enum ChatBlock: Sendable, Equatable {
     case thinking(String)
     case toolCall(ToolCall)
     case image(ChatImageRef)
+    /// A system/structural notice the wire carries with its severity
+    /// level ("info" | "warning" | "error"). Never dropped: the view
+    /// renders every level, styling the quiet/system wash off `level`.
+    case notice(text: String, level: String)
 }
 
 /// A `role:"toolResult"` record, flattened for display: the id it pairs to,

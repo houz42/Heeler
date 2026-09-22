@@ -465,7 +465,38 @@ struct AgentChatMapperTests {
         }
     }
 
-    @Test("reference never maps as complete; warning notices map; info stays quiet")
+    @Test("message ids are STABLE per source item id across maps")
+    func stableMessageIDs() throws {
+        let uuidSource = #"{"id":"550E8400-E29B-41D4-A716-446655440000","kind":"message","author":{"role":"user"},"blocks":[{"type":"text","text":"hi"}]}"#
+        let decoded = try JSONDecoder().decode(
+            AgentChatItem.self,
+            from: Data(uuidSource.utf8))
+        guard case .message(let first) = AgentChatMapper.map(item: decoded),
+            case .message(let second) = AgentChatMapper.map(item: decoded)
+        else {
+            Issue.record("expected message map")
+            return
+        }
+        #expect(first.id == second.id)
+        #expect(
+            first.id == UUID(uuidString: "550E8400-E29B-41D4-A716-446655440000"))
+
+        // Non-UUID source ids hash deterministically: same id string,
+        // same UUID, every call — and different from any other id.
+        let odd = #"{"id":"read_0#f3b6e1dc","kind":"message","author":{"role":"user"},"blocks":[{"type":"text","text":"a"}]}"#
+        let oddDecoded = try JSONDecoder().decode(
+            AgentChatItem.self, from: Data(odd.utf8))
+        guard case .message(let oddFirst) = AgentChatMapper.map(item: oddDecoded),
+            case .message(let oddSecond) = AgentChatMapper.map(item: oddDecoded)
+        else {
+            Issue.record("expected message map for non-UUID id")
+            return
+        }
+        #expect(oddFirst.id == oddSecond.id)
+        #expect(oddFirst.id != first.id)
+    }
+
+    @Test("reference never maps as complete; notices at EVERY level render distinctly")
     func honestSkips() throws {
         let reference: JSONValue = try JSONDecoder().decode(
             JSONValue.self,
@@ -477,24 +508,31 @@ struct AgentChatMapperTests {
             return
         }
 
-        let notice: JSONValue = try JSONDecoder().decode(
-            JSONValue.self,
-            from: Data(#"{"id":"n","kind":"notice","text":"careful","level":"warning"}"#.utf8))
-        let decodedNotice = try JSONDecoder().decode(
-            AgentChatItem.self, from: JSONEncoder().encode(notice))
-        guard case .message = AgentChatMapper.map(item: decodedNotice) else {
-            Issue.record("warning notice should render")
-            return
-        }
-
-        let info: JSONValue = try JSONDecoder().decode(
-            JSONValue.self,
-            from: Data(#"{"id":"i","kind":"notice","text":"fyi","level":"info"}"#.utf8))
-        let decodedInfo = try JSONDecoder().decode(
-            AgentChatItem.self, from: JSONEncoder().encode(info))
-        guard case .skipped = AgentChatMapper.map(item: decodedInfo) else {
-            Issue.record("info notice should stay quiet")
-            return
+        // Item 19: NO notice level is dropped. Each renders as a
+        // bashExecution-role message whose single block carries the
+        // level for the view's quiet/warning/error styling.
+        for (level, text) in [
+            ("warning", "careful"), ("error", "broken"), ("info", "fyi"),
+        ] {
+            let noticeJSON = #"{"id":"n-\#(level)","kind":"notice","text":"\#(text)","level":"\#(level)"}"#
+            let notice: JSONValue = try JSONDecoder().decode(
+                JSONValue.self, from: Data(noticeJSON.utf8))
+            let decodedNotice = try JSONDecoder().decode(
+                AgentChatItem.self, from: JSONEncoder().encode(notice))
+            guard case .message(let mapped) = AgentChatMapper.map(item: decodedNotice)
+            else {
+                Issue.record("\(level) notice must render, not drop")
+                continue
+            }
+            #expect(mapped.role == .bashExecution)
+            guard mapped.blocks.count == 1,
+                case .notice(let noticeText, let noticeLevel) = mapped.blocks[0]
+            else {
+                Issue.record("\(level) notice must map to a notice block")
+                continue
+            }
+            #expect(noticeText == text)
+            #expect(noticeLevel == level)
         }
     }
 

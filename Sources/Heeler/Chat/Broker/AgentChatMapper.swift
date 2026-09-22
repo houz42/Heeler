@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 // SPDX-License-Identifier: Apache-2.0
@@ -24,13 +25,14 @@ enum AgentChatMapper: Sendable {
             // Boundaries carry their own shape the row model has no kind
             // for yet; honest skip (not silently dropped text).
             return .skipped(reason: "boundary")
-        case .notice(_, let text, let level):
-            // Notices at warning/error render as text; info stays quiet.
-            if level == "warning" || level == "error" {
-                return .message(
-                    ChatMessage(role: .assistant, blocks: [.text(text)]))
-            }
-            return .skipped(reason: "info notice")
+        case .notice(let id, let text, let level):
+            // EVERY level renders — never dropped (item 19): the view
+            // styles the quiet/system row off the block's `level`.
+            return .message(
+                ChatMessage(
+                    id: stableID(for: id),
+                    role: .bashExecution,
+                    blocks: [.notice(text: text, level: level)]))
         case .unsupported(_, let sourceType, _):
             return .skipped(reason: "unsupported \(sourceType)")
         case .reference(let id, _, _):
@@ -38,6 +40,33 @@ enum AgentChatMapper: Sendable {
             // never maps as if complete.
             return .skipped(reason: "reference \(id) needs item.read")
         }
+    }
+
+    /// A stable UUID for one source item id across refreshes. The wire's
+    /// ids are opaque strings (UUIDs today, but never promised): parse
+    /// when the string IS a UUID, hash deterministically otherwise — a
+    /// per-refresh fresh UUID would churn every row's identity and the
+    /// LazyVStack would tear down the whole transcript (the flash).
+    static func stableID(for sourceID: String) -> UUID {
+        if let uuid = UUID(uuidString: sourceID) { return uuid }
+        return hashedUUID(sourceID)
+    }
+
+    /// Deterministic UUID derivation for non-UUID source ids (RFC 4122
+    /// v5 shape: SHA-1 of namespace + name, first 16 bytes, version and
+    /// variant bits forced). Same source id ⇒ same UUID, every call.
+    private static func hashedUUID(_ sourceID: String) -> UUID {
+        // Fixed namespace bytes so Heeler-derived ids never collide with
+        // another consumer hashing the same string.
+        let namespace = Data([0x9E, 0x1C, 0x48, 0x65, 0x65, 0x6C, 0x65, 0x72])
+        let digest = Insecure.SHA1.hash(data: namespace + Data(sourceID.utf8))
+        var bytes = [UInt8](digest.prefix(16))
+        bytes[6] = (bytes[6] & 0x0F) | 0x50  // version 5
+        bytes[8] = (bytes[8] & 0x3F) | 0x80  // RFC 4122 variant
+        return UUID(uuid: (
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5],
+            bytes[6], bytes[7], bytes[8], bytes[9], bytes[10], bytes[11],
+            bytes[12], bytes[13], bytes[14], bytes[15]))
     }
 
     private static func mapMessage(
@@ -89,6 +118,7 @@ enum AgentChatMapper: Sendable {
         }
         return .message(
             ChatMessage(
+                id: stableID(for: id),
                 role: role, blocks: chatBlocks, timestamp: isoDate(createdAt)))
     }
 

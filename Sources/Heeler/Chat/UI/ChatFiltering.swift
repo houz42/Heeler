@@ -93,6 +93,10 @@ internal enum ChatRow: Sendable, Equatable, Identifiable {
     /// A result whose tool call is outside the visible message window
     /// (window-boundary orphan), so it has no row to pair into — L2+.
     case orphanResult(ToolResult)
+    /// A system/structural notice (item 19): visible at EVERY level —
+    /// never dropped; the view styles the quiet/warning/error wash off
+    /// `level`.
+    case notice(messageID: UUID, blockIndex: Int, text: String, level: String)
     /// A blocked-agent pending question — visible at every level; it is the
     /// live frontier of the conversation, not chrome.
     case pending(PendingInteraction)
@@ -102,7 +106,8 @@ internal enum ChatRow: Sendable, Equatable, Identifiable {
         case .text(let messageID, let blockIndex, _, _),
              .thinking(let messageID, let blockIndex, _),
              .toolCall(let messageID, let blockIndex, _, _),
-             .image(let messageID, let blockIndex, _):
+             .image(let messageID, let blockIndex, _),
+             .notice(let messageID, let blockIndex, _, _):
             return "\(messageID.uuidString)#\(blockIndex)"
         case .orphanResult(let result):
             return "result#\(result.toolCallId)"
@@ -111,6 +116,7 @@ internal enum ChatRow: Sendable, Equatable, Identifiable {
         }
     }
 }
+
 
 /// One chat bubble: a run of consecutive visible `.text` rows that all
 /// belong to a single user/assistant message. Bubbles are the message-
@@ -259,6 +265,10 @@ internal enum ChatFiltering {
                         rows.append(.toolCall(messageID: message.id, blockIndex: index, call: call, result: result))
                     case .image(let image):
                         rows.append(.image(messageID: message.id, blockIndex: index, image: image))
+                    case .notice(let text, let noticeLevel):
+                        rows.append(.notice(
+                            messageID: message.id, blockIndex: index,
+                            text: text, level: noticeLevel))
                     case .thinking, .toolCall:
                         break  // below its level
                     }
@@ -268,11 +278,20 @@ internal enum ChatFiltering {
                 // Record-carried results. bashExecution is user-driven shell
                 // output — conversation, all levels. toolResult records are
                 // tool output — chrome, L2+ with the other tool results.
+                // Notices (item 19) ride bashExecution-role messages and
+                // are conversation at every level — never dropped.
                 let visible = message.role == .bashExecution || level >= .l2
                 if visible {
                     for (index, block) in message.blocks.enumerated() {
-                        if case .text(let text) = block {
+                        switch block {
+                        case .text(let text):
                             rows.append(.text(messageID: message.id, blockIndex: index, role: message.role, text: text))
+                        case .notice(let text, let noticeLevel):
+                            rows.append(.notice(
+                                messageID: message.id, blockIndex: index,
+                                text: text, level: noticeLevel))
+                        default:
+                            break
                         }
                     }
                 }

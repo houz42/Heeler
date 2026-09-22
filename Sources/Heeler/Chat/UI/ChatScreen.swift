@@ -33,7 +33,13 @@ internal struct ChatContent: Sendable, Equatable {
 /// LazyVStack anchors the visible row instead of jumping.
 struct ChatScreen: View {
     /// Pane identifier (one window = one agent); keys the level persistence.
+    /// Pane ids are HOST-LOCAL: two hosts can each have a pane "w1:p1".
     let paneID: String
+    /// The pane's Host — draft persistence is keyed by the HOST-QUALIFIED
+    /// identity (hostID + paneID); a bare pane id would collide across
+    /// hosts (the review's cross-host draft bleed). Level persistence
+    /// stays keyed by the pane id alone (its own store contract).
+    var hostID: Host.ID? = nil
     let agentName: String
     let state: ChatAgentState
     let content: ChatContent
@@ -68,6 +74,7 @@ struct ChatScreen: View {
     @State private var level: DetailLevel
     init(
         paneID: String,
+        hostID: Host.ID? = nil,
         agentName: String,
         state: ChatAgentState,
         content: ChatContent,
@@ -88,6 +95,7 @@ struct ChatScreen: View {
         fetch: RemoteFileFetcher? = nil
     ) {
         self.paneID = paneID
+        self.hostID = hostID
         self.agentName = agentName
         self.state = state
         self.content = content
@@ -108,6 +116,16 @@ struct ChatScreen: View {
         self._level = State(initialValue: initialLevel)
     }
 
+    /// The HOST-QUALIFIED draft identity (item 18 + review): pane ids
+    /// are host-local, so a bare pane id would let two hosts' panes
+    /// named "w1:p1" share one draft (text + attachment paths). The
+    /// draft store keys on this; level persistence keeps its own
+    /// pane-keyed store contract.
+    private var draftKey: String {
+        guard let hostID else { return paneID }
+        return "\(hostID.uuidString)#\(paneID)"
+    }
+
     /// The pane's link-open router (Phase 4 openers): every detected
     /// target in chat text routes through it. One instance per screen.
     @State private var openRouter = OpenRouterCore()
@@ -119,7 +137,14 @@ struct ChatScreen: View {
     /// sentinel row is on screen. Plain state so the trigger is a pure
     /// transition the tests can drive.
     @State private var pagingGate = ChatPagingGate()
+    /// The measured keyboard overlap (item 5): the composer pins to
+    /// this height instead of SwiftUI's two-stage keyboard avoidance.
+    @State private var keyboardInset = ChatKeyboardInset()
     @State private var topSentinelVisible = false
+
+    /// Item 18: per-pane draft persistence (load on appear, save per
+    /// edit, clear on successful send).
+    private let draftStore = ChatDraftPersistenceStore.shared
     /// The bottom sentinel's visibility drives the jump control's
     /// newest-end button.
     @State private var bottomSentinelVisible = false
@@ -149,9 +174,18 @@ struct ChatScreen: View {
                     .modifier(ReadingTextSizeModifier(
                         size: readingTextSize?.readingSize))
                 }
-                // A transcript that parsed to zero rows (metadata-only session
-                // file, or a resumed session writing elsewhere) must not render
-                // as a blank screen.
+                // Chat convention: open on the LATEST message. The
+                // anchor applies to the INITIAL offset only — NOT to
+                // alignment or size changes. A transcript shorter than
+                // the viewport then renders from the TOP (content
+                // where the reader starts; no blank page above it),
+                // while long transcripts still open at the bottom and
+                // prepended older pages keep the visible row anchored
+                // (no jump).
+                .defaultScrollAnchor(.bottom, for: .initialOffset)
+                // A transcript that parsed to zero rows (metadata-only
+                // session file, or a resumed session writing elsewhere)
+                // must not render as a blank screen.
                 .overlay {
                     if rows.isEmpty {
                         ContentUnavailableView(
@@ -161,9 +195,6 @@ struct ChatScreen: View {
                                 "This transcript has no conversation records. The agent may be writing to a different session file."))
                     }
                 }
-                // Chat convention: open on the LATEST message; prepended
-                // older pages keep the visible row anchored (no jump).
-                .defaultScrollAnchor(.bottom)
                 .onChange(of: pagingInputs) { _, _ in
                     firePagingIfNeeded()
                 }
@@ -199,30 +230,40 @@ struct ChatScreen: View {
                     .padding(.trailing, 8)
                 }
             }
-            // A transcript that parsed to zero rows (metadata-only session
-            // file, or a resumed session writing elsewhere) must not render
-            // as a blank screen.
-            .overlay {
-                if rows.isEmpty {
-                    ContentUnavailableView(
-                        "No Messages Yet",
-                        systemImage: "text.bubble",
-                        description: Text(
-                            "This transcript has no conversation records. The agent may be writing to a different session file."))
-                }
+            // The composer is a LAYOUT SIBLING (not a safe-area inset):
+            // stock SwiftUI keyboard avoidance follows the two-stage
+            // UIKit notifications an accessory-bearing responder
+            // publishes, so the composer parked at the accessory-less
+            // frame between the stages and the transcript showed
+            // through the strip (the intermittent device gap). The
+            // ChatKeyboardInset measures the FINAL frame (coalesced)
+            // and the whole surface pads by exactly that — the
+            // composer's bottom IS the keyboard stack's top under
+            // every state.
+            // Read-only transcripts (no router/deliver) keep the
+            // composer absent; the keyboard inset stays zero because
+            // nothing becomes first responder.
+            if router != nil, deliver != nil {
+                inputFrame
             }
-            // Chat convention: open on the LATEST message; prepended
-            // older pages keep the visible row anchored (no jump).
-            .defaultScrollAnchor(.bottom)
-            .onChange(of: pagingInputs) { _, _ in
-                firePagingIfNeeded()
-            }
-            .modifier(
-                ChatOpenersSurface(
-                    router: openRouter,
-                    fetch: fetch ?? { _ in throw CocoaError(.fileNoSuchFile) }))
         }
-        .safeAreaInset(edge: .bottom) { inputFrame }
+        .padding(.bottom, keyboardInset.height)
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+        .chatKeyboardInsetWindow(keyboardInset)
+        // Item 18: the identity's draft loads on appear and on any
+        // identity change (host or pane — keyed by draftKey), and
+        // every draft/item/caret change persists immediately.
+        .onAppear { loadPersistedDraft() }
+        .onChange(of: draftKey, initial: false) { _, _ in
+            loadPersistedDraft()
+        }
+        .onChange(of: draft) { _, _ in persistDraft() }
+        .onChange(of: draftItems) { _, _ in persistDraft() }
+        // A caret move WITHOUT typing must persist too (the review's
+        // case: move-caret → leave → reopen lands the caret where it
+        // was, not at the last typed position).
+        .onChange(of: draftCaret) { _, _ in persistDraft() }
+
         // The +N collection sheet: every draft item, removable there.
         .sheet(isPresented: $showsDraftCollection) {
             ChatDraftCollectionSheet(
@@ -700,7 +741,7 @@ struct ChatScreen: View {
         attachmentErrorMessage = nil
         attachments.draftStore.clearUploadFailure()
         let canBegin = attachments.staging.begin(
-            .photo(DataImageSelection(data: data)))
+            .photo(DataImageSelection(data: data)), insertPathIntoComposer: false)
         if canBegin == nil {
             attachments.draftStore.recordUploadFailure(
                 "An attachment is already uploading. Try again once it finishes.")
@@ -709,10 +750,11 @@ struct ChatScreen: View {
         }
     }
 
-    /// The staging store's state machine, surfaced: completed
-    /// paste-image uploads hold for the Send flow (path removed from
-    /// the draft — the tile is the visible attachment); failures land
-    /// in the error row.
+    /// The staging store's state machine, surfaced: completed uploads
+    /// hold as ONE draft item (the tile is the visible attachment; the
+    /// path never touches the prose — the staging store is begun with
+    /// insertPathIntoComposer:false, so nothing needs stripping here);
+    /// failures land in the error row.
     private func syncAttachmentUploadState(_ newState: ComposerStagingStore.State?) {
         guard let attachments else { return }
         switch newState {
@@ -723,13 +765,8 @@ struct ChatScreen: View {
         case .completed(let outcome):
             attachments.draftStore.clearUploadFailure()
             if isPasteImageAttachment {
-                // Paste image: the path the staging store inserted into
-                // the draft mirror comes OUT of the draft (the tile is
-                // the visible attachment) and lands as ONE draft item.
-                draft = attachments.draftStore.draft
-                if let range = draft.range(of: outcome.path) {
-                    draft.removeSubrange(range)
-                }
+                // Paste image: the tile carries the attachment; the
+                // path rides the Send composition exactly once.
                 draftItems.append(.image(
                     id: UUID().uuidString,
                     remotePath: outcome.path,
@@ -737,15 +774,7 @@ struct ChatScreen: View {
                 pendingImagePreviewData = nil
                 isPasteImageAttachment = false
             } else {
-                // Picker completion: exactly one draft item; the
-                // staging store's inserted path comes OUT of the prose
-                // AT INSERT TIME (the tile is the visible attachment),
-                // so the prose stays ONLY the user's own text — never
-                // stripped again at Send.
-                draft = attachments.draftStore.draft
-                if let range = draft.range(of: outcome.path) {
-                    draft.removeSubrange(range)
-                }
+                // Picker completion: exactly one draft item by medium.
                 switch outcome.medium {
                 case .image:
                     draftItems.append(.image(
@@ -853,9 +882,10 @@ struct ChatScreen: View {
                 // Composer collapse (conversation redesign): empty OR
                 // unfocused = single row; focused with text grows to
                 // the 3-line cap. The draft survives blur untouched.
-                collapsed: draft.isEmpty || !inputFocused,
                 placeholder: "Message — / # @ ! for commands",
-                onEdit: { [self] newText, _ in self.applyComposerEdit(newText) },
+                onEdit: { [self] newText, caret in
+                    self.applyComposerEdit(newText, caret: caret)
+                },
                 onReturnKey: { [self] in self.composerReturnKey(router) },
                 onPaste: { [self] in self.handlePaste() },
                 pendingAccept: $pendingAccept,
@@ -864,8 +894,15 @@ struct ChatScreen: View {
         }
     }
 
-    private func applyComposerEdit(_ newText: String) {
+    /// The draft's live caret (UTF-16), tracked so a persisted draft can
+    /// restore it (item 18). The representable reports it with every
+    /// edit; the suggestion-accept path lands its own caret through
+    /// pendingAccept, and the next edit tracks the settled result.
+    @State private var draftCaret = 0
+
+    private func applyComposerEdit(_ newText: String, caret: Int = 0) {
         draft = newText
+        draftCaret = caret
     }
 
     /// Return with the suggestion menu open accepts the highlighted
@@ -1022,7 +1059,9 @@ struct ChatScreen: View {
                     pendingPickerImageData =
                         try? await item.loadTransferable(type: Data.self) ?? nil
                 }
-                attachments.staging.begin(.photo(PhotosPickerImageSelection(item: item)))
+                attachments.staging.begin(
+                    .photo(PhotosPickerImageSelection(item: item)),
+                    insertPathIntoComposer: false)
             }
             .photosPicker(
                 isPresented: $isSelectingPhoto,
@@ -1042,7 +1081,7 @@ struct ChatScreen: View {
                 attachmentErrorMessage = nil
                 attachments.draftStore.clearUploadFailure()
                 pendingFileURL = url
-                attachments.staging.begin(.file(url))
+                attachments.staging.begin(.file(url), insertPathIntoComposer: false)
             }
             .onChange(of: attachments?.staging.state) { _, newState in
                 syncAttachmentUploadState(newState)
@@ -1063,9 +1102,49 @@ struct ChatScreen: View {
         ChatDraftComposer.messageText(items: draftItems, draft: draft)
     }
 
+    /// A successful Send clears the composer AND its persisted draft
+    /// (item 18: the next message starts clean; a cleared composer stays
+    /// cleared across surfaces).
     private func clearDraftAfterSend() {
         draft = ""
         draftItems = []
+        draftStore.clear(paneID: draftKey)
+    }
+
+    /// The pane's persisted draft (item 18): loaded on appear (and on
+    /// identity change) so a half-typed message survives leaving and
+    /// returning to the chat. A MISSING entry installs the EMPTY
+    /// state — the review's case: switching identities in the same
+    /// view must not leave the previous identity's text/items/caret on
+    /// screen. The caret rides the draft via a one-shot placement so
+    /// the restore never fights an in-progress selection.
+    private func loadPersistedDraft() {
+        guard let saved = draftStore.draft(paneID: draftKey) else {
+            // No draft for THIS identity: empty composer, no stale
+            // caret request from the previous identity.
+            draft = ""
+            draftItems = []
+            draftCaret = 0
+            return
+        }
+        draft = saved.text
+        draftItems = saved.items.map(ChatDraftItem.init)
+        draftCaret = saved.caretLocation
+        caretRequest = ChatCaretRequest(location: saved.caretLocation)
+    }
+
+    /// Persists the live draft per edit (item 18). An EMPTY draft clears
+    /// the entry — cheap enough to run on every keystroke (the encode is
+    /// a small Codable; image preview BYTES never persist by design).
+    /// Keyed by the HOST-QUALIFIED identity (draftKey): two hosts' same-
+    /// named panes keep independent drafts.
+    private func persistDraft() {
+        draftStore.save(
+            ChatPaneDraft(
+                text: draft,
+                caretLocation: draftCaret,
+                items: draftItems.map(\.paneDraftItem)),
+            paneID: draftKey)
     }
 
     private func removeDraftItem(_ id: String) {
