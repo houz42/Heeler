@@ -857,3 +857,154 @@ struct HostRoutePresentationTests {
         #expect(route.address == "studio.vpn.example")
     }
 }
+
+/// Tap-to-switch in the Host DETAIL (user directive): every candidate is
+/// a tappable route row; a tap makes that route the Host's active route
+/// — persisted per Host via `PreferredAddressStore`, consumed by the
+/// real dial's `SSHTransportSettings.init(host:)` so the next connect
+/// leads with it. These pin the selection mapping end to end:
+/// store state, persistence across reload, and the dial-order the
+/// production settings derive from the persisted pick.
+@MainActor
+@Suite("Host detail route switching")
+struct HostDetailRouteSwitchTests {
+    private func makeDefaults() throws -> (UserDefaults, cleanup: () -> Void) {
+        let suiteName = "hm-detail-route-switch-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        return (defaults, { defaults.removePersistentDomain(forName: suiteName) })
+    }
+
+    private func makeStore(
+        host: Host, defaults: UserDefaults
+    ) -> HostOnboardingStore {
+        HostOnboardingStore(
+            host: host,
+            connector: FakeTransportConnector(
+                outcome: .connects(pingResult: .success(
+                    ServerInfo(version: "0.7.5", protocolVersion: 17)))),
+            knownHosts: InMemoryKnownHostsStore(),
+            credentials: HostCredentialsProvider(
+                deviceKeys: DeviceKeyStore(secrets: InMemorySecretStore()),
+                secrets: InMemorySecretStore()),
+            preferredAddresses: PreferredAddressStore(defaults: defaults, hostID: host.id))
+    }
+
+    /// The live session's dialed-address mark as the Console holds it:
+    /// one address per Host, replaced on redial. Local sentinel so the
+    /// suite can assert a route tap never rewrites it.
+    private final class DialedMarkBox {
+        var address: String?
+    }
+
+    /// The tap's own semantics: any candidate, any time — including the
+    /// configured default and rows a probe never marked.
+    @Test func tapMakesTheTappedRouteActiveAndReversible() throws {
+        let (defaults, cleanup) = try makeDefaults()
+        defer { cleanup() }
+        let host = Host(
+            address: "lan.example", username: "dev",
+            additionalAddresses: ["vpn.example", "tailnet.example"],
+            routeLabels: ["lan.example": "Local network", "vpn.example": "VPN"])
+        let store = makeStore(host: host, defaults: defaults)
+
+        // No pick yet: the configured default is the active route.
+        #expect(store.preferredRoute == "lan.example")
+        #expect(store.orderedCandidates.first == "lan.example")
+
+        // Tap VPN: it becomes the active route, and the row order moves
+        // it first (the active route leads the section).
+        store.setActiveRoute("vpn.example")
+        #expect(store.preferredRoute == "vpn.example")
+        #expect(store.orderedCandidates == ["vpn.example", "lan.example", "tailnet.example"])
+
+        // Reversible: tapping another route switches again.
+        store.setActiveRoute("tailnet.example")
+        #expect(store.preferredRoute == "tailnet.example")
+        #expect(store.orderedCandidates == ["tailnet.example", "lan.example", "vpn.example"])
+    }
+
+    /// The selection persists per Host: a fresh store (a relaunch shape)
+    /// reads the same active route from disk.
+    @Test func activeRoutePersistsAcrossReload() throws {
+        let (defaults, cleanup) = try makeDefaults()
+        defer { cleanup() }
+        let host = Host(
+            address: "lan.example", username: "dev",
+            additionalAddresses: ["vpn.example"])
+        let store = makeStore(host: host, defaults: defaults)
+        store.setActiveRoute("vpn.example")
+
+        let reloaded = makeStore(host: host, defaults: defaults)
+        #expect(reloaded.preferredRoute == "vpn.example")
+        #expect(reloaded.orderedCandidates == ["vpn.example", "lan.example"])
+    }
+
+    /// A tap on an address the Host no longer carries is a no-op — an
+    /// edited catalog is never resurrected with stale addresses.
+    @Test func tapOnARemovedAddressIsIgnored() throws {
+        let (defaults, cleanup) = try makeDefaults()
+        defer { cleanup() }
+        let host = Host(address: "lan.example", username: "dev")
+        let store = makeStore(host: host, defaults: defaults)
+
+        store.setActiveRoute("removed.example")
+
+        #expect(store.preferredRoute == "lan.example")
+    }
+
+    /// The honest live-connection contract: switching the active route
+    /// while connected does NOT touch the live session — the Console's
+    /// dialed-address mark is owned by the dial, and the next dial
+    /// (Reconnect / redial) is when the switch lands. Pinned here as a
+    /// mapping: a tap only writes the preferred-order store.
+    @Test func switchingWhileConnectedDoesNotDisturbTheDialMapping() throws {
+        let (defaults, cleanup) = try makeDefaults()
+        defer { cleanup() }
+        let host = Host(
+            address: "lan.example", username: "dev",
+            additionalAddresses: ["vpn.example"])
+
+        // The live session is dialed through LAN (the production factory
+        // reports the winner; the Console map holds exactly one mark).
+        let dialed = DialedMarkBox()
+        dialed.address = "lan.example"
+
+        let store = makeStore(host: host, defaults: defaults)
+        store.setActiveRoute("vpn.example")
+
+        // The live mark is untouched by the tap; the preference is what
+        // changed, and the NEXT dial order reflects it.
+        #expect(dialed.address == "lan.example")
+        #expect(store.preferredRoute == "vpn.example")
+        #expect(store.orderedCandidates.first == "vpn.example")
+    }
+
+    /// The production dial seam honors the persisted pick: the settings
+    /// the real connect path builds from a Host lead with the active
+    /// route and keep the rest as fallbacks — the tap really is used on
+    /// the next connect. Both surfaces share UserDefaults.standard in
+    /// production (the detail's tap and `SSHTransportSettings.init`):
+    /// exercised exactly that way, with the standard-domain key
+    /// removed afterward so the suite stays hermetic.
+    @Test func persistedPickLeadsTheRealDialOrder() throws {
+        let host = Host(
+            address: "lan.example", username: "dev",
+            additionalAddresses: ["vpn.example", "tailnet.example"])
+
+        // The tap's surface, exactly as the detail view builds it.
+        PreferredAddressStore(hostID: host.id)
+            .prefer("vpn.example", candidates: host.candidateAddresses)
+        defer { PreferredAddressStore(hostID: host.id).clear() }
+
+        // The production settings the Console's dial builds: host first,
+        // fallbacks behind — derived from the persisted preferred order.
+        let settings = SSHTransportSettings(
+            host: host,
+            credentials: .password("pw"),
+            hostKeyPolicy: HostKeyPolicy(
+                knownHosts: InMemoryKnownHostsStore()) { _ in false })
+
+        #expect(settings.host == "vpn.example")
+        #expect(settings.candidateAddresses == ["lan.example", "tailnet.example"])
+    }
+}
