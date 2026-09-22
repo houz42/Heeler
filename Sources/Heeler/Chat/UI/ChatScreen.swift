@@ -484,7 +484,11 @@ struct ChatScreen: View {
                             guard !echoText.isEmpty else { return }
                             try? await retry(echoText)
                         } }
-                    })
+                    },
+                    // Special sections: L3 starts their chips
+                    // expanded (highest detail = full content);
+                    // lower levels keep the collapsed summary.
+                    detailLevel: level)
             }
         case .imageGallery(_, let images):
             // One message's images as a single small-square gallery:

@@ -8,6 +8,12 @@ Entries reference the issue that motivated them.
 ## [Unreleased]
 
 ### Added
+- `<system-notice>` and `<irc>` blocks in an agent transcript (harness
+  notices and peer messages) render as collapsed summary chips —
+  a label plus a one-line excerpt — instead of raw block text. They
+  hide entirely at the Text detail level, show as chips at Tools and
+  Results, and start expanded (full body visible, tap to collapse) at
+  the Thinking level; tapping a chip always toggles the full body.
 - A Host can carry additional addresses for the same machine (home LAN and
   VPN, for example). The Host form gives each address its own row (add,
   remove, reorder; the primary address always stays), the Host detail page

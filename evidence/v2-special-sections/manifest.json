@@ -1,0 +1,56 @@
+[
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "BA7D68CB-D0F1-491A-851A-E6230E790FA3",
+        "deviceName" : "iPhone 17",
+        "exportedFileName" : "0EA1F4A6-39AA-4ED7-8CA3-F152FB7F933D.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "special-sections-l0-hidden_0_0F69369E-DFA0-4137-8D63-69F0D70C8C82.png",
+        "timestamp" : 1790072960.26
+      }
+    ],
+    "testIdentifier" : "SpecialSectionsProofTests/testL0HidesSpecialSectionsEntirely()",
+    "testIdentifierURL" : "test://com.apple.xcode/Heeler/HeelerUITests/SpecialSectionsProofTests/testL0HidesSpecialSectionsEntirely"
+  },
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "BA7D68CB-D0F1-491A-851A-E6230E790FA3",
+        "deviceName" : "iPhone 17",
+        "exportedFileName" : "DDA7C7FF-FCCF-4935-870F-01ED898B3DBA.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "special-sections-l1-expanded_0_6B9BA964-3E78-4321-AAED-41F803F12539.png",
+        "timestamp" : 1790072971.538
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "BA7D68CB-D0F1-491A-851A-E6230E790FA3",
+        "deviceName" : "iPhone 17",
+        "exportedFileName" : "0EFFC6F6-0991-4583-88B3-11EC2A535698.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "special-sections-l1-chips_0_068414F8-6FBE-491D-BB66-8CB998D27210.png",
+        "timestamp" : 1790072969.913
+      }
+    ],
+    "testIdentifier" : "SpecialSectionsProofTests/testL1ShowsCollapsedSummaryChips()",
+    "testIdentifierURL" : "test://com.apple.xcode/Heeler/HeelerUITests/SpecialSectionsProofTests/testL1ShowsCollapsedSummaryChips"
+  },
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "BA7D68CB-D0F1-491A-851A-E6230E790FA3",
+        "deviceName" : "iPhone 17",
+        "exportedFileName" : "F03B984C-7CB5-4BB1-9FBB-54573D2958E9.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "special-sections-l3-expanded_0_834FE811-82F0-45CB-8108-E78C6436AD34.png",
+        "timestamp" : 1790072982.195
+      }
+    ],
+    "testIdentifier" : "SpecialSectionsProofTests/testL3StartsSectionsExpanded()",
+    "testIdentifierURL" : "test://com.apple.xcode/Heeler/HeelerUITests/SpecialSectionsProofTests/testL3StartsSectionsExpanded"
+  }
+]

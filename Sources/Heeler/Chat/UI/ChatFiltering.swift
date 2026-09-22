@@ -127,6 +127,13 @@ internal enum ChatRow: Sendable, Equatable, Identifiable {
     /// never dropped; the view styles the quiet/warning/error wash off
     /// `level`.
     case notice(messageID: UUID, blockIndex: Int, text: String, level: String)
+    /// A `<system-notice>`/`<irc>` section extracted from a text
+    /// block (see `ChatSpecialSectionParser`) — chrome, not
+    /// conversation: L0 hides it entirely; L1+ renders the collapsed
+    /// summary chip (tap expands the full body; at L3 it starts
+    /// expanded). Sits exactly where the tag sat in the source text,
+    /// so it never dominates the reading flow.
+    case specialSection(ChatSpecialSection)
     /// A blocked-agent pending question — visible at every level; it is the
     /// live frontier of the conversation, not chrome.
     case pending(PendingInteraction)
@@ -143,6 +150,8 @@ internal enum ChatRow: Sendable, Equatable, Identifiable {
              .image(let messageID, let blockIndex, _),
              .notice(let messageID, let blockIndex, _, _):
             return "\(messageID.uuidString)#\(blockIndex)"
+        case .specialSection(let section):
+            return "section#\(section.id)"
         case .orphanResult(let result):
             return "result#\(result.toolCallId)"
         case .pending(let interaction):
@@ -294,7 +303,9 @@ internal enum ChatFiltering {
                 for (index, block) in message.blocks.enumerated() {
                     switch block {
                     case .text(let text):
-                        rows.append(.text(messageID: message.id, blockIndex: index, role: .user, text: text))
+                        appendSegmentedText(
+                            messageID: message.id, blockIndex: index,
+                            role: .user, text: text, level: level, into: &rows)
                     case .image(let image):
                         rows.append(.image(messageID: message.id, blockIndex: index, image: image))
                     case .notice(let text, let noticeLevel):
@@ -310,7 +321,9 @@ internal enum ChatFiltering {
                 for (index, block) in message.blocks.enumerated() {
                     switch block {
                     case .text(let text):
-                        rows.append(.text(messageID: message.id, blockIndex: index, role: .assistant, text: text))
+                        appendSegmentedText(
+                            messageID: message.id, blockIndex: index,
+                            role: .assistant, text: text, level: level, into: &rows)
                     case .thinking(let text) where level >= .l3:
                         rows.append(.thinking(messageID: message.id, blockIndex: index, text: text))
                     case .toolCall(let call) where level >= Self.visibilityLevel(for: call):
@@ -342,7 +355,10 @@ internal enum ChatFiltering {
                     for (index, block) in message.blocks.enumerated() {
                         switch block {
                         case .text(let text):
-                            rows.append(.text(messageID: message.id, blockIndex: index, role: message.role, text: text))
+                            appendSegmentedText(
+                                messageID: message.id, blockIndex: index,
+                                role: message.role, text: text,
+                                level: level, into: &rows)
                         case .notice(let text, let noticeLevel):
                             rows.append(.notice(
                                 messageID: message.id, blockIndex: index,
@@ -420,6 +436,54 @@ internal enum ChatFiltering {
 
         rows.append(contentsOf: pending.map(ChatRow.pending))
         return rows
+    }
+
+    /// One text block through the special-section extractor
+    /// (`ChatSpecialSectionParser`): the residual prose segments
+    /// become `.text` rows and each extracted `<system-notice>`/`<irc>`
+    /// section becomes a `.specialSection` row at its source position
+    /// — the tags never reach the markdown path. Level gating: the
+    /// prose is conversation (every level); the sections are chrome
+    /// (L0 drops them ENTIRELY — a hidden section's prose keeps
+    /// rendering with the tag occurrences removed, never as raw tag
+    /// text). Segment ids stay stable across level switches: prose
+    /// keeps the block's own `messageID#blockIndex` id when the block
+    /// did not split, and the (rare) split residuals carry synthetic
+    /// piece indices `1000 + segment` — above every real block index
+    /// a message can hold, below the sections' `section#` prefix.
+    /// Prose that renders to nothing (whitespace the tags left
+    /// behind) drops, so a tag-only block at L0 yields zero rows.
+    private static func appendSegmentedText(
+        messageID: UUID, blockIndex: Int, role: ChatRole,
+        text: String, level: DetailLevel, into rows: inout [ChatRow]
+    ) {
+        let baseID = "\(messageID.uuidString)#\(blockIndex)"
+        let extraction = ChatSpecialSectionParser.extract(
+            from: text, baseID: baseID)
+        guard !extraction.sections.isEmpty else {
+            // Fast path: no tags, one ordinary text row (byte-for-byte
+            // the row the unsegmented code emitted before).
+            if !text.isEmpty {
+                rows.append(.text(
+                    messageID: messageID, blockIndex: blockIndex,
+                    role: role, text: text))
+            }
+            return
+        }
+        for (piece, segment) in extraction.segments.enumerated() {
+            let trimmed = segment.text.trimmingCharacters(
+                in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                rows.append(.text(
+                    messageID: messageID,
+                    blockIndex: piece == 0
+                        ? blockIndex : 1000 + piece,
+                    role: role, text: segment.text))
+            }
+            if let section = segment.followingSection, level >= .l1 {
+                rows.append(.specialSection(section))
+            }
+        }
     }
 
     /// The detail level at which a tool call becomes visible. Ordinary tools
