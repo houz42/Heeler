@@ -956,18 +956,25 @@ struct ChatScreen: View {
     private var composerRow: some View {
         if let router {
         HStack(spacing: 8) {
-            Button {
-                // Collapse to the resting row: keyboard down, focus
-                // off — the draft and the frame PERSIST.
-                inputFocused = false
-            } label: {
-                Image(systemName: "chevron.down")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
+            if keyboardInset.height > 0 {
+                // Keyboard-dismiss chevron (v2 device note): ONLY when
+                // the keyboard is actually up — a dead dismiss control
+                // on the collapsed resting row (keyboard down) is
+                // misleading chrome. Tapping focuses the field instead
+                // via the field's own tap.
+                Button {
+                    // Collapse to the resting row: keyboard down, focus
+                    // off — the draft and the frame PERSIST.
+                    inputFocused = false
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("Collapse input")
             }
-            .accessibilityLabel("Collapse input")
             if router != nil && deliver != nil {
                 Menu {
                     AgentActionMenuContent(
