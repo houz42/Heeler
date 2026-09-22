@@ -421,6 +421,23 @@ struct AgentDetailView: View {
                 deliver: { text in
                     try await store.send(text)
                 },
+                deliverStructured: { text, images in
+                    // Review gap 7: the attachment-bearing send — the
+                    // text AND its real image content reach the broker
+                    // as one structured prompt.send.
+                    try await store.send(text, images: images)
+                },
+                retrySend: { echoText in
+                    // Review gap 2: the failed bubble's retry tap. The
+                    // text is the echo's own text (the seam's
+                    // identifier — the projection row carries it).
+                    guard let store = brokerChat,
+                        let echo = store.outgoing.first(where: {
+                            $0.text == echoText && $0.state == .failed
+                        })
+                    else { return }
+                    try await store.retry(echo)
+                },
                 pendingUnsupported: !store.askSupported,
                 authorLabel: "Heeler · \(agent.agent.kind.lowercased())",
                 attachments: chatAttachments,
@@ -523,31 +540,32 @@ struct AgentDetailView: View {
         }
     }
 
-    /// The agent-chat store's content, with the provisional stream
-    /// tails rendered as separate in-flight assistant bubbles (stream
-    /// ids never masquerade as committed items).
+    /// The agent-chat store's content projection: outgoing echoes at
+    /// the tail FIRST, then provisional stream tails (review gap 4 —
+    /// the agent's streaming reply must render BELOW the user message
+    /// it answers, never above), then the pending surface.
     private var brokerContent: ChatContent {
         var content = brokerChat?.content ?? ChatContent()
-        for tail in brokerChat?.streamTails ?? [] where !tail.text.isEmpty {
-            // Deterministic per-stream id: a fresh UUID per delta would
-            // churn the bubble's identity every chunk and flicker the
-            // whole row (item 20). "stream:" prefix keeps provisional
-            // tails from colliding with committed item ids.
-            content.messages.append(
-                ChatMessage(
-                    id: AgentChatMapper.stableID(for: "stream:\(tail.streamId)"),
-                    role: .assistant, blocks: [.text(tail.text)]))
-        }
         // Outgoing echoes (items 1/11): each just-sent user message
-        // renders IMMEDIATELY as its own user bubble at the tail —
-        // the optimistic local echo. Deterministic "echo:" ids keep
-        // the row's identity stable across delivery-state transitions
-        // (sending → sent/failed re-renders in place, never a churn).
-        // A confirmed echo drops here the moment the committed page
-        // carries the real record (AgentChatStore.reconcileOutgoing),
-        // so the echo and its confirmed twin never render together.
+        // renders IMMEDIATELY as its own user bubble — the optimistic
+        // local echo. Deterministic "echo:" ids keep the row's identity
+        // stable across delivery-state transitions (sending →
+        // sent/failed re-renders in place, never a churn). A confirmed
+        // echo drops the moment the committed page carries the real
+        // record (AgentChatStore.reconcileOutgoing), so the echo and
+        // its confirmed twin never render together.
         for echo in brokerChat?.outgoing ?? [] {
             var blocks: [ChatBlock] = [.text(echo.text)]
+            // Structured images ride the echo too (review gap 7): the
+            // sent image previews as a real image block on the user's
+            // own bubble (the correct destination, never a draft-
+            // inbox surface).
+            for image in echo.images {
+                blocks.append(.image(ChatImageRef(
+                    ref: image.ref ?? image.data.map { _ in echo.id.uuidString } ?? "",
+                    mimeType: image.mimeType,
+                    byteLength: image.byteLength)))
+            }
             if let message = echo.failureMessage, echo.state == .failed {
                 blocks.append(.notice(
                     text: "\(message) Tap to retry.",
@@ -557,6 +575,16 @@ struct AgentDetailView: View {
                 ChatMessage(
                     id: AgentChatMapper.stableID(for: "echo:\(echo.id.uuidString)"),
                     role: .user, blocks: blocks, timestamp: echo.sentAt))
+        }
+        // Provisional stream tails AFTER the echoes: the reply follows
+        // the question. Deterministic per-stream ids (a fresh UUID per
+        // delta would churn the bubble's identity every chunk and
+        // flicker the whole row, item 20).
+        for tail in brokerChat?.streamTails ?? [] where !tail.text.isEmpty {
+            content.messages.append(
+                ChatMessage(
+                    id: AgentChatMapper.stableID(for: "stream:\(tail.streamId)"),
+                    role: .assistant, blocks: [.text(tail.text)]))
         }
         // Real pending asks from the broker interactions map into the
         // chat content's pending surface (the redesigned question card).

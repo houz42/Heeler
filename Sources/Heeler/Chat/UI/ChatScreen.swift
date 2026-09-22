@@ -54,6 +54,12 @@ struct ChatScreen: View {
     /// Delivers plain text to the agent (`agent.prompt` equivalent). Called
     /// only when the router returns `.passthrough`.
     var deliver: ((String) async throws -> Void)? = nil
+    /// Review gap 2: retries a failed outgoing echo (tap on the failed
+    /// bubble's error row). Nil keeps failed echoes visible but inert.
+    var retrySend: ((String) async throws -> Void)? = nil
+    /// Review gap 7: the structured deliver — text + real image
+    /// content. Nil degrades to the text-only deliver.
+    var deliverStructured: ((_ text: String, _ images: [AgentChatOutgoingImage]) async throws -> Void)? = nil
     /// True when the pending (ask) rows must render as an honest
     /// unsupported state — the broker backend has no verified answering
     /// API in v1. False keeps the JSONL backend's interactive rows.
@@ -79,6 +85,14 @@ struct ChatScreen: View {
         stripAccessory: AnyView? = nil,
         router: ComposerRouterStore? = nil,
         deliver: ((String) async throws -> Void)? = nil,
+        /// Review gap 7 (delivery): the structured deliver — the text
+        /// AND its images reach the broker as one prompt.send. Nil
+        /// degrades to the text-only deliver.
+        deliverStructured: ((_ text: String, _ images: [AgentChatOutgoingImage]) async throws -> Void)? = nil,
+        /// Review gap 2: retries a failed outgoing echo (the tap on
+        /// the failed bubble's error row). Nil keeps failed echoes
+        /// visible but inert.
+        retrySend: ((String) async throws -> Void)? = nil,
         pendingUnsupported: Bool = false,
         authorLabel: String = "",
         attachments: ChatAttachments? = nil,
@@ -92,12 +106,12 @@ struct ChatScreen: View {
         self.state = state
         self.content = content
         self.changeLevel = changeLevel
-        self.hasOlder = hasOlder
-        self.isLoadingOlder = isLoadingOlder
+        self.retrySend = retrySend
+        self.deliverStructured = deliverStructured
+        self.deliver = deliver
         self.loadOlder = loadOlder
         self.stripAccessory = stripAccessory
         self.router = router
-        self.deliver = deliver
         self.pendingUnsupported = pendingUnsupported
         self.authorLabel = authorLabel
         self.attachments = attachments
@@ -408,7 +422,23 @@ struct ChatScreen: View {
                     image: image, fetch: imageFetcher ?? fetch, side: 56)
                 { viewingImage = image }
             } else {
-                LinkifiedChatRow(row: row, router: openRouter)
+                LinkifiedChatRow(
+                    row: row, router: openRouter,
+                    onRetry: retrySend.map { retry in
+                        { Task { @MainActor in
+                            guard case .notice(_, _, let text, _) = row
+                            else { return }
+                            // The notice text is the failed echo's
+                            // failure copy; strip the appended
+                            // affordance suffix to recover the echo's
+                            // own text (the retry key).
+                            let echoText = text
+                                .replacingOccurrences(
+                                    of: " Tap to retry.", with: "")
+                            guard !echoText.isEmpty else { return }
+                            try? await retry(echoText)
+                        } }
+                    })
             }
         case .imageGallery(_, let images):
             // One message's images as a single small-square gallery:
@@ -1088,7 +1118,20 @@ struct ChatScreen: View {
             // the agent).
             if ChatDraftComposer.carriesAttachments(items: draftItems) {
                 do {
-                    try await deliver?(text)
+                    // Review gap 7: image draft items ride the
+                    // structured send as REAL image content (the
+                    // staged remote path is the broker's img: ref);
+                    // file items keep their '@path' text reference in
+                    // the composed prose.
+                    let images: [AgentChatOutgoingImage] = draftItems.compactMap {
+                        item in
+                        guard case .image(_, let remotePath, _) = item else {
+                            return nil
+                        }
+                        return AgentChatOutgoingImage(
+                            ref: remotePath, mimeType: "image/png")
+                    }
+                    try await deliverWithImages(text, images)
                     clearDraftAfterSend()
                     showSentConfirmation = true
                     Task { @MainActor in
@@ -1097,7 +1140,7 @@ struct ChatScreen: View {
                     }
                 } catch {
                     // Visible + retryable: the draft (and items) stay.
-                    deliveryError = "Send failed — your message was not delivered. Retry when ready."
+                    deliveryError = "Send failed — your message may not have been delivered. Retry when ready."
                 }
                 return
             }
@@ -1118,9 +1161,25 @@ struct ChatScreen: View {
                     }
                 } catch {
                     // Visible + retryable: the draft (and items) stay.
-                    deliveryError = "Send failed — your message was not delivered. Retry when ready."
+                    deliveryError = "Send failed — your message may not have been delivered. Retry when ready."
                 }
             }
+        }
+    }
+
+    /// Review gap 7: the structured-send path for attachment-bearing
+    /// sends. The deliver closure stays text-only (the router's
+    /// passthrough contract); when the images seam is wired the send
+    /// routes through it so the broker receives REAL image content
+    /// blocks alongside the text — otherwise it degrades to the
+    /// text-only deliver (the pre-wire path).
+    private func deliverWithImages(
+        _ text: String, _ images: [AgentChatOutgoingImage]
+    ) async throws {
+        if let deliverStructured {
+            try await deliverStructured(text, images)
+        } else {
+            try await deliver?(text)
         }
     }
 }

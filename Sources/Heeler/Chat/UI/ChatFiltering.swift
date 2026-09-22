@@ -236,14 +236,20 @@ internal enum ChatFiltering {
             switch message.role {
             case .user:
                 // User turns are conversation, not chrome: their text is
-                // visible at every level. Non-text blocks in a user message
-                // (not produced by the parser) are dropped.
+                // visible at every level. Notice blocks ride user
+                // messages too — a failed send's honest failure copy
+                // (review gap 2) must render on the echo bubble, so the
+                // user branch passes them (never drops).
                 for (index, block) in message.blocks.enumerated() {
                     switch block {
                     case .text(let text):
                         rows.append(.text(messageID: message.id, blockIndex: index, role: .user, text: text))
                     case .image(let image):
                         rows.append(.image(messageID: message.id, blockIndex: index, image: image))
+                    case .notice(let text, let noticeLevel):
+                        rows.append(.notice(
+                            messageID: message.id, blockIndex: index,
+                            text: text, level: noticeLevel))
                     default:
                         break
                     }
