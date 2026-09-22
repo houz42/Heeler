@@ -860,20 +860,16 @@ struct ChatScreen: View {
         }
     }
 
-    /// Send needs draft text or held COMPLETED attachments: a tracked
-    /// in-flight tile (upload not landed yet) blocks Send until its
-    /// remotePath lands; the draft stays editable meanwhile.
+    /// Send is enabled the moment there is text OR a picked image
+    /// (user directive, v2): an image still uploading sends INLINE
+    /// base64 (the picked bytes are in hand) — Send NEVER waits on
+    /// the background blob upload. The upload only exists for history
+    /// dedup and lands whenever it lands.
     private var canSend: Bool {
-        // A tile still WAITING on its upload (tracked in-flight item
-        // with an empty remotePath) blocks Send — the wire needs the
-        // real path; the draft stays editable while the upload runs.
-        let hasInFlightUpload = draftItems.contains { item in
-            if case .image(_, let path, _) = item, path.isEmpty {
-                return true
-            }
+        if draftItems.contains(where: { item in
+            if case .image = item { return true }
             return false
-        }
-        if !hasInFlightUpload, !draftItems.isEmpty { return true }
+        }) { return true }
         return !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
@@ -931,6 +927,15 @@ struct ChatScreen: View {
     @State private var isSelectingFile = false
     /// The pending image's preview bytes (the tile's thumbnail).
     @State private var pendingImagePreviewData: Data?
+    /// The in-flight picked item's DRAFT TILE id (v2 device note): the
+    /// tile shows immediately on pick; the completed upload's
+    /// remotePath updates THIS item (no second tile ever appears).
+    @State private var pendingDraftItemID: String?
+    /// The picked PhotosPickerItem per in-flight tile id: a Send that
+    /// races the LOCAL byte read awaits the item's data through here
+    /// (never the upload — the local read is what the inline send
+    /// needs; the blob upload stays a background dedup optimization).
+    @State private var pendingPickerItems: [String: PhotosPickerItem] = [:]
     /// True while the current upload began from the PASTE path (its
     /// completed upload holds in draftStore.pendingImage with the path
     /// removed from the draft); false = picker path (path stays in the
@@ -943,11 +948,6 @@ struct ChatScreen: View {
     @State private var pendingFileURL: URL?
     /// The photo picker's item data (the tile's preview thumbnail).
     @State private var pendingPickerImageData: Data?
-    /// The in-flight picked item's DRAFT TILE id (v2 device note): the
-    /// tile shows immediately on pick; the completed upload's
-    /// remotePath updates THIS item (no second tile ever appears).
-    @State private var pendingDraftItemID: String?
-
     /// The composer's text field (the growing/collapsing input), split
     /// out to keep each view expression within the type-checker's
     /// budget. The closures are plain methods so the call expression
@@ -1161,6 +1161,7 @@ struct ChatScreen: View {
                 // completed remotePath UPDATES this tracked item).
                 let itemID = UUID().uuidString
                 pendingDraftItemID = itemID
+                pendingPickerItems[itemID] = item
                 draftItems.append(.image(
                     id: itemID, remotePath: "", previewData: nil))
                 Task { @MainActor in
@@ -1168,6 +1169,7 @@ struct ChatScreen: View {
                     if let data {
                         updateDraftItemImage(id: itemID, previewData: data)
                     }
+                    pendingPickerItems[itemID] = nil
                 }
                 attachments.staging.begin(
                     .photo(PhotosPickerImageSelection(item: item)),
@@ -1332,26 +1334,21 @@ struct ChatScreen: View {
             // the agent).
             if ChatDraftComposer.carriesAttachments(items: draftItems) {
                 do {
-                    // Re-review finding 4: the adapter requires an
-                    // img: BLOB ref or INLINE BASE64 — the staged
-                    // remote path is a HOST filesystem path, NOT a
-                    // blob id. The honest shape: read the file's
-                    // bytes through the fetch seam and send them as
-                    // inline data, with the MIME sniffed from the
-                    // bytes (magic numbers, not a hardcoded png).
-                    var images: [AgentChatOutgoingImage] = []
-                    for item in draftItems {
-                        guard case .image(_, let remotePath, _) = item else {
-                            continue
-                        }
-                        guard let bytes = try? await fetch?(remotePath),
-                            !bytes.isEmpty
-                        else {
-                            throw CocoaError(.fileReadCorruptFile)
-                        }
-                        images.append(AgentChatOutgoingImage(
-                            data: bytes,
-                            mimeType: Self.sniffImageMIME(bytes)))
+                    // Image draft items ride the structured send as REAL
+                    // image content (send-never-waits, user directive):
+                    // a LANDED blob upload references the broker's img:
+                    // store; an IN-FLIGHT image sends INLINE base64 —
+                    // the picked bytes are in hand and Send NEVER waits
+                    // on the upload (it stays a background history-dedup
+                    // optimization). Re-review finding 4 stays live in
+                    // buildOutgoingImages: MIME is SNIFFED from the
+                    // bytes' magic numbers (Self.sniffImageMIME), never
+                    // hardcoded, and the img: ref is the broker's blob
+                    // id — never the host filesystem path.
+                    let images: [AgentChatOutgoingImage] = await withCheckedContinuation {
+                        (continuation: CheckedContinuation<[AgentChatOutgoingImage], Never>)
+                        in
+                        buildOutgoingImages(continuation: continuation)
                     }
                     try await deliverWithImages(text, images)
                     clearDraftAfterSend()
@@ -1386,6 +1383,56 @@ struct ChatScreen: View {
                     deliveryError = "Send failed — your message may not have been delivered. Retry when ready."
                 }
             }
+        }
+    }
+
+    /// Builds the structured-send image array (send-never-waits, user
+    /// directive + re-review finding 4). Images always ride INLINE
+    /// base64 — the picked bytes are in hand at pick time — with the
+    /// MIME SNIFFED from the bytes' magic numbers (Self.sniffImageMIME,
+    /// never hardcoded): a LANDED staging path is a HOST filesystem
+    /// path, NOT the adapter's img: blob id, so it must never be sent
+    /// as `ref` (finding 4's blob-id confusion). The blob upload
+    /// continues in the background purely for the history record; it
+    /// never gates the send. A Send racing the picker's LOCAL byte
+    /// read (a moment, not the upload) awaits just that read via the
+    /// stored PhotosPickerItem.
+    private func buildOutgoingImages(
+        continuation: CheckedContinuation<[AgentChatOutgoingImage], Never>
+    ) {
+        var images: [AgentChatOutgoingImage] = []
+        var awaitIDs: [(String, PhotosPickerItem)] = []
+        for item in draftItems {
+            guard case .image(let id, _, let localData) = item
+            else { continue }
+            if let localData, !localData.isEmpty {
+                images.append(AgentChatOutgoingImage(
+                    data: localData,
+                    mimeType: Self.sniffImageMIME(localData),
+                    byteLength: localData.count))
+            } else if let pickerItem = pendingPickerItems[id] {
+                awaitIDs.append((id, pickerItem))
+            }
+            // No bytes and no picker item: an impossible tile
+            // (defensive) — skipped, never a contentless image.
+        }
+        guard !awaitIDs.isEmpty else {
+            continuation.resume(returning: images)
+            return
+        }
+        Task { @MainActor in
+            for (id, pickerItem) in awaitIDs {
+                if let data = try? await pickerItem.loadTransferable(type: Data.self) ?? nil,
+                    !data.isEmpty
+                {
+                    images.append(AgentChatOutgoingImage(
+                        data: data,
+                        mimeType: Self.sniffImageMIME(data),
+                        byteLength: data.count))
+                    updateDraftItemImage(id: id, previewData: data)
+                }
+            }
+            continuation.resume(returning: images)
         }
     }
 
