@@ -75,6 +75,7 @@ private struct ChatNoticeRow: View {
         switch level {
         case "error": "Error"
         case "warning": "Warning"
+        case "resend": "Not Delivered?"
         default: "Notice"
         }
     }
@@ -83,6 +84,7 @@ private struct ChatNoticeRow: View {
         switch level {
         case "error": .red
         case "warning": .orange
+        case "resend": .orange
         default: .secondary
         }
     }
@@ -669,15 +671,22 @@ struct LinkifiedChatRow: View {
             ChatSpecialSectionRow(
                 section: section,
                 initiallyExpanded: detailLevel >= .l3)
-        case .notice(_, _, _, let level) where level == "error" && onRetry != nil:
-            // A failed send's honest failure copy: TAP = retry.
+        case .notice(_, _, _, let level)
+        where (level == "error" || level == "resend") && onRetry != nil:
+            // Re-review round 4, finding 3: the AX label names the
+            // real action. "error" = the broker answered NO — a
+            // duplicate-safe retry. "resend" = acceptance UNKNOWN —
+            // the re-send MAY DUPLICATE (never labeled "retry").
+            let hint = level == "resend"
+                ? "Sends the message again — it may arrive twice"
+                : "Retries the failed send"
             Button {
                 onRetry?()
             } label: {
                 ChatRowView(row: row)
             }
             .buttonStyle(.plain)
-            .accessibilityHint("Retries the failed send")
+            .accessibilityHint(hint)
         default:
             ChatRowView(row: row)
         }
@@ -1456,7 +1465,16 @@ struct ChatTranscriptImageTile: View {
         }
         .buttonStyle(.plain)
         .task {
-            guard loadedImage == nil, !failed, let fetch else { return }
+            guard loadedImage == nil, !failed else { return }
+            // Re-review round 4, finding 2: inline bytes (a locally-
+            // sent image) render DIRECTLY — never through the fetch
+            // seam (its ref is a local marker, not a fetchable id).
+            if let inline = image.inlineData {
+                loadedImage = UIImage(data: inline)
+                if loadedImage == nil { failed = true }
+                return
+            }
+            guard let fetch else { return }
             do {
                 let data = try await fetch(image.ref)
                 loadedImage = UIImage(data: data)
@@ -1503,6 +1521,13 @@ struct ChatTranscriptImageReader: View {
             }
         }
         .task {
+            // Re-review round 4, finding 2: inline bytes first (a
+            // locally-sent image renders from its real bytes).
+            if let inline = image.inlineData {
+                loadedImage = UIImage(data: inline)
+                if loadedImage == nil { failed = true }
+                return
+            }
             guard let fetch else {
                 failed = true
                 return

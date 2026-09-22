@@ -66,7 +66,9 @@ struct ChatScreen: View {
     var deliver: ((String) async throws -> Void)? = nil
     /// Review gap 2: retries a failed outgoing echo (tap on the failed
     /// bubble's error row). Nil keeps failed echoes visible but inert.
-    var retrySend: ((String) async throws -> Void)? = nil
+    /// Re-review finding 1: retries by the ECHO UUID (the failed
+    /// row's messageID), never by message text.
+    var retrySend: ((UUID) async throws -> Void)? = nil
     /// Review gap 7: the structured deliver — text + real image
     /// content. Nil degrades to the text-only deliver.
     var deliverStructured: ((_ text: String, _ images: [AgentChatOutgoingImage]) async throws -> Void)? = nil
@@ -103,7 +105,7 @@ struct ChatScreen: View {
         /// Review gap 2: retries a failed outgoing echo (the tap on
         /// the failed bubble's error row). Nil keeps failed echoes
         /// visible but inert.
-        retrySend: ((String) async throws -> Void)? = nil,
+        retrySend: ((UUID) async throws -> Void)? = nil,
         pendingUnsupported: Bool = false,
         authorLabel: String = "",
         attachments: ChatAttachments? = nil,
@@ -121,6 +123,8 @@ struct ChatScreen: View {
         self.retrySend = retrySend
         self.deliverStructured = deliverStructured
         self.deliver = deliver
+        self.hasOlder = hasOlder
+        self.isLoadingOlder = isLoadingOlder
         self.loadOlder = loadOlder
         self.stripAccessory = stripAccessory
         self.router = router
@@ -472,17 +476,17 @@ struct ChatScreen: View {
                     row: row, router: openRouter,
                     onRetry: retrySend.map { retry in
                         { Task { @MainActor in
-                            guard case .notice(_, _, let text, _) = row
+                            guard case .notice = row
                             else { return }
-                            // The notice text is the failed echo's
-                            // failure copy; strip the appended
-                            // affordance suffix to recover the echo's
-                            // own text (the retry key).
-                            let echoText = text
-                                .replacingOccurrences(
-                                    of: " Tap to retry.", with: "")
-                            guard !echoText.isEmpty else { return }
-                            try? await retry(echoText)
+                            // Re-review round 3, finding 1: the
+                            // projection renders the echo's message
+                            // id as the ORIGINAL outgoing UUID (no
+                            // derivation) — this IS store.echo.id.
+                            // The store routes by the echo's own
+                            // state (failed → duplicate-safe retry;
+                            // ambiguous → explicit may-duplicate
+                            // resend).
+                            try? await retry(row.messageID ?? UUID())
                         } }
                     },
                     // Special sections: L3 starts their chips
@@ -1212,7 +1216,14 @@ struct ChatScreen: View {
 
     private func sendDraft() {
         let text = composedMessageText()
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        // Review round 7: an IMAGE-ONLY draft is a valid prompt — the
+        // structured images array carries the content, so empty text
+        // with image items MUST send (the old nonempty-text guard made
+        // image-only sends silently do nothing). The decision lives in
+        // ChatDraftComposer.isSendable (unit-testable): nonempty text
+        // OR attachments; only genuinely-empty is refused — never
+        // with fabricated filler text.
+        guard ChatDraftComposer.isSendable(text: text, items: draftItems),
             !isSending, let router
         else { return }
         isSending = true
@@ -1226,18 +1237,26 @@ struct ChatScreen: View {
             // the agent).
             if ChatDraftComposer.carriesAttachments(items: draftItems) {
                 do {
-                    // Review gap 7: image draft items ride the
-                    // structured send as REAL image content (the
-                    // staged remote path is the broker's img: ref);
-                    // file items keep their '@path' text reference in
-                    // the composed prose.
-                    let images: [AgentChatOutgoingImage] = draftItems.compactMap {
-                        item in
+                    // Re-review finding 4: the adapter requires an
+                    // img: BLOB ref or INLINE BASE64 — the staged
+                    // remote path is a HOST filesystem path, NOT a
+                    // blob id. The honest shape: read the file's
+                    // bytes through the fetch seam and send them as
+                    // inline data, with the MIME sniffed from the
+                    // bytes (magic numbers, not a hardcoded png).
+                    var images: [AgentChatOutgoingImage] = []
+                    for item in draftItems {
                         guard case .image(_, let remotePath, _) = item else {
-                            return nil
+                            continue
                         }
-                        return AgentChatOutgoingImage(
-                            ref: remotePath, mimeType: "image/png")
+                        guard let bytes = try? await fetch?(remotePath),
+                            !bytes.isEmpty
+                        else {
+                            throw CocoaError(.fileReadCorruptFile)
+                        }
+                        images.append(AgentChatOutgoingImage(
+                            data: bytes,
+                            mimeType: Self.sniffImageMIME(bytes)))
                     }
                     try await deliverWithImages(text, images)
                     clearDraftAfterSend()
@@ -1289,6 +1308,26 @@ struct ChatScreen: View {
         } else {
             try await deliver?(text)
         }
+    }
+
+    /// Image MIME by magic numbers (re-review finding 4): the adapter
+    /// accepts png/jpeg/gif/webp — the staged file's own bytes decide,
+    /// never a hardcoded guess. Unknown magic defaults to png (the
+    /// most common staged shape; the broker validates).
+    private static func sniffImageMIME(_ bytes: Data) -> String {
+        func has(_ magic: [UInt8], at offset: Int = 0) -> Bool {
+            guard bytes.count >= offset + magic.count else { return false }
+            return magic.enumerated().allSatisfy {
+                bytes[bytes.startIndex + offset + $0.offset] == $0.element
+            }
+        }
+        if has([0x89, 0x50, 0x4E, 0x47]) { return "image/png" }
+        if has([0xFF, 0xD8, 0xFF]) { return "image/jpeg" }
+        if has([0x47, 0x49, 0x46]) { return "image/gif" }
+        if has([0x52, 0x49, 0x46, 0x46]) && has([0x57, 0x45, 0x42, 0x50], at: 8) {
+            return "image/webp"
+        }
+        return "image/png"
     }
 }
 

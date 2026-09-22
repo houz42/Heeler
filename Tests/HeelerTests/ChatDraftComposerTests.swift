@@ -17,13 +17,17 @@ struct ChatDraftComposerTests {
         .image(id: "i-\(path)", remotePath: path, previewData: nil)
     }
 
-    @Test func imageAloneIsTheAtReference() {
+    @Test func imageNeverAppearsInProse() {
+        // Review round 6, finding 3: an image rides the structured
+        // prompt.send images array ONLY — its staged path is NEVER
+        // appended as '@path' prose (the '@…jpg leaking as text' bug:
+        // the model received the bytes AND a literal path line).
         let text = ChatDraftComposer.messageText(
             items: [image("/remote/pasted.png")], draft: "")
-        #expect(text == "@/remote/pasted.png")
+        #expect(text.isEmpty)
     }
 
-    @Test func everyAttachmentRidesExactlyOnceAsAt() {
+    @Test func filesReferenceAsAtImagesDoNot() {
         let text = ChatDraftComposer.messageText(
             items: [
                 image("/remote/a.png"),
@@ -31,23 +35,19 @@ struct ChatDraftComposerTests {
                 image("/remote/b.png"),
             ],
             draft: "please review")
-        let lines = text.components(separatedBy: "\n")
-        #expect(lines.count == 4)
-        #expect(lines[0] == "please review")
-        #expect(lines[1] == "@/remote/a.png")
-        #expect(lines[2] == "@/remote/notes.md")
-        #expect(lines[3] == "@/remote/b.png")
+        // Prose + ONLY the file reference. The two images are absent
+        // (they ride the structured array).
+        #expect(text == "please review\n@/remote/notes.md")
     }
 
     @Test func userTypedPathStringsSurviveVerbatim() {
-        // Attachment paths ride as explicit @-references; a USER-TYPED
-        // path string is prose and survives verbatim — never eaten.
+        // A USER-TYPED path string is prose and survives verbatim —
+        // never eaten (images never join the prose, so the only
+        // path-like lines are the user's own words and file refs).
         let draft = "look at /remote/pick.png for the details"
         let text = ChatDraftComposer.messageText(
             items: [image("/remote/some-other.png")], draft: draft)
-        let lines = text.components(separatedBy: "\n")
-        #expect(lines[0] == "look at /remote/pick.png for the details")
-        #expect(lines[1] == "@/remote/some-other.png")
+        #expect(text == draft)
     }
 
     @Test func multipleFilesPlusProseSend() {
@@ -57,7 +57,7 @@ struct ChatDraftComposerTests {
                 .file(id: "f1", name: "notes.md", remotePath: "/remote/notes.md"),
             ],
             draft: "review both please")
-        #expect(text == "review both please\n@/remote/a.png\n@/remote/notes.md")
+        #expect(text == "review both please\n@/remote/notes.md")
     }
 
     @Test func quotesDeliverBlockQuotedAndProsePreserved() {
@@ -68,6 +68,32 @@ struct ChatDraftComposerTests {
         #expect(lines.first!.contains("quoted body"))
         #expect(lines.last == "my reply")
         #expect(ChatQuote.draft(for: "quoted body") == "> quoted body\n\n")
+    }
+
+    // MARK: Review round 7 — the image-only send regression
+
+    @Test func imageOnlyDraftIsSendable() {
+        // Empty text + image items IS a valid prompt (the old
+        // nonempty-text guard made image-only sends silently do
+        // nothing).
+        #expect(ChatDraftComposer.isSendable(
+            text: "",
+            items: [image("/staged/shot.png")]))
+        // Whitespace-only text with images still sends.
+        #expect(ChatDraftComposer.isSendable(
+            text: "   ",
+            items: [image("/staged/shot.png")]))
+    }
+
+    @Test func genuinelyEmptyDraftIsNotSendable() {
+        // No text AND no attachments: the only refused submission.
+        #expect(!ChatDraftComposer.isSendable(text: "", items: []))
+        #expect(!ChatDraftComposer.isSendable(text: "  \n ", items: []))
+        // Text alone still sends as before.
+        #expect(ChatDraftComposer.isSendable(text: "hello", items: []))
+        // A quote alone is not an attachment-bearing prompt.
+        #expect(!ChatDraftComposer.isSendable(
+            text: "", items: [.quote(id: "q", text: "hi", author: "Heeler")]))
     }
 }
 
@@ -123,16 +149,15 @@ struct ChatDraftCompositionOrderTests {
         #expect(text == "please review\n@/remote/notes.md")
     }
 
-    @Test func imageReferencesUseTheSameAtGrammar() {
-        // The user's contract: BOTH files and images reference as @path
-        // (the old bare-path image form was the no-@ defect in the
-        // user's real transcript).
+    @Test func imageReferencesNeverJoinTheProse() {
+        // Review round 6, finding 3: images ride the structured
+        // prompt.send images array; the composer emits NO image line
+        // (files keep their @ grammar — see above).
         let text = ChatDraftComposer.messageText(
             items: [.image(id: "i1", remotePath: "/remote/shot.png", previewData: nil)],
             draft: "see this")
-        #expect(text == "see this\n@/remote/shot.png")
+        #expect(text == "see this")
     }
-
     @Test func attachmentBearingSendsBypassClassification() {
         #expect(ChatDraftComposer.carriesAttachments(
             items: [file("/remote/a.md")]))

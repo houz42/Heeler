@@ -94,9 +94,15 @@ enum ChatDraftComposer {
     static func messageText(items: [ChatDraftItem], draft: String) -> String {
         var parts: [String] = []
         // Quotes lead (the blockquoted context ahead of the reply —
-        // the reading order), then the prose, then the @-references
-        // (the user's contract: BOTH files and images reference as
-        // @path — never a bare path).
+        // the reading order), then the prose, then the FILE
+        // @-references (the user's contract: files reference as
+        // @path — never a bare path). IMAGES NEVER APPEAR IN THE
+        // PROSE (review round 6, finding 3): an image rides the
+        // structured prompt.send images array as real content
+        // blocks — appending its staged path here too sent the model
+        // BOTH the bytes and a literal '@…jpg' text line, the
+        // '@path leaking as prose' bug. The staged path is a HOST
+        // filesystem path, meaningless to the agent either way.
         for item in items {
             if case .quote(_, let text, _) = item {
                 parts.append(ChatQuote.draft(for: text))
@@ -106,8 +112,10 @@ enum ChatDraftComposer {
         if !trimmed.isEmpty { parts.append(trimmed) }
         for item in items {
             switch item {
-            case .image(_, let path, _), .file(_, _, let path):
+            case .file(_, _, let path):
                 parts.append("@\(path)")
+            case .image:
+                continue  // structured images array, never prose
             case .quote:
                 continue  // already led
             }
@@ -127,6 +135,19 @@ extension ChatDraftComposer {
             if case .file = $0 { return true }
             return false
         }
+    }
+
+    /// Whether one composed submission is a valid prompt (review
+    /// round 7, the image-only regression): NONEMPTY text OR valid
+    /// image content. An image-only draft composes EMPTY text (the
+    /// images ride the structured array, never prose) — it is still
+    /// a real prompt and MUST send; the old nonempty-text guard made
+    /// it silently do nothing. Only genuinely-empty submissions (no
+    /// text AND no attachments) are refused — never with fabricated
+    /// filler text.
+    static func isSendable(text: String, items: [ChatDraftItem]) -> Bool {
+        if carriesAttachments(items: items) { return true }
+        return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
 

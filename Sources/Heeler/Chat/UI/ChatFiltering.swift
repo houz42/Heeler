@@ -160,6 +160,20 @@ internal enum ChatRow: Sendable, Equatable, Identifiable {
             return "resolved#\(ask.id)"
         }
     }
+
+    /// The originating ChatMessage's UUID (re-review finding 1: the
+ /// retry seam carries the failed echo's UUID — this is where the
+    /// notice row exposes it). nil for pending rows.
+    var messageID: UUID? {
+        switch self {
+        case .text(let id, _, _, _), .thinking(let id, _, _),
+             .toolCall(let id, _, _, _), .image(let id, _, _),
+             .notice(let id, _, _, _):
+            return id
+        case .orphanResult, .pending, .specialSection, .resolvedAsk:
+            return nil
+        }
+    }
 }
 
 

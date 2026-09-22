@@ -52,7 +52,18 @@ struct AgentChatOutgoingMessage: Sendable, Equatable, Identifiable {
     enum DeliveryState: Sendable, Equatable {
         case sending
         case sent
+        /// The wire round-trip FAILED (the broker answered no, or the
+        /// channel refused the write before acceptance was possible).
         case failed
+        /// The send's acceptance is UNKNOWN (the connection died or
+        /// timed out mid-flight — the broker may have accepted). The
+        /// honest state: never claims non-delivery, and a re-send
+        /// REQUIRES an explicit user decision (it may duplicate).
+        case ambiguous
+        /// Removed (review round 6, finding 4): the text-correlation
+        /// interim state. send.confirmed is now the only delivery
+        /// authority, so there is nothing left for a text match to
+        /// claim — an unproven echo stays .sending, honestly.
     }
 
     let id: UUID
@@ -63,13 +74,16 @@ struct AgentChatOutgoingMessage: Sendable, Equatable, Identifiable {
     let images: [AgentChatOutgoingImage]
     /// The send's wall-clock moment: the echo's chronological anchor.
     let sentAt: Date
-    /// The registration the requestKey was minted against (review
-    /// gap 5): the broker's dedup cache is bounded and cleared on
-    /// generation change, so key reuse is only safe while this still
-    /// matches the live registration.
     let sendRegistration: AgentChatRegistrationSnapshot?
     var state: DeliveryState = .sending
-    /// The honest failure copy when state == .failed (retryable).
+    /// The AUTHORITATIVE correlation (delivery contract, round 5):
+    /// the committed record id the adapter bound to this send's
+    /// requestKey via send.confirmed. Present exactly when state is
+    /// .sent — the echo drops the moment the committed page carries
+    /// THIS record (no text/baseline guessing).
+    var confirmedRecordID: String?
+    /// The honest failure copy when state == .failed or .ambiguous
+    /// (retryable / re-send decision respectively).
     var failureMessage: String?
 
     init(
@@ -423,8 +437,6 @@ final class AgentChatStore {
                     params: .object(["cursor": .string(currentCursor)])))
             let page = try Self.decode(AgentChatPage.self, from: value)
             await prependPage(page)
-            olderCursor = page.olderCursor
-            hasOlder = page.olderCursor != nil
         } catch let error as AgentChatError where error.requiresFreshOpen {
             await start()
         } catch is CancellationError {
@@ -516,51 +528,59 @@ final class AgentChatStore {
 
     /// Delivers one user message with the honest delivery lifecycle:
     /// the optimistic echo renders IMMEDIATELY as sending (item 11);
-    /// the prompt.send round-trip then confirms or fails it (item 1).
-    /// A failure keeps the echo as failed+retryable — NEVER silent
-    /// (the real silent-loss escalation: prompt.send throwing into a
-    /// swallowed catch, a dead channel, or a broker-offline path all
-    /// land here visibly). The requestKey dedups retries within this
-    /// store's life; a retry reuses the SAME key so the broker cannot
+    /// the prompt.send round-trip then fails it visibly on a broker
+    /// NO. A failure keeps the echo as failed+retryable — NEVER
+    /// silent. The requestKey dedups retries within this store's
+    /// life; a retry reuses the SAME key so the broker cannot
     /// double-deliver.
+    ///
+    /// Delivery contract (round 5): the wire ack alone does NOT mark
+    /// the echo .sent — acceptance means the broker QUEUED the prompt,
+    /// not that the agent committed a user record for it. The
+    /// authoritative transition is the adapter's send.confirmed event
+    /// (requestKey → committed record id), consumed in applyEvent. So
+    /// a clean round-trip leaves the echo .sending; until send.confirmed
+    /// lands it is NEVER declared sent.
     @discardableResult
     func send(
         _ text: String, images: [AgentChatOutgoingImage] = []
     ) async throws -> AgentChatOutgoingMessage {
+        // Review round 6, finding 4: no text/baseline correlation —
+        // send.confirmed is the only delivery authority. The echo
+        // starts .sending and only send.confirmed proves it.
         let echo = AgentChatOutgoingMessage(
             id: UUID(), requestKey: UUID().uuidString, text: text, images: images,
             sendRegistration: Self.snapshot(of: registration))
         outgoing.append(echo)
         do {
             try await sendOnWire(echo)
-            markOutgoing(id: echo.id, state: .sent)
+            // Accepted, not committed: NO state change on the ack —
+            // the echo stays .sending until send.confirmed binds its
+            // record (see the doc above).
             return echo
         } catch {
+            let state: AgentChatOutgoingMessage.DeliveryState =
+                Self.isAmbiguousLoss(error) ? .ambiguous : .failed
             markOutgoing(
-                id: echo.id,
-                state: .failed,
+                id: echo.id, state: state,
                 message: Self.sendFailureText(error))
             throw error
         }
     }
 
-    /// Retries a failed echo. Key safety (review gap 5): the requestKey
-    /// is reused ONLY while the live registration still matches the
-    /// one the key was minted against — the adapter's dedup cache is
-    /// bounded and cleared on generation change, so reusing a key
-    /// across churn could double-deliver. On churn the retry mints a
-    /// FRESH key (a new user action by definition; the old send's
-    /// acceptance state is reconciled by the history page).
-    func retry(_ message: AgentChatOutgoingMessage) async throws {
-        guard let index = outgoing.firstIndex(where: { $0.id == message.id }),
+    /// Retries a FAILED echo (re-review round 3, finding 3): the only
+    /// duplicate-SAFE retry — the broker ANSWERED NO (or the write
+    /// never left), so replaying is always safe. The key rules hold:
+    /// same registration → SAME key (the broker dedups the replay);
+    /// churn → fresh key (the old dedup cache reset; the original was
+    /// rejected, so a fresh key cannot duplicate it).
+    func retry(echoID: UUID) async throws {
+        guard let index = outgoing.firstIndex(where: { $0.id == echoID }),
             outgoing[index].state == .failed
         else { return }
         var echo = outgoing[index]
         let liveRegistration = Self.snapshot(of: registration)
         if echo.sendRegistration != liveRegistration {
-            // Generation churn (or a first send that never matched):
-            // the old key's dedup guarantee is gone. Fresh key, scoped
-            // to the live registration.
             echo = AgentChatOutgoingMessage(
                 id: echo.id, requestKey: UUID().uuidString, text: echo.text,
                 images: echo.images, sendRegistration: liveRegistration)
@@ -569,13 +589,62 @@ final class AgentChatStore {
         markOutgoing(id: echo.id, state: .sending, message: nil)
         do {
             try await sendOnWire(echo)
-            markOutgoing(id: echo.id, state: .sent)
+            // Delivery contract (round 5): acceptance ≠ commitment —
+            // NO state change on the ack; send.confirmed binds the
+            // record.
         } catch {
+            let state: AgentChatOutgoingMessage.DeliveryState =
+                Self.isAmbiguousLoss(error) ? .ambiguous : .failed
             markOutgoing(
-                id: echo.id,
-                state: .failed,
+                id: echo.id, state: state,
                 message: Self.sendFailureText(error))
             throw error
+        }
+    }
+
+    /// Re-sends an AMBIGUOUS echo (re-review round 3, finding 3):
+    /// acceptance was UNKNOWN, so a re-send MAY DUPLICATE — this is
+    /// the explicit user decision, not a "safe retry". The action
+    /// requires its own affordance copy ("Send again — may
+    /// duplicate"); the fresh key bypasses dedup by design.
+    func resendAcknowledgingPossibleDuplicate(echoID: UUID) async throws {
+        guard let index = outgoing.firstIndex(where: { $0.id == echoID }),
+            outgoing[index].state == .ambiguous
+        else { return }
+        let old = outgoing[index]
+        let echo = AgentChatOutgoingMessage(
+            id: old.id, requestKey: UUID().uuidString, text: old.text,
+            images: old.images,
+            sendRegistration: Self.snapshot(of: registration))
+        outgoing[index] = echo
+        markOutgoing(id: echo.id, state: .sending, message: nil)
+        do {
+            try await sendOnWire(echo)
+            // Delivery contract (round 5): acceptance ≠ commitment —
+            // NO state change on the ack; send.confirmed binds the
+            // record.
+        } catch {
+            let state: AgentChatOutgoingMessage.DeliveryState =
+                Self.isAmbiguousLoss(error) ? .ambiguous : .failed
+            markOutgoing(
+                id: echo.id, state: state,
+                message: Self.sendFailureText(error))
+            throw error
+        }
+    }
+
+
+    /// Whether a send failure leaves acceptance UNKNOWN: the wire
+    /// died or the answer timed out MID-FLIGHT (the broker may have
+    /// accepted). A broker error response (the server answered NO)
+    /// is a clean failure.
+    private static func isAmbiguousLoss(_ error: any Error) -> Bool {
+        guard let error = error as? AgentChatError else { return false }
+        switch error {
+        case .connectionClosed, .timedOut:
+            return true
+        default:
+            return false
         }
     }
 
@@ -646,14 +715,42 @@ final class AgentChatStore {
         // first version silently dropped this — every echo stayed
         // .sending forever; review gap 1).
         guard let index = outgoing.firstIndex(where: { $0.id == id }) else { return }
+        // Review round 6, finding 1: .sent is PROVEN (send.confirmed
+        // bound the committed record) — it is MONOTONIC. A late error
+        // on the same echo (a retry/resend racing the confirm, a late
+        // failure write) must never demote it: the agent DID commit
+        // the record, and a demotion would resurrect the
+        // retry/may-duplicate affordance for a delivered message.
+        if outgoing[index].state == .sent, state != .sent {
+            return
+        }
         outgoing[index].state = state
-        outgoing[index].failureMessage = state == .failed ? message : nil
+        // Re-review round 3, finding 2: BOTH .failed and .ambiguous
+        // carry their message — the ambiguous explanation must render
+        // (it was being cleared). Only the transient states clear it.
+        switch state {
+        case .failed, .ambiguous:
+            outgoing[index].failureMessage = message
+        case .sending, .sent:
+            break
+        }
         if state == .failed {
             lastSendFailure = message
-        } else if outgoing.allSatisfy({ $0.state != .failed }) {
+        } else if outgoing.allSatisfy({
+            $0.state != .failed && $0.state != .ambiguous
+        }) {
             // A later success supersedes the stale failure banner.
             lastSendFailure = nil
         }
+    }
+
+    /// Testing seam (review round 6, finding 1): exposes the
+    /// monotonic markOutgoing to unit tests — the ack-late-error race
+    /// proof drives a late failure write against a proven .sent echo.
+    func markOutgoingForTesting(
+        id: UUID, state: AgentChatOutgoingMessage.DeliveryState, message: String? = nil
+    ) {
+        markOutgoing(id: id, state: state, message: message)
     }
 
     private static func sendFailureText(_ error: any Error) -> String {
@@ -1010,6 +1107,8 @@ final class AgentChatStore {
             recordResolution(AgentChatInteractionResolution(
                 requestId: requestId, wireOutcome: outcome,
                 wireSource: source, questionText: questionText))
+        case .sendConfirmed(let requestKey, let recordId):
+            applySendConfirmed(requestKey: requestKey, recordId: recordId)
         }
     }
 
@@ -1029,6 +1128,45 @@ final class AgentChatStore {
                 socketPath: archive.socketPath,
                 sessionFile: archive.sessionFile,
                 resolutions: interactionResolutions)
+        }
+    }
+
+    /// Delivery contract (round 5): the authoritative requestKey→record
+    /// correlation. The adapter popped this send's key from its FIFO
+    /// when the agent COMMITTED the user record, so the echo's delivery
+    /// is proven — transition to .sent and bind the record id so the
+    /// echo drops the moment the committed page carries THAT record.
+    /// Any state with a matching key resolves: a .sending echo is the
+    /// normal case; an .ambiguous echo (lost ACK) is proven
+    /// delivered — the may-duplicate affordance goes away. A .failed
+    /// echo never sees its key confirmed (the adapter rejected the
+    /// send BEFORE queueing the key), so no special-casing is needed.
+    ///
+    /// Review round 6, finding 2: the event and the history page race.
+    /// When the PAGE came first, the record is already in held content
+    /// — reconcile immediately so the echo drops on the event instead
+    /// of lingering (visible duplicate) until the NEXT refresh.
+    private func applySendConfirmed(requestKey: String, recordId: String) {
+        guard let index = outgoing.firstIndex(where: {
+            $0.requestKey == requestKey
+        }) else {
+            // Unknown key (echo already dropped via reconcile, a
+            // retry minted a fresh key, or a pre-contract echo): the
+            // durable marker still binds the pair broker-side; nothing
+            // to transition here.
+            return
+        }
+        outgoing[index].state = .sent
+        outgoing[index].confirmedRecordID = recordId
+        outgoing[index].failureMessage = nil
+        // Page-before-event: drop the echo now if the confirmed record
+        // is already rendered. Same exact-id rule as the page path
+        // (AgentChatEchoReconcile) — the held content IS the page's
+        // message set, so this is the same drop, just triggered by the
+        // event instead of a fresh page.
+        let confirmedID = AgentChatMapper.stableID(for: recordId)
+        if content.messages.contains(where: { $0.id == confirmedID }) {
+            reconcileOutgoing(against: content.messages)
         }
     }
 
@@ -1090,7 +1228,15 @@ final class AgentChatStore {
     /// Maps page items into ChatContent. References (oversized items)
     /// read their full detail BEFORE rendering; a failed read skips the
     /// item rather than render a partial as complete.
+    ///
+    /// The page's olderCursor OWNS the paging window state: a recent
+    /// page (history.open) installs it (the v2 regression — the broker
+    /// cutover dropped this, so hasOlder stayed false and the top
+    /// sentinel never even mounted); an older page (history.before)
+    /// advances it. olderCursor nil = terminal (no more history).
     private func applyPage(_ page: AgentChatPage, replaceRecent: Bool) async {
+        olderCursor = page.olderCursor
+        hasOlder = page.olderCursor != nil
         var messages: [ChatMessage] = []
         for item in page.items {
             var mapped = item
@@ -1112,12 +1258,21 @@ final class AgentChatStore {
         if replaceRecent {
             content = ChatContent(messages: messages, toolResults: results)
         } else {
-            content.messages.append(contentsOf: messages)
-            content.toolResults.append(contentsOf: results)
+            // Older pages arrive chronologically (the adapter walks
+            // newest→oldest and reverses into page order): prepend
+            // ABOVE the current window, never append.
+            content.messages.insert(
+                contentsOf: messages, at: 0)
+            content.toolResults.insert(
+                contentsOf: results, at: 0)
         }
         if replaceRecent {
             reconcileOutgoing(against: messages)
         }
+    }
+
+    private func prependPage(_ page: AgentChatPage) async {
+        await applyPage(page, replaceRecent: false)
     }
 
     /// Echo → committed reconciliation: delegates to the pure
@@ -1125,17 +1280,10 @@ final class AgentChatStore {
     private func reconcileOutgoing(against messages: [ChatMessage]) {
         outgoing = AgentChatEchoReconcile.reconcile(
             echoes: outgoing, committed: messages)
-        if outgoing.allSatisfy({ $0.state != .failed }) {
+        if outgoing.allSatisfy({ $0.state != .failed && $0.state != .ambiguous }) {
             lastSendFailure = nil
         }
     }
-
-    /// Older pages prepend (above the rendered window).
-    private func prependPage(_ page: AgentChatPage) async {
-        await applyPage(page, replaceRecent: false)
-    }
-
-    // MARK: Errors
 
     private func applyError(_ error: AgentChatError) {
         switch error {
@@ -1182,48 +1330,39 @@ final class AgentChatStore {
     }
 }
 
-/// The echo→committed reconciliation as a PURE function (review gap 3
-/// regression proof, unit-testable without a broker channel): v1's
-/// committed records carry no client echo id, so correlation is
-/// text-based — but POSITIONAL, not set-membership:
-/// - an echo only matches a committed user record whose timestamp is
-///   at/after the echo's send (an older identical 'Continue' can
-///   never eat a newer echo);
-/// - each committed record consumes AT MOST ONE echo, oldest echo
-///   first (two identical sends never collapse into one drop);
-/// - failed echoes NEVER drop (the retry affordance stays).
-/// Records without a parseable timestamp are eligible (the page's
-/// ordering is chronological; the time check refines, never gates).
+/// The echo→committed reconciliation as a PURE function (unit-testable
+/// without a broker channel). Review round 6, finding 4: the
+/// text/baseline/ledger heuristic is NO LONGER a delivery authority —
+/// the delivery contract (send.confirmed) is the ONLY proof of
+/// delivery. An echo's ONLY way out of the outgoing list is:
+///   - .sent (send.confirmed bound confirmedRecordID) AND the
+///     committed page carrying THAT record (exact stableID match) —
+///     the committed record renders in its own position; or
+///   - it is a failed/ambiguous affordance (kept for retry/re-send).
+/// A text match alone claims NOTHING: an unmatched echo stays .sending
+/// until its send.confirmed lands (a broker WITHOUT the contract
+/// surfaces the honest "still sending" state, never a guess).
 enum AgentChatEchoReconcile: Sendable {
+    /// One reconcile step.
     static func reconcile(
-        echoes: [AgentChatOutgoingMessage], committed: [ChatMessage]
+        echoes: [AgentChatOutgoingMessage],
+        committed: [ChatMessage]
     ) -> [AgentChatOutgoingMessage] {
-        var unmatched: [(text: String, at: Date?)] = []
-        for message in committed where message.role == .user {
-            let text = message.blocks.compactMap {
-                if case .text(let value) = $0 { return value }
-                return nil
-            }.joined(separator: "\n")
-            guard !text.isEmpty else { continue }
-            unmatched.append((text, message.timestamp))
-        }
-        guard !unmatched.isEmpty else { return echoes }
         var survivors: [AgentChatOutgoingMessage] = []
-        for echo in echoes.sorted(by: { $0.sentAt < $1.sentAt }) {
-            if echo.state == .failed {
+        for echo in echoes {
+            if echo.state == .sent, let confirmed = echo.confirmedRecordID {
+                if committed.contains(where: {
+                    AgentChatMapper.stableID(for: confirmed) == $0.id
+                }) {
+                    continue  // dropped: the real record renders
+                }
                 survivors.append(echo)
                 continue
             }
-            if let index = unmatched.firstIndex(where: { record in
-                record.text == echo.text
-                    && (record.at == nil
-                        || record.at! >= echo.sentAt.addingTimeInterval(-1))
-            }) {
-                unmatched.remove(at: index)
-                // Consumed: the committed record replaces the echo.
-            } else {
-                survivors.append(echo)
-            }
+            // Every other state stays: .sending (no proof yet — the
+            // ONLY delivery authority is send.confirmed), .failed and
+            // .ambiguous (their retry/re-send affordances must stay).
+            survivors.append(echo)
         }
         return survivors
     }

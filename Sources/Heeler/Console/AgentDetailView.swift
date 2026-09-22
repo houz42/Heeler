@@ -428,16 +428,27 @@ struct AgentDetailView: View {
                     // as one structured prompt.send.
                     try await store.send(text, images: images)
                 },
-                retrySend: { echoText in
-                    // Review gap 2: the failed bubble's retry tap. The
-                    // text is the echo's own text (the seam's
-                    // identifier — the projection row carries it).
-                    guard let store = brokerChat,
-                        let echo = store.outgoing.first(where: {
-                            $0.text == echoText && $0.state == .failed
-                        })
-                    else { return }
-                    try await store.retry(echo)
+                retrySend: { echoID in
+                    // Re-review round 3, findings 1+3: the row's
+                    // messageID IS the original echo UUID. The STORE
+                    // routes by the echo's own state: .failed → the
+                    // duplicate-safe retry (same key); .ambiguous →
+                    // the explicit may-duplicate resend (fresh key,
+                    // user decision).
+                    guard let store = brokerChat else { return }
+                    if let echo = store.outgoing.first(where: {
+                        $0.id == echoID
+                    }) {
+                        switch echo.state {
+                        case .failed:
+                            try await store.retry(echoID: echoID)
+                        case .ambiguous:
+                            try await store
+                                .resendAcknowledgingPossibleDuplicate(echoID: echoID)
+                        case .sending, .sent:
+                            break
+                        }
+                    }
                 },
                 pendingUnsupported: !store.askSupported,
                 authorLabel: "Meadow · \(agent.agent.kind.lowercased())",
@@ -550,22 +561,46 @@ struct AgentDetailView: View {
             var blocks: [ChatBlock] = [.text(echo.text)]
             // Structured images ride the echo too (review gap 7): the
             // sent image previews as a real image block on the user's
-            // own bubble (the correct destination, never a draft-
-            // inbox surface).
-            for image in echo.images {
-                blocks.append(.image(ChatImageRef(
-                    ref: image.ref ?? image.data.map { _ in echo.id.uuidString } ?? "",
-                    mimeType: image.mimeType,
-                    byteLength: image.byteLength)))
+            // own bubble. Projection lives in
+            // AgentChatMapper.echoImageBlocks (re-review round 5,
+            // inline-ref finding): an inline-sent image carries its
+            // REAL BYTES (the renderer draws them directly; no
+            // fabricated fetchable id), and each image gets its OWN
+            // "inline:\(echoID)-\(index)" ref so multiple images in
+            // one echo stay DISTINCT rows.
+            blocks.append(
+                contentsOf: AgentChatMapper.echoImageBlocks(
+                    echoID: echo.id, images: echo.images))
+            switch echo.state {
+            case .failed:
+                // The broker answered NO: a replay is duplicate-SAFE
+                // (same key within the registration — the broker
+                // dedups).
+                if let message = echo.failureMessage {
+                    blocks.append(.notice(
+                        text: "\(message) Tap to retry.",
+                        level: "error"))
+                }
+            case .ambiguous:
+                // Re-review round 4, finding 3: acceptance UNKNOWN —
+                // the re-send MAY DUPLICATE. Distinct "resend" level
+                // so the AX hint names the risk, never "retry".
+                if let message = echo.failureMessage {
+                    blocks.append(.notice(
+                        text: "\(message) Send again — may duplicate.",
+                        level: "resend"))
+                }
+            case .sending, .sent:
+                break
             }
-            if let message = echo.failureMessage, echo.state == .failed {
-                blocks.append(.notice(
-                    text: "\(message) Tap to retry.",
-                    level: "error"))
-            }
+            // Re-review round 3, finding 1: the message id IS the
+            // ORIGINAL outgoing UUID — no derivation (a derived id
+            // broke the retry lookup: stableID("echo:"+id) ≠ id).
+            // The echo id is already a unique UUID; using it directly
+            // makes the retry row's messageID exactly store.echo.id.
             content.messages.append(
                 ChatMessage(
-                    id: AgentChatMapper.stableID(for: "echo:\(echo.id.uuidString)"),
+                    id: echo.id,
                     role: .user, blocks: blocks, timestamp: echo.sentAt))
         }
         // Provisional stream tails AFTER the echoes: the reply follows
