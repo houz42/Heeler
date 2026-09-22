@@ -43,6 +43,11 @@ enum UITestApp {
         /// The chat surface with a pending multi-select ask (v2 accent
         /// proofs: Confirm + selected-option chip in both appearances).
         case chatPendingAsk
+        /// The chat surface with special sections in the transcript (v2
+        /// special-sections proofs: chip / L0 hide / expansion).
+        case chatSpecialSections
+
+
 
         var launchArguments: [String] {
             switch self {
@@ -57,6 +62,8 @@ enum UITestApp {
                 return ["--demo-screenshots", "--demo-screenshots-settings"]
             case .chatPendingAsk:
                 return ["--demo-screenshots", "--demo-chat-pending-ask"]
+            case .chatSpecialSections:
+                return ["--demo-screenshots", "--demo-chat-special-sections"]
             }
         }
     }

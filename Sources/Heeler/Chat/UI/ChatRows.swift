@@ -50,6 +50,10 @@ struct ChatRowView: View {
             // Item 19: the quiet system row — never dropped; the wash
             // strengthens with the level.
             ChatNoticeRow(text: text, level: level)
+        case .specialSection(let section):
+            // Level-dependent initial state is the screen's call; the
+            // plain row renderer (previews) keeps the chip collapsed.
+            ChatSpecialSectionRow(section: section)
         case .resolvedAsk(let ask):
             ChatResolvedAskRow(ask: ask)
         case .image:
@@ -451,6 +455,96 @@ struct ChatResolvedAskRow: View {
 }
 
 
+// MARK: - Special sections (system notices & IRC)
+
+/// A `<system-notice>`/`<irc>` section: chrome, not conversation, so
+/// it renders as a SHORT SUMMARY chip — a capsule with the kind's
+/// label and a one-line excerpt — never the full body inline. Tap
+/// toggles the full body below the chip; `initiallyExpanded` is set
+/// by the screen from the detail level (L3 opens the body, lower
+/// levels keep the chip collapsed). The accent (green) carries the
+/// section identity: icon + label + the capsule's accent wash, the
+/// same quiet accent-bar language the user-turn rail and pending
+/// card speak. The body is terminal-ish output — plain monospace
+/// via `ChatBlockText(.output)`, never markdown (a fenced block
+/// inside a notice is data, not markup).
+struct ChatSpecialSectionRow: View {
+    let section: ChatSpecialSection
+    /// True = the full body renders below the chip (the screen's
+    /// level wiring: L3 starts expanded, lower levels collapsed).
+    var initiallyExpanded: Bool = false
+
+    @State private var expanded: Bool
+    @Environment(\.colorScheme) private var colorScheme
+    private var isDark: Bool { colorScheme == .dark }
+
+    init(section: ChatSpecialSection, initiallyExpanded: Bool = false) {
+        self.section = section
+        self.initiallyExpanded = initiallyExpanded
+        self._expanded = State(initialValue: initiallyExpanded)
+    }
+
+    private var accent: Color { .accentColor }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: section.kind.icon)
+                    .imageScale(.small)
+                    .foregroundStyle(accent)
+                Text(section.kind.label)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(accent)
+                    .fixedSize()
+                Text(section.summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+                Image(
+                    systemName: expanded
+                        ? "chevron.up" : "chevron.down")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                accent.opacity(isDark ? 0.16 : 0.07),
+                in: Capsule())
+            .contentShape(Capsule())
+            .onTapGesture {
+                withAnimation(.snappy(duration: 0.2)) {
+                    expanded.toggle()
+                }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                "\(section.kind.label): \(section.summary)")
+            .accessibilityHint(
+                expanded ? "Collapses the full text" : "Expands the full text")
+
+            if expanded {
+                // Accent bar rail + the verbatim body: the same
+                // accent-bar shape the user-turn rail uses, so the
+                // expanded section still reads as chrome.
+                HStack(alignment: .top, spacing: 8) {
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(accent)
+                        .frame(width: 3)
+                    ChatBlockText(section.body, style: .output)
+                }
+                .padding(.vertical, 2)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+
 // MARK: - Linkified chat text (openers)
 
 /// The linkified form of `ChatBlockText`: same layout, with the
@@ -545,11 +639,19 @@ struct LinkifiedChatRow: View {
     /// FAILED-echo error notice row tappable (retry the send); nil keeps
     /// the row inert (previews, unwired surfaces).
     var onRetry: (() -> Void)? = nil
+    /// The pane's detail level: L3 starts special-section chips
+    /// expanded (the reader asked for everything); lower levels keep
+    /// them collapsed.
+    var detailLevel: DetailLevel = .l2
 
-    init(row: ChatRow, router: OpenRouterCore, onRetry: (() -> Void)? = nil) {
+    init(
+        row: ChatRow, router: OpenRouterCore,
+        onRetry: (() -> Void)? = nil, detailLevel: DetailLevel = .l2
+    ) {
         self.row = row
         self.router = router
         self.onRetry = onRetry
+        self.detailLevel = detailLevel
     }
 
     var body: some View {
@@ -563,6 +665,10 @@ struct LinkifiedChatRow: View {
             ) {
                 ChatLinkText(text, style: .thinking, router: router)
             }
+        case .specialSection(let section):
+            ChatSpecialSectionRow(
+                section: section,
+                initiallyExpanded: detailLevel >= .l3)
         case .notice(_, _, _, let level) where level == "error" && onRetry != nil:
             // A failed send's honest failure copy: TAP = retry.
             Button {
@@ -778,6 +884,24 @@ private enum ChatRowPreviewFixture {
                     ]))),
                 .text(
                     "The retry logic drops the cart because `PaymentCoordinator` resets state on the *first* attempt. I'll preserve the cart across retries and re-run `CheckoutFlowTests`."),
+            ]),
+            ChatMessage(role: .assistant, blocks: [
+                .text(
+                    """
+                    Before the reply, the harness injected two special \
+                    sections into this turn:
+
+                    <system-notice>Skill "shell-qa" is now active for this \
+                    session. Commands run through the dev-box shell QA \
+                    profile.</system-notice>
+
+                    <irc><Main> The retry fix looks good from my side — \
+                    go ahead and ship it when tests pass.
+                    </irc>
+
+                    With the sections extracted, this prose continues \
+                    as ordinary conversation.
+                    """),
             ]),
             ChatMessage(role: .assistant, blocks: [
                 .text("All 18 tests pass. Ready to commit when you are."),

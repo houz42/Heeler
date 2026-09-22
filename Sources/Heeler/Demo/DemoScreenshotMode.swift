@@ -41,9 +41,16 @@
             /// accent-bearing pending-card capture surface (Confirm
             /// button + selected-option chip). v2 accent proofs.
             case chatPendingAsk
+            /// The chat surface with special sections in the transcript
+            /// (a `<system-notice>` and an `<irc>` block) — the
+            /// v2 special-sections capture surface. The initial detail
+            /// level rides `--demo-detail-level=<n>`.
+            case chatSpecialSections
+
 
             static func fromArguments() -> Route {
                 let arguments = ProcessInfo.processInfo.arguments
+                if arguments.contains(chatSpecialSectionsLaunchArgument) { return .chatSpecialSections }
                 if arguments.contains(chatPendingAskLaunchArgument) { return .chatPendingAsk }
                 if arguments.contains(hostListLaunchArgument) { return .hostList }
                 if arguments.contains(hostDetailProbingLaunchArgument) { return .hostDetailProbing }
@@ -56,6 +63,7 @@
         static let hostListLaunchArgument = "--demo-host-list"
         static let hostDetailProbingLaunchArgument = "--demo-host-detail-probing"
         static let chatPendingAskLaunchArgument = "--demo-chat-pending-ask"
+        static let chatSpecialSectionsLaunchArgument = "--demo-chat-special-sections"
         static let hostDetailPickLaunchArgument = "--demo-host-detail-pick"
 
         /// The multi-path demo Host: the same machine over LAN and VPN.
@@ -150,6 +158,8 @@
                 multipathDetail(midProbe: false)
             case .chatPendingAsk:
                 chatPendingAskSurface
+            case .chatSpecialSections:
+                chatSpecialSectionsSurface
             }
         }
 
@@ -205,6 +215,64 @@
                 authorLabel: "Meadow · omp",
                 onAskAnswer: { _, _ in },
                 onAskCancel: { _ in })
+        }
+
+        /// The special-sections capture surface: ChatScreen with a
+        /// realistic transcript carrying BOTH tags (a harness-injected
+        /// `<system-notice>` mid-turn and an `<irc>` peer message
+        /// near the end), so the capture suite pins the chip render,
+        /// the L0 hide, and the tap-through expansion without a
+        /// backend. The initial detail level rides
+        /// `--demo-detail-level=<n>` (default L1 — the chip level).
+        private var chatSpecialSectionsSurface: some View {
+            ChatScreen(
+                paneID: "demo:special-sections",
+                agentName: "checkout",
+                state: .idle,
+                content: ChatContent(
+                    messages: [
+                        ChatMessage(role: .user, blocks: [
+                            .text("Ship the checkout fix — run the **targeted** tests first."),
+                        ]),
+                        ChatMessage(role: .assistant, blocks: [
+                            .text(
+                                """
+                                I extracted the retry logic into `PaymentCoordinator` \
+                                so the cart survives a failed attempt.
+
+                                <system-notice>Skill "shell-qa" is now active for this \
+                                session. Commands run through the dev-box shell QA \
+                                profile.
+                                Exit code semantics: step logs record their own \
+                                status.</system-notice>
+
+                                While validating the fix, a peer weighed in:
+
+                                <irc><Main> The retry fix looks good from my side — \
+                                go ahead and ship it when tests pass.</irc>
+
+                                All 18 targeted tests pass. Ready to commit when \
+                                you are.
+                                """),
+                        ]),
+                    ]),
+                initialLevel: Self.demoDetailLevel,
+                changeLevel: { _, _ in },
+                deliver: { _ in },
+                authorLabel: "Meadow · omp")
+        }
+
+        /// The `--demo-detail-level=<n>` argument's value (0–3);
+        /// defaults to L1 so an unspecified run still shows chips.
+        private static var demoDetailLevel: DetailLevel {
+            for argument in ProcessInfo.processInfo.arguments {
+                guard argument.hasPrefix("--demo-detail-level="),
+                    let raw = Int(argument.dropFirst("--demo-detail-level=".count)),
+                    let level = DetailLevel(rawValue: raw)
+                else { continue }
+                return level
+            }
+            return .l1
         }
 
         private var consoleRoot: some View {
