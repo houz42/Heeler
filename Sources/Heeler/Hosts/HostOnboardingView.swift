@@ -22,6 +22,9 @@ struct HostOnboardingView: View {
     /// LIST switches the route out-of-band, this input changes and the
     /// open detail reconciles — both pages read one source of truth.
     let activeRouteInput: String?
+    /// The unified route-switch action (persist + redial), shared with
+    /// the Hosts list's rows — see the init doc for the contract.
+    let switchRoute: (@MainActor @Sendable (String) async -> Void)?
     @State private var store: HostOnboardingStore
     @State private var isEditing = false
     @State private var isConfirmingHostKeyReplacement = false
@@ -45,6 +48,14 @@ struct HostOnboardingView: View {
         /// The process-wide observable active-route store: the detail's
         /// taps broadcast through it so the Hosts list's marks re-render.
         activeRouteStore: HostActiveRouteStore? = nil,
+        /// The SAME route-switch action the Hosts list's rows run
+        /// (persist through the shared store + redial via the Console).
+        /// A route tap on this page runs exactly that, so both entry
+        /// points (root Hosts page, Console Hosts sheet) and both
+        /// surfaces behave identically. nil keeps the page's own
+        /// fallback (store persist + `retryConnection`, or persist-only
+        /// where no Console exists: previews, demo compositions).
+        switchRoute: (@MainActor @Sendable (String) async -> Void)? = nil,
         /// Pre-built store override for demo screenshots; nil builds the
         /// production store keyed to this Host.
         store: HostOnboardingStore? = nil
@@ -56,6 +67,7 @@ struct HostOnboardingView: View {
         self.retryConnection = retryConnection
         self.connectedAddress = connectedAddress
         self.activeRouteInput = activeRouteInput
+        self.switchRoute = switchRoute
         _store = State(
             initialValue: store ?? HostOnboardingStore(
                 host: host,
@@ -354,16 +366,23 @@ struct HostOnboardingView: View {
         .accessibilityIdentifier("host-detail-route-\(address)")
     }
 
-    /// ONE route-row tap, the SAME semantics as the list (review finding:
-    /// the two surfaces must not diverge): persist the pick through the
-    /// shared store, then reconnect through the Console's own retry path
-    /// — the identical persist + retryHost action a list-card tap runs.
-    /// With a pick pending (several paths just answered), the tap IS the
-    /// pick and the onboarding connect plays that role. Without a
-    /// Console behind this page (previews, demo), the tap persists only.
+    /// ONE route-row tap, the SAME action the Hosts list's rows run
+    /// (review round 2: every entry point must behave identically —
+    /// persist through the shared store, then redial via the Console).
+    /// When the presenting list supplies `switchRoute` (both production
+    /// entry points do), the tap runs exactly that closure — the very
+    /// same code a list-card tap executes. With a pick pending (several
+    /// paths just answered), the tap IS the pick and the onboarding
+    /// connect plays that role. Without either (previews, demo), the
+    /// fallback persists and redials through this page's own
+    /// retryConnection, or persists only where no Console exists.
     private func tapRoute(_ address: String) {
         if store.pendingAddressChoice?.contains(address) == true {
             Task { await store.chooseAddress(address) }
+        } else if let switchRoute {
+            Task { @MainActor in
+                await switchRoute(address)
+            }
         } else {
             store.setActiveRoute(address)
             Task { @MainActor in

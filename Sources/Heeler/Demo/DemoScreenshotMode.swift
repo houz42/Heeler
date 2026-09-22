@@ -728,7 +728,7 @@
                             // connecting state before the honest failure
                             // lands (a real unreachable dial takes
                             // seconds; the fixture bounds it).
-                            try? await Task.sleep(for: .milliseconds(2_500))
+                            try? await Task.sleep(for: .milliseconds(6_000))
                             throw TransportError.sshUnreachable(
                                 detail: "No demo profile for Host.")
                         }

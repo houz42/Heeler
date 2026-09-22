@@ -218,7 +218,15 @@ struct HostListView: View {
                             $0.activeRoute(
                                 hostID: id, candidates: host.candidateAddresses)
                         } ?? host.address,
-                        activeRouteStore: activeRouteStore)
+                        activeRouteStore: activeRouteStore,
+                        // The SAME action the list's rows run, scoped to
+                        // THIS host — the detail's route taps execute the
+                        // identical persist + redial from either entry
+                        // point (review round 2: the root Hosts page must
+                        // not diverge from the Console sheet).
+                        switchRoute: switchRoute.map { action in
+                            { address in await action(id, address) }
+                        })
                         .id(host)
                 } else {
                     ContentUnavailableView("Host removed", systemImage: "server.rack")

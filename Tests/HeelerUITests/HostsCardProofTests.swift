@@ -679,6 +679,51 @@ final class HostsCardProofTests: XCTestCase {
             "the detail must show the route the LIST tapped as active: "
                 + detailVpnRow.label)
         captureScreenshot(app, "list-detail-active-agree", lifetime: .keepAlways)
+
+        // Review round 2: a route tap on the DETAIL — opened from this
+        // list, the root-style entry point — must run the SAME
+        // persist + redial action the list's rows run, never a
+        // preference-only no-op. Tap the Home LAN row on the detail;
+        // the Console redials through it (~2.5 s fixture window).
+        let detailLanRow = app.descendants(matching: .any)
+            .matching(
+                NSPredicate(
+                    format: "identifier == 'host-detail-route-field.lan.demo.invalid'"))
+            .firstMatch
+        waitToExist(detailLanRow)
+        detailLanRow.tap()
+
+        // Back on the list: the DETAIL's tap launched the dial — the
+        // Home LAN row (now active) shows the connecting spinner, the
+        // same in-flight signal a list-card tap produces.
+        let back = app.navigationBars.buttons.firstMatch
+        waitToExist(back)
+        back.tap()
+        let lanSpinner = app.descendants(matching: .any)
+            .matching(
+                NSPredicate(
+                    format: "identifier == 'host-route-connecting-field.lan.demo.invalid'"))
+            .firstMatch
+        XCTAssertTrue(
+            lanSpinner.waitForExistence(timeout: UITestTimeouts.standard),
+            "the DETAIL's route tap must drive the Console redial — the "
+                + "tapped row's connecting spinner never appeared on the list")
+        captureScreenshot(app, "detail-tap-redial-connecting", lifetime: .keepAlways)
+
+        // The dial fails honestly (no demo profile): the spinner yields
+        // to the failed dot — the detail tap's connect lifecycle is
+        // identical to a list tap's.
+        let spinnerGone = NSPredicate(format: "exists == 0")
+        expectation(for: spinnerGone, evaluatedWith: lanSpinner)
+        waitForExpectations(timeout: UITestTimeouts.standard)
+        let fieldHeading = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH 'Open details for Field Laptop'")
+        ).firstMatch
+        waitToExist(fieldHeading)
+        let unavailable = NSPredicate(format: "label CONTAINS 'Unavailable'")
+        expectation(for: unavailable, evaluatedWith: fieldHeading)
+        waitForExpectations(timeout: UITestTimeouts.standard)
+        captureScreenshot(app, "detail-tap-redial-failed", lifetime: .keepAlways)
     }
 
     /// The route-switch connect lifecycle, driven through the real
