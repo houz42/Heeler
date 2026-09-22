@@ -21,12 +21,20 @@ struct AgentDetailView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var composer: AgentComposerStore
     @State private var attach: AgentAttachStore
-    /// The chat surface's live-data store, one per (host, pane). Created
-    /// alongside attach: both surfaces stay mounted-capable across switches.
-    @State private var chat: ChatStore?
+    /// The chat input's submit router (/ # @ ! routing). Built with the
+    /// same per-agent task as the chat store.
+    /// The broker-backed chat store, one per (host, pane). Preferred
+    /// over the JSONL store when the Host has a broker configured and
+    /// the agent's session matches a live registration; the JSONL
+    /// backend stays the fallback (and the only backend on Hosts
+    /// without a broker).
+    @State private var brokerChat: AgentChatStore?
     /// The chat input's submit router (/ # @ ! routing). Built with the
     /// same per-agent task as the chat store.
     @State private var chatRouter: ComposerRouterStore?
+    /// The chat input's attachment bundle (+ button/paste flow). Built
+    /// beside the chat store; torn down with it.
+    @State private var chatAttachments: ChatAttachments?
     /// Which surface the detail shows. Set on first appearance from the
     /// agent's session shape; the picker is the only other writer.
     @State private var surface: AgentDetailSurface?
@@ -258,6 +266,34 @@ struct AgentDetailView: View {
         .accessibilityLabel(surface == .chat ? "Show Terminal" : "Show Chat")
     }
 
+    /// The detail header's title as the agent switcher (#A): tapping the
+    /// title opens every other Agent, current one checked, so switching
+    /// never needs a detour back to the list. The surface toggle stays
+    /// trailing; this owns the principal slot only.
+    private var agentTitleMenu: some View {
+        Menu {
+            ForEach(console.agents) { candidate in
+                Button {
+                    onSwitch(candidate.id)
+                } label: {
+                    if candidate.id == agent.id {
+                        Label(candidate.agent.displayName, systemImage: "checkmark")
+                    } else {
+                        Text(candidate.agent.displayName)
+                    }
+                }
+            }
+        } label: {
+            headerTokens
+        }
+        // The plain button style keeps the compact header typography —
+        // no menu-chrome background behind the agent's title.
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(agent.agent.displayName), switch agent")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Opens the list of Agents to switch to.")
+    }
+
     /// The graceful empty state for an agent whose chat surface has no
     /// readable transcript (no `.path` agent session): the surface stays
     /// reachable, telling the user why it is empty.
@@ -278,14 +314,52 @@ struct AgentDetailView: View {
     /// surface, so agents whose integration registers after first render
     //  still get a chat.
     private func buildChatIfPossible() async {
-        guard chat == nil,
-            agent.agent.agentSession?.kind == AgentSessionRefKind.path
+        guard agent.agent.agentSession?.kind == AgentSessionRefKind.path
         else { return }
-        let store = ChatStore(
-            hostID: agent.hostID,
-            paneID: agent.agent.paneID,
-            reader: .console(console, hostID: agent.hostID))
-        chat = store
+
+        // Broker backend: only when this Host configured a broker socket
+        // path. One store per agent identity; started here so surface
+        // entry only renders.
+        if brokerChat == nil, console.host(for: agent.hostID)?.hasBrokerChat == true {
+            let agentChatStore = AgentChatStore(
+                pipeFactory: .console(console, hostID: agent.hostID),
+                paneIdentity: { [agent] in
+                    // Simulator-proof pin: when the proof environment
+                    // names a sessionFile, it wins — explicit selection
+                    // over the pane's own agent_session. Dead without
+                    // the env var; never affects production matching.
+                    if let pinned = ProcessInfo.processInfo.environment[
+                        "HEELER_AGENT_CHAT_PROOF_SESSION_FILE"]
+                    {
+                        return HerdrPaneSessionIdentity(sessionFilePath: pinned)
+                    }
+                    guard let path = agent.agent.agentSession?.value else {
+                        return nil
+                    }
+                    return HerdrPaneSessionIdentity(sessionFilePath: path)
+                })
+            brokerChat = agentChatStore
+            await agentChatStore.start()
+        }
+
+        // JSONL transcript lane: DEPRECATED (user direction — superseded by
+        // the broker API). Never built: its ChatStore.start does a blocking
+        // whole-transcript SFTP read (readWhole) that hangs on long sessions.
+        // The broker lane is the only chat path; hosts without a broker show
+        // ChatUnavailablePlaceholder. The conversation slice's fix round
+        // removes the lane's code entirely.
+        // The chat input's attachment bundle: the staging pipeline the
+        // + button's pickers and the image paste share, plus the draft
+        // seam its path inserts land in. Idempotent per agent identity.
+        if chatAttachments == nil {
+            let draftStore = ChatAttachmentDraftStore()
+            chatAttachments = ChatAttachments(
+                staging: ComposerStagingStore(
+                    stageImage: console.imageStager(for: agent.hostID),
+                    stageFile: console.fileStager(for: agent.hostID),
+                    composer: draftStore),
+                draftStore: draftStore)
+        }
         // The chat input's router: / # @ ! classification + plain delivery
         // through agent.prompt. The scratch-shell pane for ! is created
         // lazily on first use by the store.
@@ -310,46 +384,179 @@ struct AgentDetailView: View {
                     }),
                 commandFileIO: AgentCommandFileIO.console(
                     console, hostID: agent.hostID)))
-        await store.start(
-            agentSession: agent.agent.agentSession,
-            statusUpdates: console.agentStatusUpdates(for: agent.id))
+        // No JSONL ChatStore.start: the lane is deprecated (see above).
     }
 
     /// Builds (once per agent identity) and starts the chat store, then
     /// renders the chat surface.
     @ViewBuilder
     private var chatSurface: some View {
-        if let chat {
+        if let brokerChat {
+            brokerChatSurface(brokerChat)
+        } else {
+            ChatUnavailablePlaceholder()
+        }
+    }
+
+    /// The broker-backed chat surface: honest state surfaces for every
+    /// non-ready phase, and the SAME row/bubble rendering (ChatScreen
+    /// reused, not forked) when content is live.
+    @ViewBuilder
+    private func brokerChatSurface(_ store: AgentChatStore) -> some View {
+        switch store.phase {
+        case .ready, .disconnected:
             ChatScreen(
                 paneID: agent.agent.paneID,
                 agentName: agent.tabLabel ?? agent.agent.displayName,
-                state: chatAgentState,
-
-                content: chat.content,
+                state: brokerAgentState,
+                content: brokerContent,
                 initialLevel: chatLevels.level(paneID: agent.agent.paneID),
                 changeLevel: { [chatLevels] level, paneID in
                     chatLevels.setLevel(level, paneID: paneID)
                 },
-                hasOlder: chat.hasOlder,
-                isLoadingOlder: chat.isLoadingOlder,
-                loadOlder: { [weak chat] in await chat?.loadOlder() },
+                hasOlder: store.hasOlder,
+                isLoadingOlder: store.isLoadingOlder,
+                loadOlder: { [weak store] in await store?.loadOlder() },
                 router: chatRouter,
                 deliver: { text in
-                    try await console.promptAgent(
-                        AgentPromptParams(target: agent.agent.paneID, text: text),
-                        on: agent.hostID)
+                    try await store.send(text)
                 },
-                // The pending-question answer channel: a blocked agent
-                // refuses agent.prompt (`agent_blocked`), and omp's ask
-                // dialog is arrow-key driven — the card's taps send the
-                // selection keys (down × steps, enter) via agent.send_keys.
-                sendAnswerKey: { key in
-                    try await console.sendAgentKeys(
-                        agent.agent.paneID, key: key, on: agent.hostID)
+                pendingUnsupported: !store.askSupported,
+                authorLabel: "Heeler · \(agent.agent.kind.lowercased())",
+                attachments: chatAttachments,
+                onAskAnswer: { interaction, payloads in
+                    guard let store = brokerChat,
+                          let matched = store.interactions.first(where: {
+                              $0.requestId == interaction.id })
+                    else {
+                        // The card is stale (resolved elsewhere): the
+                        // store's self-heal already dropped it and the
+                        // resolved note renders.
+                        throw AgentChatError.wire(
+                            code: "stale_interaction",
+                            message: "This question is no longer pending — it may have been answered or expired in the agent's terminal.",
+                            retryable: false)
+                    }
+                    do {
+                        try await store.answer(
+                            matched,
+                            answers: payloads.map { payload in
+                                AgentChatAnswer(
+                                    questionId: payload.questionId,
+                                    optionIds: payload.optionIds,
+                                    customText: nil, note: nil)
+                            })
+                    } catch let error as AgentChatError {
+                        if case .wire(let code, _, _) = error,
+                            code == "stale_interaction"
+                                || code == "unknown_request"
+                                || code == "settled"
+                        {
+                            throw AgentChatError.wire(
+                                code: code,
+                                message: "This question is no longer pending — it may have been answered or expired in the agent's terminal.",
+                                retryable: false)
+                        }
+                        throw error
+                    }
+                },
+                onAskCancel: { interaction in
+                    guard let store = brokerChat else {
+                        throw AgentChatError.wire(
+                            code: "stale_interaction",
+                            message: "This ask is no longer pending.",
+                            retryable: false)
+                    }
+                    try await store.cancelInteraction(requestId: interaction.id)
+                },
+                imageFetcher: { ref in
+                    guard let store = brokerChat else {
+                        throw CocoaError(.fileNoSuchFile)
+                    }
+                    return try await store.readBlob(blobId: ref)
+                },
+                fetch: { path in
+                    try await console.readRemoteFile(
+                        at: path, on: agent.hostID)
                 })
-        } else {
-            ChatUnavailablePlaceholder()
+                // The honest resolved-ask note (answered elsewhere /
+                // cancelled / expired): the card is gone but the WHY
+                // renders — the newest resolution, above the composer.
+                .overlay(alignment: .bottom) {
+                    if let latest = store.interactionResolutions.last {
+                        Text(latest.message)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(.thinMaterial, in: Capsule())
+                            .padding(.bottom, 120)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                            .id(latest.id)
+                    }
+                }
+                .overlay(alignment: .bottom) {
+                    if case .disconnected(let reason) = store.phase {
+                        AgentChatStateBanner(
+                            icon: "wifi.exclamationmark",
+                            title: "Reconnect to the chat broker",
+                            detail: reason)
+                    }
+                }
+        case .idle, .connecting, .loading:
+            AgentChatStateBanner(
+                icon: "hourglass", title: "Connecting to the chat broker…",
+                detail: nil)
+        case .unavailable(let reason):
+            AgentChatStateBanner(
+                icon: "person.crop.circle.badge.xmark",
+                title: "No chat broker for this agent", detail: reason)
+        case .ambiguous:
+            AgentChatStateBanner(
+                icon: "arrow.triangle.branch",
+                title: "Ambiguous agent mapping",
+                detail: "More than one agent claims this session; Heeler will not guess.")
+        case .failed(let reason):
+            AgentChatStateBanner(
+                icon: "exclamationmark.triangle",
+                title: "The chat broker connection failed", detail: reason)
         }
+    }
+
+    /// The agent-chat store's content, with the provisional stream
+    /// tails rendered as separate in-flight assistant bubbles (stream
+    /// ids never masquerade as committed items).
+    private var brokerContent: ChatContent {
+        var content = brokerChat?.content ?? ChatContent()
+        for tail in brokerChat?.streamTails ?? [] where !tail.text.isEmpty {
+            content.messages.append(
+                ChatMessage(role: .assistant, blocks: [.text(tail.text)]))
+        }
+        // Real pending asks from the broker interactions map into the
+        // chat content's pending surface (the redesigned question card).
+        content.pending = brokerChat?.interactions.map { interaction in
+            PendingInteraction(
+                id: interaction.requestId,
+                question: interaction.questions.first?.text ?? "",
+                options: interaction.questions.first?.options.map { $0.label } ?? [],
+                questions: interaction.questions.map { question in
+                    PendingAskQuestion(
+                        id: question.id, text: question.text,
+                        multi: question.multi,
+                        options: question.options.map { option in
+                            PendingAskQuestion.Option(
+                                id: option.id, label: option.label)
+                        })
+                })
+        } ?? []
+        return content
+    }
+
+    /// The status-strip state for the agent-chat surface: Running while
+    /// a stream is in flight, else the console's status.
+    private var brokerAgentState: ChatAgentState {
+        if !(brokerChat?.streamTails ?? []).isEmpty { return .running }
+        return chatAgentState
     }
 
     var body: some View {
@@ -412,7 +619,7 @@ struct AgentDetailView: View {
                     // The terminal surface keeps the nav bar transparent by
                     // design, so its header rides in a blur capsule instead
                     // of floating bare text over terminal output.
-                    headerTokens
+                    agentTitleMenu
                         .padding(.horizontal, surface == .terminal ? 10 : 0)
                         .padding(.vertical, surface == .terminal ? 5 : 0)
                         .background {
@@ -458,8 +665,8 @@ struct AgentDetailView: View {
             hasAppeared = false
             focus.leave()
             // The chat store's poll loop must not outlive the detail view.
-            chat = nil
             chatRouter = nil
+            chatAttachments = nil
         }
         .onChange(of: console.hostConnectionGenerations[agent.hostID]) { _, generation in
             openTerminal.transportGenerationDidChange(generation)

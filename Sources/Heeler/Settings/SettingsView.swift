@@ -62,6 +62,43 @@ struct SettingsView: View {
     let liveActivities: HostLiveActivityCoordinator
     let console: ConsoleStore
     let hosts: [Host]
+    /// The root nav seam (#A revision): the heading trigger replaces the
+    /// title-dropdown; sheets/tests without the app root keep the plain
+    /// "Settings" title and Done button.
+    @Environment(\.appDestination) private var appDestination
+    @Environment(\.appDestinationMenuSuppressed) private var isMenuSuppressed
+    /// Reading & appearance (#A settings revision): the SHARED text-size
+    /// store (review finding 4: one observable store — the same
+    /// instance the reading views consume, injected by the roots; the
+    /// demo root injects its own) and the default detail level.
+    let readingTextSize: ReadingTextSizeSettings
+    @State private var defaultDetailLevel = DefaultDetailLevelSettings()
+    /// Direct focus report to the root (see AppNavigationFocusReport):
+    /// fired on path changes; the root suppresses ALL destination chrome
+    /// while any page's sub-page is pushed.
+    @Environment(\.appNavigationFocusReport) private var focusReport
+
+    init(
+        terminal: TerminalSettings,
+        appearance: AppAppearanceSettings,
+        pushRegistration: PushRegistrationStore,
+        notificationPreferences: NotificationPreferencesStore,
+        relaySettings: NotificationRelaySettings,
+        liveActivities: HostLiveActivityCoordinator,
+        console: ConsoleStore,
+        hosts: [Host],
+        readingTextSize: ReadingTextSizeSettings = .shared
+    ) {
+        self.terminal = terminal
+        self.appearance = appearance
+        self.pushRegistration = pushRegistration
+        self.notificationPreferences = notificationPreferences
+        self.relaySettings = relaySettings
+        self.liveActivities = liveActivities
+        self.console = console
+        self.hosts = hosts
+        self.readingTextSize = readingTextSize
+    }
 
     static let agentListDestination = SettingsAgentListDestination.fields
     static let headerLayoutDestination = SettingsHeaderLayoutDestination.header
@@ -121,36 +158,41 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             Form {
+                // Reading & appearance (#A settings revision, device
+                // feedback): ONE group for every appearance/readability
+                // control — the designed rows (Appearance, Text Size,
+                // Default Conversation Detail) plus the existing surface
+                // appearance rows (Agent List Fields, In-Agent Header,
+                // Terminal Appearance), in the approved order. No second
+                // header; every existing item kept.
                 Section {
-                    NavigationLink {
-                        Self.agentListDestination.destinationView(console: console, hosts: hosts)
-                    } label: {
+                    appearancePicker
+                    NavigationLink(value: "settings.textSize") {
+                        Label("Text Size", systemImage: "textformat.size")
+                    }
+                    NavigationLink(value: "settings.defaultDetail") {
+                        Label("Default Conversation Detail", systemImage: "list.bullet.indent")
+                    }
+                    NavigationLink(value: Self.agentListDestination.rawValue) {
                         Label("Agent List Fields", systemImage: "list.bullet.rectangle")
                     }
                     .accessibilityIdentifier(Self.agentListDestination.rawValue)
-                    NavigationLink {
-                        Self.headerLayoutDestination.destinationView(
-                            console: console, store: HeaderLayoutSettingsStore.shared)
-                    } label: {
+                    NavigationLink(value: Self.headerLayoutDestination.rawValue) {
                         Label("In-Agent Header", systemImage: "rectangle.topthird.inset.filled")
                     }
                     .accessibilityIdentifier(Self.headerLayoutDestination.rawValue)
-                    NavigationLink {
-                        NotificationSettingsView(
-                            pushRegistration: pushRegistration,
-                            notificationPreferences: notificationPreferences,
-                            relaySettings: relaySettings,
-                            liveActivities: liveActivities)
-                    } label: {
-                        Label("Notifications", systemImage: "bell.badge")
-                    }
-                    appearancePicker
-                    NavigationLink {
-                        TerminalAppearanceSettingsView(terminal: terminal)
-                    } label: {
+                    NavigationLink(value: "settings.terminalAppearance") {
                         Label("Terminal Appearance", systemImage: "paintpalette")
+                    }
+                } header: {
+                    Text("Reading & Appearance")
+                }
+
+                Section {
+                    NavigationLink(value: "settings.notifications") {
+                        Label("Notifications", systemImage: "bell.badge")
                     }
                 }
 
@@ -162,15 +204,68 @@ struct SettingsView: View {
                     Text("About")
                 }
             }
-            .navigationTitle("Settings")
+            .navigationDestination(for: String.self) { route in
+                switch route {
+                case Self.agentListDestination.rawValue:
+                    Self.agentListDestination.destinationView(console: console, hosts: hosts)
+                case Self.headerLayoutDestination.rawValue:
+                    Self.headerLayoutDestination.destinationView(
+                        console: console, store: HeaderLayoutSettingsStore.shared)
+                case "settings.notifications":
+                    NotificationSettingsView(
+                        pushRegistration: pushRegistration,
+                        notificationPreferences: notificationPreferences,
+                        relaySettings: relaySettings,
+                        liveActivities: liveActivities)
+                case "settings.terminalAppearance":
+                    TerminalAppearanceSettingsView(terminal: terminal)
+                case "settings.textSize":
+                    ReadingTextSizeSettingsView(settings: readingTextSize)
+                case "settings.defaultDetail":
+                    DefaultDetailLevelSettingsView(settings: defaultDetailLevel)
+                case SettingsAboutDestination.acknowledgements.rawValue:
+                    // The Acknowledgements route resolves through the same
+                    // enum the row builds its link from — identity by case.
+                    AcknowledgementsView()
+                default:
+                    EmptyView()
+                }
+            }
+            // As a top-level destination page the heading trigger + plain
+            // title replace the title-dropdown (#A revision). Embedded in
+            // a sheet (previews, Demo captures, in-Console presentation)
+            // the plain "Settings" title and Done button keep the sheet
+            // dismissable.
+            .navigationTitle(appDestination == nil ? "Settings" : "")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                // Toolbar items can MISS environment updates (#A v2
+                // lesson), so the heading's visibility is driven by the
+                // page's OWN path state — root shows the trigger, a
+                // pushed sub-page shows only its own back button.
+                if appDestination != nil, path.isEmpty {
+                    ToolbarItem(placement: .topBarLeading) {
+                        AppDestinationHeading(pageTitle: "Settings")
+                    }
+                } else if appDestination == nil {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                    }
                 }
+            }
+            // Report pushed-navigation state upward (#A): while a Settings
+            // sub-page is pushed, the root's destination chrome steps
+            // aside for this page too.
+            .modifier(AppDestinationPageFocusModifier(
+                destination: .settings, isContentPushed: !path.isEmpty))
+            .onChange(of: path, initial: true) { _, newPath in
+                focusReport?(.settings, !newPath.isEmpty)
             }
         }
     }
+
+    /// The Settings stack's route ids, so pushed state reports upward.
+    @State private var path: [String] = []
 
     @ViewBuilder
     private func aboutRow(_ row: AboutRow) -> some View {
@@ -181,9 +276,7 @@ struct SettingsView: View {
             // Destination comes only from `aboutDestination(for:)` so the
             // route identity and `AcknowledgementsView` cannot drift apart.
             if let destination = Self.aboutDestination(for: row) {
-                NavigationLink {
-                    destination.destinationView
-                } label: {
+                NavigationLink(value: destination.rawValue) {
                     Label("Acknowledgements", systemImage: "doc.text")
                 }
                 .accessibilityIdentifier(destination.rawValue)
@@ -227,4 +320,75 @@ struct SettingsView: View {
         let build = info?["CFBundleVersion"] as? String
         return build.map { "\(version) (\($0))" } ?? version
     }
+}
+
+/// Text Size (#A settings revision): System (default — follows Dynamic
+/// Type, no override) plus explicit reading-size choices. The choice is
+/// applied at the app root as `.dynamicTypeSize` — a READING size, never a
+/// chrome rescale.
+struct ReadingTextSizeSettingsView: View {
+    @Bindable var settings: ReadingTextSizeSettings
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Text Size", selection: Binding(
+                    get: { settings.selection },
+                    set: { settings.select($0) })
+                ) {
+                    ForEach(ReadingTextSize.allCases) { size in
+                        Text(size.title).tag(size)
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } footer: {
+                Text(
+                    "System follows your device’s text size. An explicit "
+                        + "choice applies to reading text across the app.")
+            }
+        }
+        .navigationTitle("Text Size")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// Default Conversation Detail (#A settings revision): the level new
+/// conversations start at. Persists through the EXISTING
+/// ChatDetailLevelStore (its "default" pseudo-pane key) — the same store
+/// the per-agent level switcher writes to, so formats and location cannot
+/// drift.
+struct DefaultDetailLevelSettingsView: View {
+    @Bindable var settings: DefaultDetailLevelSettings
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Default Detail Level", selection: Binding(
+                    get: { settings.level },
+                    set: { settings.level = $0 })
+                ) {
+                    ForEach(DetailLevel.allCases, id: \.rawValue) { level in
+                        Text(Self.labels[level] ?? "Level \(level.rawValue)")
+                            .tag(level)
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } footer: {
+                Text(
+                    "The detail level conversations open at. Per-conversation "
+                        + "changes still take precedence.")
+            }
+        }
+        .navigationTitle("Default Conversation Detail")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private static let labels: [DetailLevel: String] = [
+        .l0: "L0 — Conversation",
+        .l1: "L1 — Work Summary",
+        .l2: "L2 — Tool Results & Diffs",
+        .l3: "L3 — Everything",
+    ]
 }

@@ -738,3 +738,122 @@ struct HostMultiPathTests {
         return (defaults, { defaults.removePersistentDomain(forName: suiteName) })
     }
 }
+
+// MARK: Named routes (handoff §E)
+
+/// Route labels: user-assignable names per address, persisted on the
+/// Host, pruned to live candidates, with the address as the fallback
+/// presentation name.
+@Suite("Host named routes")
+struct HostNamedRouteTests {
+    @Test func routeNamePrefersTheUsersLabel() {
+        let host = Host(
+            address: "192.168.31.71", username: "dev",
+            additionalAddresses: ["studio.vpn.example"],
+            routeLabels: [
+                "192.168.31.71": "Local network",
+                "studio.vpn.example": "VPN",
+            ])
+
+        #expect(host.routeName(for: "192.168.31.71") == "Local network")
+        #expect(host.routeName(for: "studio.vpn.example") == "VPN")
+    }
+
+    @Test func unlabeledRouteFallsBackToItsAddress() {
+        let host = Host(address: "a.example", username: "dev", routeLabels: [:])
+
+        #expect(host.routeName(for: "a.example") == "a.example")
+    }
+
+    @Test func blankLabelFallsBackToItsAddress() {
+        let host = Host(address: "a.example", username: "dev", routeLabels: ["a.example": "  "])
+
+        #expect(host.routeName(for: "a.example") == "a.example")
+    }
+
+    // A label whose address was edited away is dead weight; it must not
+    // survive a round-trip.
+    @Test func staleLabelsForRemovedAddressesArePruned() throws {
+        let host = Host(
+            address: "a.example", username: "dev",
+            additionalAddresses: ["b.example"],
+            routeLabels: ["a.example": "Primary", "gone.example": "Ghost"])
+
+        var draft = HostDraft(host: host)
+        draft.removeAddress(id: draft.addresses.first { $0.address == "a.example" }!.id)
+        let saved = try #require(draft.makeHost())
+
+        #expect(saved.routeName(for: "b.example") == "b.example")
+        #expect(saved.routeLabels["gone.example"] == nil)
+        #expect(saved.routeLabels["a.example"] == nil)
+    }
+
+    @Test func labeledRoutesRoundTripThroughTheDraft() throws {
+        let host = Host(
+            address: "192.168.31.71", username: "dev",
+            additionalAddresses: ["studio.vpn.example"],
+            routeLabels: ["studio.vpn.example": "VPN"])
+
+        let draft = HostDraft(host: host)
+        let rebuilt = try #require(draft.makeHost(id: host.id))
+
+        #expect(rebuilt == host)
+        #expect(rebuilt.routeName(for: "studio.vpn.example") == "VPN")
+    }
+
+    @Test func labelEditInARouteRowSurvivesSave() throws {
+        let original = Host(address: "a.example", username: "dev")
+        var draft = HostDraft(host: original)
+        draft.addAddress("b.example")
+        // The route editor writes label+address for the selected row.
+        let rowID = draft.addresses[1].id
+        draft.addresses[1] =
+            AdditionalAddressRow(id: rowID, address: "b.example", label: "VPN")
+
+        let saved = try #require(draft.makeHost(id: original.id))
+
+        #expect(saved.routeLabels == ["b.example": "VPN"])
+    }
+}
+
+/// The per-route inspector presentation (handoff §E): an alternate route
+/// is never shown in use unless the live session dialed exactly that
+/// address.
+@Suite("Host route presentation")
+struct HostRoutePresentationTests {
+    private let host = Host(
+        address: "192.168.31.71", username: "dev",
+        additionalAddresses: ["studio.vpn.example"],
+        routeLabels: [
+            "192.168.31.71": "Local network",
+            "studio.vpn.example": "VPN",
+        ])
+
+    @Test func dialedAddressIsInUse() {
+        let route = HostRoutePresentation(
+            host: host, address: "192.168.31.71", connectedAddress: "192.168.31.71")
+        #expect(route.usage == .inUse)
+        #expect(route.stateLabel == "In use")
+    }
+
+    @Test func otherAddressIsAlternateEvenWhileConnectedElsewhere() {
+        let route = HostRoutePresentation(
+            host: host, address: "studio.vpn.example",
+            connectedAddress: "192.168.31.71")
+        #expect(route.usage == .alternate)
+        #expect(route.stateLabel == "Alternate")
+    }
+
+    @Test func disconnectedHostHasNoInUseRoute() {
+        let route = HostRoutePresentation(
+            host: host, address: "192.168.31.71", connectedAddress: nil)
+        #expect(route.usage == .alternate)
+    }
+
+    @Test func routeCarriesTheExactAddress() {
+        let route = HostRoutePresentation(
+            host: host, address: "studio.vpn.example", connectedAddress: nil)
+        #expect(route.name == "VPN")
+        #expect(route.address == "studio.vpn.example")
+    }
+}

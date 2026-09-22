@@ -29,6 +29,14 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
     /// Host has exactly one way to be reached, like every Host saved before
     /// this field existed.
     var additionalAddresses: [String]
+
+    /// User-assignable names for connection routes: the label each route
+    /// row carries on the Host card, the route editor, and the route
+    /// inspector (handoff §E). Keyed by exact address so `address` and
+    /// `additionalAddresses` keep their plain-string dialing contract;
+    /// `routeName(for:)` resolves presentation, with the address itself as
+    /// the fallback label. Pruned to only cover live candidates.
+    var routeLabels: [String: String]
     /// Optional Jump Host this Host is reached through. Blank means a direct
     /// connection; when set, `address`/`port` are resolved from the Jump Host
     /// and normally point at a loopback port held open by a reverse tunnel.
@@ -43,12 +51,19 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
     /// label for the connection, while the alias is presentation-only.
     var alias: String?
 
+    /// Absolute path of the native chat broker's Unix socket on this
+    /// Host (reached over the same SSH connection's direct-streamlocal
+    /// forwarding). Blank means no broker configured; the chat surface
+    /// then stays on the JSONL transcript backend.
+    var brokerChatSocketPath: String
+
     /// `socatPath` is deliberately absent: Hosts serialized before ADR 0011
     /// still carry it on disk, and leaving it out of the keys both ignores it
     /// on decode and drops it on the Host's next save.
     private enum CodingKeys: String, CodingKey {
         case id, name, address, port, username, authMethod, sessionName
-        case additionalAddresses, jumpAddress, jumpPort, jumpUsername, alias
+        case additionalAddresses, routeLabels, jumpAddress, jumpPort, jumpUsername, alias
+        case brokerChatSocketPath = "broker_chat_socket_path"
     }
 
     /// Whether this Host is reached through a Jump Host.
@@ -80,10 +95,12 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         authMethod: AuthMethod = .deviceKey,
         sessionName: String = "",
         additionalAddresses: [String] = [],
+        routeLabels: [String: String] = [:],
         jumpAddress: String = "",
         jumpPort: Int = 22,
         jumpUsername: String = "",
-        alias: String? = nil
+        alias: String? = nil,
+        brokerChatSocketPath: String = ""
     ) {
         self.id = id
         self.name = name
@@ -93,10 +110,14 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         self.authMethod = authMethod
         self.sessionName = sessionName
         self.additionalAddresses = Self.normalizedAdditionalAddresses(additionalAddresses)
+        self.routeLabels = Self.normalizedRouteLabels(
+            routeLabels,
+            candidates: Self.rawCandidates(address: address, additional: additionalAddresses))
         self.jumpAddress = jumpAddress
         self.jumpPort = jumpPort
         self.jumpUsername = jumpUsername
         self.alias = alias
+        self.brokerChatSocketPath = brokerChatSocketPath
     }
 
     init(from decoder: any Decoder) throws {
@@ -113,6 +134,10 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         additionalAddresses =
             try container.decodeIfPresent([String].self, forKey: .additionalAddresses)
             .map(Self.normalizedAdditionalAddresses) ?? []
+        // Absent in Hosts saved before named routes; unlabeled addresses
+        // keep their address-as-label presentation unchanged.
+        routeLabels =
+            try container.decodeIfPresent([String: String].self, forKey: .routeLabels) ?? [:]
         // Absent in Hosts saved before jump-host support; a blank address
         // decodes as the direct connection those Hosts already had.
         jumpAddress = try container.decodeIfPresent(String.self, forKey: .jumpAddress) ?? ""
@@ -122,12 +147,45 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         // alias decodes as nil so presentation never shows a blank label.
         alias = try container.decodeIfPresent(String.self, forKey: .alias)
             .flatMap { Self.normalizedAlias($0) }
+        brokerChatSocketPath =
+            try container.decodeIfPresent(String.self, forKey: .brokerChatSocketPath) ?? ""
 
         let trimmedSessionName = sessionName.trimmingCharacters(in: .whitespaces)
         guard trimmedSessionName.isEmpty || HerdrSessionName.isValid(trimmedSessionName) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .sessionName, in: container, debugDescription: "Invalid herdr session name")
         }
+        routeLabels = Self.normalizedRouteLabels(routeLabels, candidates: candidateAddresses)
+    }
+
+    /// The presentation name of one connection route: the user's label
+    /// when it renders, the address otherwise. One resolution so the card,
+    /// the editor, and the inspector never disagree.
+    func routeName(for address: String) -> String {
+        if let label = routeLabels[address]?.trimmingCharacters(in: .whitespaces),
+            !label.isEmpty
+        {
+            return label
+        }
+        return address
+    }
+
+    /// A route label only counts when it renders and still belongs to a
+    /// live candidate: trimmed, blanks dropped, stale keys (the address
+    /// was edited or removed since the label was set) pruned so a Host's
+    /// saved label map never accumulates dead entries.
+    private static func normalizedRouteLabels(
+        _ raw: [String: String], candidates: [String]
+    ) -> [String: String] {
+        let live = Set(candidates)
+        var normalized: [String: String] = [:]
+        for (address, label) in raw where live.contains(address) {
+            let trimmed = label.trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty {
+                normalized[address] = trimmed
+            }
+        }
+        return normalized
     }
 
     /// A stored alias is only meaningful when it renders: trimmed, and nil
@@ -148,6 +206,14 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
     var displayName: String {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         return trimmed.isEmpty ? "\(username)@\(address)" : trimmed
+    }
+
+    /// Candidate addresses from raw init arguments, for normalization that
+    /// runs before all stored properties are initialized.
+    private static func rawCandidates(address: String, additional: [String]) -> [String] {
+        ([address] + additional)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
     }
 
     /// The name every Host surface shows: the alias when it renders, `name`
@@ -178,5 +244,10 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
     var socketLocation: HerdrSocketLocation {
         let trimmed = sessionName.trimmingCharacters(in: .whitespaces)
         return trimmed.isEmpty ? .defaultSession : .namedSession(trimmed)
+    }
+
+    /// Whether this Host has a chat broker configured.
+    var hasBrokerChat: Bool {
+        !brokerChatSocketPath.trimmingCharacters(in: .whitespaces).isEmpty
     }
 }

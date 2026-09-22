@@ -85,6 +85,16 @@ struct HostListView: View {
     @State private var isScanningToPair = false
     @State private var manualFallbackRequested = false
     @State private var path: [Host.ID] = []
+    @State private var inspectedRoute: HostRouteInspection?
+    /// Top-level nav seam (handoff §A revision): the heading trigger is
+    /// env-driven; sheets/tests without the app root keep the plain
+    /// "Hosts" title.
+    @Environment(\.appDestination) private var appDestination
+    @Environment(\.appDestinationMenuSuppressed) private var isMenuSuppressed
+    @Environment(\.appNavigationFocusReport) private var focusReport
+    private var destinationMenuTitleFallback: String {
+        appDestination == nil ? "Hosts" : ""
+    }
     @State private var quickAddError: String?
 
     init(
@@ -138,26 +148,34 @@ struct HostListView: View {
                 } else {
                     List {
                         ForEach(store.hosts) { host in
-                            NavigationLink(value: host.id) {
-                                HostRow(
-                                    host: host,
-                                    connectionStatus: connectionStatuses[host.id],
-                                    standingFailure: standingFailures[host.id],
-                                    latency: latencies[host.id],
-                                    isRetryInFlight: manualReconnectInFlightHostIDs
-                                        .contains(host.id),
-                                    retryConnection: retryConnection.map { retry in
-                                        { await retry(host.id) }
-                                    })
-                            }
+                            hostCard(for: host)
                         }
                         .onDelete(perform: removeHosts)
                         quickAddSection
                     }
+                    .listStyle(.insetGrouped)
+                    .listSectionSpacing(12)
                 }
             }
-            .navigationTitle("Hosts")
+            .navigationTitle(destinationMenuTitleFallback)
+            // Report pushed-navigation state upward (#A): a pushed Host
+            // detail makes the root's destination chrome step aside.
+            .modifier(AppDestinationPageFocusModifier(
+                destination: .hosts, isContentPushed: !path.isEmpty))
+            .onChange(of: path, initial: true) { _, newPath in
+                focusReport?(.hosts, !newPath.isEmpty)
+            }
             .toolbar {
+                // Handoff §A revision: the root heading (trigger + plain
+                // title) replaces the selector when the app root mounts
+                // this page; sheets keep the plain title.
+                // Visibility driven by the page's OWN path state —
+                // toolbar items can miss environment updates (#A v2).
+                if appDestination != nil, path.isEmpty {
+                    ToolbarItem(placement: .topBarLeading) {
+                        AppDestinationHeading(pageTitle: "Hosts")
+                    }
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Button("Scan to Pair", systemImage: "qrcode.viewfinder") {
                         isScanningToPair = true
@@ -189,6 +207,35 @@ struct HostListView: View {
             .sheet(isPresented: $isAddingHost) {
                 HostFormView(store: store) { saved in
                     path.append(saved.id)
+                }
+            }
+            .sheet(item: $inspectedRoute) { inspection in
+                // Tapping a route on a Host card: the inspector targets
+                // THAT Host's THAT route, never a global connection. The
+                // item's own store survives every content-closure re-run
+                // on parent status ticks (device bug #5).
+                if let host = store.hosts.first(where: { $0.id == inspection.hostID }) {
+                    HostRouteInspectorView(
+                        host: host,
+                        address: inspection.address,
+                        connectedAddress: connectedAddresses[inspection.hostID],
+                        ownedStore: inspection.store,
+                        // In-context naming (device finding): the SAME
+                        // editor the form uses; the label persists to the
+                        // catalog, so the list row and inspector both
+                        // show the friendly name immediately.
+                        onEditRoute: { updated in
+                            var edited = host
+                            let label = updated.label.trimmingCharacters(in: .whitespaces)
+                            if label.isEmpty {
+                                edited.routeLabels.removeValue(forKey: updated.address)
+                            } else {
+                                edited.routeLabels[updated.address] = label
+                            }
+                            if edited != host {
+                                try? store.update(edited)
+                            }
+                        })
                 }
             }
             .sheet(
@@ -287,10 +334,36 @@ struct HostListView: View {
         return { await retryConnection(id) }
     }
 
-    /// Sessions/Hosts blending (Phase 5): unclaimed herdr sessions found on
-    /// a connected Host's machine, offered as one-tap Host entries. Adding
-    /// keeps every connection coordinate and the auth method, changing only
-    /// the session.
+    /// One Host card, split from `body` so the list stays type-checkable.
+    private func hostCard(for host: Host) -> some View {
+        HostCardSection(
+            host: host,
+            connectionStatus: connectionStatuses[host.id],
+            standingFailure: standingFailures[host.id],
+            latency: latencies[host.id],
+            connectedAddress: connectedAddresses[host.id],
+            isRetryInFlight: manualReconnectInFlightHostIDs.contains(host.id),
+            retryConnection: retryConnection.map { retry in
+                { await retry(host.id) }
+            },
+            openDetail: { path.append(host.id) },
+            switchToRoute: { address in
+                // Row tap = switch (user directive): the tapped route
+                // becomes the Host's preferred dial path — the v1
+                // PreferredAddressStore semantics the multi-path work
+                // established. Instant, reversible (tap another route).
+                PreferredAddressStore(hostID: host.id)
+                    .prefer(address, candidates: host.candidateAddresses)
+            },
+            openRouteInspector: { address in
+                // The inspection item owns its store for the lifetime of
+                // one presentation (device bug #5): status ticks re-run
+                // the sheet's content closure, but the item — and its
+                // store — stay put until the sheet dismisses.
+                inspectedRoute = HostRouteInspection(hostID: host.id, address: address)
+            })
+    }
+
     @ViewBuilder
     private var quickAddSection: some View {
         if let discovery {
@@ -341,29 +414,57 @@ struct HostListView: View {
     }
 }
 
-private struct HostRow: View {
+/// The sheet target for a tapped route: which Host and which of its
+/// routes. Distinct from `HostRoutePresentation` (pure display) — this
+/// carries identity only, resolved against the live catalog when the
+/// sheet builds.
+@MainActor
+private struct HostRouteInspectionStoreCarrier {
+    /// The probe/trust store OWNED by one inspection for the lifetime of
+    /// one presentation (device bug #5): the sheet's content closure
+    /// re-runs on every parent status tick, and a store created inside
+    /// the closure had its view-@State identity reset mid-probe —
+    /// silently discarding the user's check verdict. Carrying it on the
+    /// item means one presentation owns one store, period: the item is
+    /// set once at the tap and does not change while the sheet is open.
+    let store = HostRouteInspectorStore()
+}
+
+@MainActor
+struct HostRouteInspection: Identifiable {
+    let hostID: Host.ID
+    let address: String
+    private let carrier = HostRouteInspectionStoreCarrier()
+    nonisolated var id: String { "\(hostID.uuidString)|\(address)" }
+
+    /// The owned store: one presentation owns one store, period.
+    var store: HostRouteInspectorStore { carrier.store }
+}
+
+/// One Host as a card: heading with name + connection chip, then one row
+/// per NAMED route. The row IS a switch (user directive): tapping it
+/// makes that route the Host's preferred dial path — instant, no
+/// confirmation, reversible by tapping another route; the right-side
+/// chevron opens the route inspector. No card-level Edit button (user
+/// directive: the name line already leads to the detail page's own
+/// Edit; the card stays quiet). Chat service state belongs to the Host,
+/// not a route, so its row targets the Host (provisioning integration
+/// point, below).
+private struct HostCardSection: View {
     let host: Host
     let connectionStatus: EventsSessionStatus?
     let standingFailure: TransportError?
     let latency: Duration?
+    let connectedAddress: String?
     let isRetryInFlight: Bool
     let retryConnection: (@MainActor @Sendable () async -> Void)?
-
-    init(
-        host: Host,
-        connectionStatus: EventsSessionStatus?,
-        standingFailure: TransportError?,
-        latency: Duration?,
-        isRetryInFlight: Bool = false,
-        retryConnection: (@MainActor @Sendable () async -> Void)? = nil
-    ) {
-        self.host = host
-        self.connectionStatus = connectionStatus
-        self.standingFailure = standingFailure
-        self.latency = latency
-        self.isRetryInFlight = isRetryInFlight
-        self.retryConnection = retryConnection
-    }
+    let openDetail: () -> Void
+    /// Row tap = switch: makes the tapped route the Host's preferred dial
+    /// path (v1 PreferredAddressStore semantics; v2 reconciles its own
+    /// selection at integration).
+    let switchToRoute: (String) -> Void
+    /// Chevron tap = inspect: opens the route inspector for THAT route.
+    let openRouteInspector: (String) -> Void
 
     /// Terminal stopped-auto-retry state: failed, or connecting while a
     /// standing failure is being served. Retry offers exactly one dial.
@@ -375,48 +476,128 @@ private struct HostRow: View {
         }
     }
 
-    var body: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(host.displayAliasName)
-                    .font(.headline)
-                Text(subtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 0)
-            if isRetryable {
-                Button {
-                    Task { await retryConnection?() }
-                } label: {
-                    if isRetryInFlight {
-                        ProgressView()
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                }
-                .buttonStyle(.bordered)
-                .tint(.orange)
-                .disabled(isRetryInFlight)
-                .accessibilityLabel("Retry connecting to \(host.displayAliasName)")
-            }
-            HostConnectionIndicator(
-                presentation: HostConnectionPresentation(
-                    status: connectionStatus,
-                    standingFailure: standingFailure,
-                    latency: latency))
-        }
-        .padding(.vertical, 2)
+    private var connectionPresentation: HostConnectionPresentation {
+        HostConnectionPresentation(
+            status: connectionStatus,
+            standingFailure: standingFailure,
+            latency: latency)
     }
 
-    private var subtitle: String {
-        var text = "\(host.username)@\(host.address)"
-        if host.port != 22 { text += ":\(host.port)" }
-        if case .namedSession(let session) = host.socketLocation {
-            text += " · session \(session)"
+    var body: some View {
+        Section {
+            // The heading row: tapping the name area opens the Host
+            // detail (onboarding/preflight); the scoped Edit button sits
+            // BESIDE it as a sibling (a Button nested inside another
+            // Button's label never fires its own action). Both target
+            // THIS host.
+            HStack(spacing: 12) {
+                Button {
+                    openDetail()
+                } label: {
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(host.displayAliasName)
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                            HostConnectionIndicator(presentation: connectionPresentation)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(
+                    "Open details for \(host.displayAliasName), "
+                        + connectionPresentation.accessibilityLabel)
+                if isRetryable {
+                    Button {
+                        Task { await retryConnection?() }
+                    } label: {
+                        if isRetryInFlight {
+                            ProgressView()
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.orange)
+                    .disabled(isRetryInFlight)
+                    .accessibilityLabel("Retry connecting to \(host.displayAliasName)")
+                }
+                // The heading's chevron opens the same detail (user
+                // directive: no card-level Edit — the detail page owns
+                // its own).
+                Button { openDetail() } label: {
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open details for \(host.displayAliasName)")
+                .accessibilityIdentifier("host-card-detail-chevron")
+            }
+
+            // One row per named route. The ROW is a switch (user
+            // directive): tapping makes it the preferred dial path —
+            // instant, reversible. The CHEVRON is the inspector.
+            ForEach(host.candidateAddresses, id: \.self) { address in
+                let route = HostRoutePresentation(
+                    host: host, address: address, connectedAddress: connectedAddress)
+                HStack(spacing: 10) {
+                    Button {
+                        switchToRoute(address)
+                    } label: {
+                        HStack(spacing: 10) {
+                            // The dot IS the in-use signal (user
+                            // decision: the row stays quiet — no state
+                            // text; the inspector keeps the words).
+                            Image(systemName: "circle.fill")
+                                .font(.system(size: 7))
+                                .foregroundStyle(
+                                    route.usage == .inUse ? Color.green : Color.secondary)
+                                .accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(route.name)
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(.primary)
+                                Text("\(route.address):\(String(host.port))")
+                                    .font(.caption)
+                                    .monospaced()
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            Spacer()
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel(
+                        "Route \(route.name), \(route.address):\(String(host.port)), "
+                            + (route.usage == .inUse
+                                ? "currently in use"
+                                : "alternate route")
+                            + ". Double tap to switch to this route.")
+                    .accessibilityHint(
+                        "Sets this route as the preferred dial path for "
+                            + host.displayAliasName)
+                    .accessibilityIdentifier("host-route-\(route.address)")
+                    // The chevron: the row's second action — inspect.
+                    Button {
+                        openRouteInspector(address)
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel(
+                        "Show route details for \(route.name)")
+                    .accessibilityIdentifier(
+                        "route-chevron-\(route.address)")
+                }
+            }
         }
-        return text
     }
 }
 

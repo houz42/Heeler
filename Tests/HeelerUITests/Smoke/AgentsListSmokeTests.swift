@@ -18,11 +18,23 @@ final class AgentsListSmokeTests: XCTestCase {
 
     /// The Agents list shows the fixture's rows and the toolbar.
     func testAgentsListShowsFixtureRows() {
-        waitToExist(app.staticTexts[UITestFixtures.agentRows[0]])
-        waitToExist(app.staticTexts[UITestFixtures.agentRows[4]])
-        // Toolbar surfaces the primary actions.
-        waitToExist(app.buttons[UITestFixtures.consoleToolbarHosts])
-        waitToExist(app.buttons[UITestFixtures.consoleToolbarSettings])
+        waitToExist(UITestFixtures.agentRowText(UITestFixtures.agentRows[0], in: app))
+        // The fixture overflows the phone viewport (it must, so the nav
+        // proofs can show scroll retention) and the list is lazy: an
+        // off-screen row does not exist in the accessibility tree until
+        // scrolled to. Scroll until the fifth fixture row is on stage,
+        // then assert it.
+        let fifthRow = UITestFixtures.agentRowText(UITestFixtures.agentRows[4], in: app)
+        let scrollDeadline = Date().addingTimeInterval(UITestTimeouts.standard)
+        while !fifthRow.exists, Date() < scrollDeadline {
+            app.swipeUp()
+        }
+        XCTAssertTrue(
+            fifthRow.waitForExistence(timeout: UITestTimeouts.standard),
+            "the fixture's rows must render once scrolled to")
+        // The compact destination selector carries the destinations
+        // (#A); the sheet-era Hosts/Settings toolbar buttons are gone.
+        waitToExist(app.buttons[UITestFixtures.destinationSelector])
         captureScreenshot(app, "agents-list")
     }
 
@@ -32,7 +44,9 @@ final class AgentsListSmokeTests: XCTestCase {
         // land on a non-hittable text; the cell is the NavigationLink's
         // hit target.
         let cell = app.cells.containing(
-            NSPredicate(format: "label CONTAINS %@", "ios-polish")
+            NSPredicate(
+                format: "label CONTAINS %@ OR label CONTAINS %@",
+                "ios-polish", "Polish the Attach experience")
         ).firstMatch
         waitToExist(cell)
         cell.tap()

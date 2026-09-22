@@ -26,19 +26,77 @@ struct ContentView: View {
     @SceneStorage("dev.bybee.heeler.agentRoute") private var storedRoute: String?
     @Environment(\.scenePhase) private var scenePhase
 
+    init(app: HeelerAppModel, windowRoute: Binding<AgentRoute?>) {
+        self.app = app
+        _windowRoute = windowRoute
+        // Capture diagnostic (env-gated, inert without the flag): the
+        // device-key authorized_keys line for out-of-band proof
+        // authorization. Never prints in normal use.
+        if ProcessInfo.processInfo.environment["HEELER_DIAG_DEVICE_KEY"] == "1" {
+            var line = "HEELER_DIAG env seen; "
+            do {
+                let device = try HostCredentialsProvider().deviceKey()
+                line += device.authorizedKeysLine(comment: "heeler-proof")
+            } catch {
+                line += "FAILED: \(error)"
+            }
+            try? line.write(
+                to: URL(fileURLWithPath: "/tmp/heeler-proof-signals/key2.pub"),
+                atomically: true, encoding: .utf8)
+        }
+    }
+
     var body: some View {
-        ConsoleView(
-            hosts: app.hostStore, console: app.console, terminal: app.terminal,
-            inputMode: app.inputMode,
-            appearance: app.appearance,
-            pushRegistration: app.pushRegistration,
-            notificationPreferences: app.notificationPreferences,
-            relaySettings: app.relaySettings,
-            notificationRouter: notificationRouter,
-            bannerStore: app.bannerStore,
-            liveActivities: app.liveActivities,
-            activity: app.activity
+        // The adaptive top-level container (#A): Agents/Hosts/Settings as
+        // peer pages — compact menu on phone, collapsible destination
+        // sidebar on iPad/split widths. Every window keeps its own
+        // destination state; the scene plumbing below still belongs to
+        // this window's Console.
+        AppRootView(
+            agents: ConsoleView(
+                hosts: app.hostStore, console: app.console, terminal: app.terminal,
+                inputMode: app.inputMode,
+                appearance: app.appearance,
+                pushRegistration: app.pushRegistration,
+                notificationPreferences: app.notificationPreferences,
+                relaySettings: app.relaySettings,
+                notificationRouter: notificationRouter,
+                bannerStore: app.bannerStore,
+                liveActivities: app.liveActivities,
+                activity: app.activity
+            ),
+            hosts: HostListView(
+                store: app.hostStore,
+                connectionStatuses: app.console.hostStatuses,
+                standingFailures: app.console.hostStandingFailures,
+                latencies: app.console.hostLatencies,
+                connectedAddresses: app.console.hostConnectedAddresses,
+                discovery: SessionDiscoveryStore(
+                    listSessions: { hostID in
+                        try await app.console.listSessions(on: hostID)
+                    })),
+            settings: SettingsView(
+                terminal: app.terminal,
+                appearance: app.appearance,
+                pushRegistration: app.pushRegistration,
+                notificationPreferences: app.notificationPreferences,
+                relaySettings: app.relaySettings,
+                liveActivities: app.liveActivities,
+                console: app.console,
+                hosts: app.hostStore.hosts,
+                // The ONE shared text-size store (review finding 4): the
+                // Settings page writes the same instance the chat reading
+                // text consumes — no second store, no drift.
+                readingTextSize: app.readingTextSize),
+            // A top-level page owns the window only while the Console
+            // hasn't pushed an Agent detail — inside chat/terminal/detail
+            // the destination chrome steps aside entirely (#A).
+            isPageContentFocused: { notificationRouter.path.isEmpty }
         )
+        // The shared reading-size store, in scope for the chat reading
+        // text (review finding 4: reading views only — NOT the window
+        // root, so the compact chrome keeps the design's scale).
+        .environment(\.appReadingTextSize, app.readingTextSize)
         .environment(\.sceneWindow, window)
         .environment(
             \.agentSceneRouting,

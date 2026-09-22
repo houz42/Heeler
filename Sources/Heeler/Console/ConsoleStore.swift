@@ -19,6 +19,16 @@ final class ConsoleStore {
     /// renders as the live "Connected" row, distinct from probe facts and
     /// the user's preferred intent.
     private(set) var hostConnectedAddresses: [Host.ID: String] = [:]
+    /// Every winning address recorded by a dial, BEFORE the session
+    /// proves itself connected (the mark lands during `.connecting`; the
+    /// status only turns `.connected` after the first ping). This raw
+    /// record is the single source of truth; the published
+    /// `hostConnectedAddresses` is derived from it against connection
+    /// status in `rebuild()`, so a mark recorded mid-connect survives and
+    /// surfaces the moment the status turns `.connected` — instead of
+    /// being filtered out by a rebuild that ran before the status caught
+    /// up (the every-route-reads-alternate device defect).
+    @ObservationIgnored private var recordedConnectedAddresses: [Host.ID: String] = [:]
     private(set) var hostStandingFailures: [Host.ID: TransportError] = [:]
     private(set) var hostLatencies: [Host.ID: Duration] = [:]
     private(set) var hostSyncErrors: [Host.ID: String] = [:]
@@ -108,14 +118,23 @@ final class ConsoleStore {
             })
         Task { @MainActor [weak self, connectedAddressEvents] in
             for await (hostID, address) in connectedAddressEvents.stream {
-                // Single source of truth: recording a new connection
-                // REPLACES the host's mark — at most one address per Host
-                // can ever read as in use.
-                if let self {
-                    self.hostConnectedAddresses[hostID] = address
-                }
+                self?.recordConnectedAddressForTesting(hostID: hostID, address: address)
             }
         }
+    }
+
+    /// The dial-report fold's single step: record a dial's winning
+    /// address (raw, status-independent — the report lands while the
+    /// session is still `.connecting`), then rebuild so the published
+    /// map re-derives against live status. The mailbox task drives this
+    /// in production; the mid-connect race regression test drives it
+    /// directly (same path, same single source of truth).
+    func recordConnectedAddressForTesting(hostID: Host.ID, address: String) {
+        // Single source of truth: recording a new connection REPLACES
+        // the host's mark — at most one address per Host can ever read
+        // as in use.
+        recordedConnectedAddresses[hostID] = address
+        rebuild()
     }
 
     /// Pins or unpins the Agent and re-sorts the published list in the same
@@ -130,6 +149,9 @@ final class ConsoleStore {
     func setHosts(_ hosts: [Host]) {
         let incoming = Dictionary(hosts.map { ($0.id, $0) }) { _, last in last }
         composerStores = composerStores.filter { incoming[$0.key.hostID] != nil }
+        // A dropped/edited Host's raw dial record dies with its projection:
+        // an edited catalog must never resurrect a stale address mark.
+        recordedConnectedAddresses = recordedConnectedAddresses.filter { incoming[$0.key] != nil }
         for (id, projection) in projections where incoming[id] != projection.host {
             sidebarSnapshots.invalidate(id)
             projection.end()
@@ -289,9 +311,24 @@ final class ConsoleStore {
         return projection
     }
 
+    /// The catalog record of a connected Host (nil when the Host is not
+    /// connected). Consumers needing up-to-date catalog state pass their
+    /// own Host record instead.
+    func host(for hostID: Host.ID) -> Host? {
+        projections[hostID]?.host
+    }
+
     func availableAgentKinds(on hostID: Host.ID) async throws -> [SupportedAgentKind] {
         try await projection(for: hostID).availableAgentKinds()
     }
+    /// Reads one whole remote file (the chat openers' fetch seam:
+    /// Markdown/text previews and file links route through here).
+    func readRemoteFile(at path: String, on hostID: Host.ID) async throws -> Data {
+        try await projection(for: hostID).session.withTransport { transport in
+            try await transport.readTranscriptFile(atPath: path)
+        }
+    }
+
     /// Resolves the Host's remote home directory for the New Workspace
     /// directory browser (#280). Throws the error's own presentation,
     /// including homeDirectoryUnresolvable when the probe fails.
@@ -611,9 +648,12 @@ final class ConsoleStore {
             uniqueKeysWithValues: current.compactMap { projection in
                 projection.status.map { (projection.host.id, $0) }
             })
-        // Zero when disconnected, exactly one when connected: a Host whose
-        // session is not `.connected` cannot claim an in-use address.
-        hostConnectedAddresses = hostConnectedAddresses.filter { hostID, _ in
+        // Zero when disconnected, exactly one when connected: derived from
+        // the raw dial records against live status — a mark recorded while
+        // `.connecting` survives in the raw record and publishes the moment
+        // the status turns `.connected`; a disconnect clears the publish
+        // without losing the record (a redial replaces it).
+        hostConnectedAddresses = recordedConnectedAddresses.filter { hostID, _ in
             hostStatuses[hostID] == .connected
         }
         hostStandingFailures = Dictionary(

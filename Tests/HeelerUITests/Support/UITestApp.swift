@@ -30,6 +30,10 @@ enum UITestApp {
         case console
         /// The Add/Edit Host form against the multipath demo Host.
         case hostForm
+        /// The Hosts list page: host cards with named routes (Studio Mac
+        /// card dialed through its primary address, Build Server's card
+        /// honestly not-connected).
+        case hostList
         /// The Host detail page mid address-probe.
         case hostDetailProbing
         /// The Host detail page stopped on the pick between two addresses.
@@ -40,6 +44,7 @@ enum UITestApp {
         var launchArguments: [String] {
             switch self {
             case .console: return ["--demo-screenshots"]
+            case .hostList: return ["--demo-screenshots", "--demo-host-list"]
             case .hostForm: return ["--demo-screenshots", "--demo-host-form"]
             case .hostDetailProbing:
                 return ["--demo-screenshots", "--demo-host-detail-probing"]
@@ -63,18 +68,47 @@ enum UITestFixtures {
     /// Agent row labels as the card renders them: workspace label · agent
     /// name (the seeded global default layout). Keep in sync with
     /// DemoScreenshotMode.swift's fixture.
+    /// The union roster's row TITLE fragments (the redesigned agents
+    /// list labels rows by terminal title; workspace/name ride the
+    /// metadata line). Matched by CONTAINS.
     static let agentRows = [
-        "Checkout · reviewer",
-        "Payments API · api-tests",
-        "iOS App · ios-polish",
-        "iOS App · accessibility",
-        "Product Docs · docs-review",
+        "Checkout review",
+        "Harden webhook retries",
+        "Polish the Attach experience",
+        "Audit VoiceOver labels",
+        "Refresh the setup guide",
     ]
     /// The chat-bearing agent's row (tap target for chat proofs).
-    static let chatAgentRow = "iOS App · ios-polish"
+    static let chatAgentRow = "Polish the Attach experience"
+
+    /// The nav v2 heading trigger (hamburger) label.
+    static let navigationTrigger = "Open navigation"
+
+    /// A row-title static text, matched by CONTAINS (the redesigned
+    /// row titles carry a "π > " terminal prefix).
+    static func agentRowText(
+        _ fragment: String, in app: XCUIApplication
+    ) -> XCUIElement {
+        app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", fragment)).firstMatch
+    }
     /// The multipath Host the form routes edit.
     static let hostFormTitle = "Edit Host"
     static let hostFormExistingAddress = "192.168.31.71"
+    /// The compact top-left destination selector on the Console (#A): the
+    /// sheet-era Hosts/Settings toolbar buttons it replaced are gone.
+    static let destinationSelector = "Agents, switch destination"
+    /// The redesigned Host form's labelled fields (handoff §E): the
+    /// display-name field's label, and the SSH username field's.
+    static let hostFormNameField = "Display name"
+    static let hostFormUserField = "SSH username"
+    /// Hosts-list cards (handoff §E): the Studio Mac card's route rows,
+    /// labelled by route name with exact address:port underneath.
+    static let studioMacCard = "Studio Mac"
+    static let studioMacPrimaryRoute = "Primary"
+    static let studioMacPrimaryAddress = "studio.demo.invalid:22"
+    static let studioMacLanRoute = "Local network"
+    static let studioMacLanAddress = "studio.lan.demo.invalid:22"
     /// Toolbar buttons on the Console (labelled, not identified).
     static let consoleToolbarHosts = "Hosts"
     static let consoleToolbarSettings = "Settings"
@@ -95,15 +129,17 @@ enum UITestTimeouts {
 // MARK: - App state helpers (category over XCUIApplication)
 
 extension XCUIApplication {
-    /// The chat composer's entry button: the input frame opens on tap
-    /// ("Message the agent"); the UITextView itself only exists once the
-    /// frame is presented, and its AX label is the placeholder.
+    /// The chat composer: PERSISTENT since the conversation redesign —
+    /// the bar (and its UITextView) is always mounted on interactive
+    /// chats; there is no entry button anymore.
     var chatComposerButton: XCUIElement {
-        buttons["Message the agent"].firstMatch
+        // Kept under the old name (call sites read as "the composer
+        // affordance"); resolves the field itself now.
+        chatInput
     }
 
-    /// The chat input's UITextView, once the input frame is presented.
-    /// Its accessibility label IS the placeholder.
+    /// The chat input's UITextView (always mounted on interactive
+    /// chats). Its accessibility label IS the placeholder.
     var chatInput: XCUIElement {
         descendants(matching: .any).matching(
             NSPredicate(format: "label == %@", "Message — / # @ ! for commands")

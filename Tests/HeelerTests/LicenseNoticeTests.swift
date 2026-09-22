@@ -522,18 +522,23 @@ struct AcknowledgementsRouteIdentityTests {
                 .appendingPathComponent("Sources/Heeler/Settings/SettingsView.swift"),
             encoding: .utf8)
 
-        #expect(source.contains("case .acknowledgements:"))
+        // The nav-slice redesign (#A v2) moved every Settings push to
+        // value-based links + a navigationDestination switch; the identity
+        // contract is unchanged: the row builds its link VALUE from
+        // aboutDestination's result, and that value resolves through the
+        // SHARED SettingsAboutDestination enum to AcknowledgementsView.
         #expect(source.contains("aboutDestination(for:"))
-        #expect(source.contains("destination.destinationView"))
         #expect(source.contains("NavigationLink"))
-        #expect(source.contains("AcknowledgementsView.self"))
+        #expect(source.contains("NavigationLink(value: destination.rawValue)"))
         #expect(source.contains("AcknowledgementsView()"))
+        #expect(
+            source.contains("case SettingsAboutDestination.acknowledgements.rawValue:"))
 
         // The acknowledgements case body must not be a bare LabeledContent stand-in.
         let caseBody = try acknowledgementsCaseBody(in: source)
         #expect(caseBody.contains("NavigationLink"))
         #expect(caseBody.contains("aboutDestination(for:"))
-        #expect(caseBody.contains("destination.destinationView"))
+        #expect(caseBody.contains("destination.rawValue"))
         #expect(!caseBody.contains("LabeledContent("))
     }
 
