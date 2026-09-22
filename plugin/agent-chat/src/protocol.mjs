@@ -66,6 +66,10 @@ export const METHOD_CAPABILITIES = Object.freeze({
   'item.read': 'history',
   'blob.read': 'history',
   'prompt.send': 'prompt',
+  // v3 (structured commands): explicit command invocation by opaque catalog
+  // id; acceptance-only delivery semantics (never send.confirmed). Reuses
+  // the commands capability bit — the broker needs no new routing logic.
+  'command.invoke': 'commands',
   interrupt: 'interrupt',
   'commands.list': 'commands',
   'interactions.list': 'interactions',

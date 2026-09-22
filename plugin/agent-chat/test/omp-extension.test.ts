@@ -189,6 +189,13 @@ test('prompt.send: text-only stays a string; images build a content array', {tim
   const c3=calls.at(-1);
   assert.ok(Array.isArray(c3));
   assert.deepEqual(c3,[{type:'text',text:'look at this ref'},{type:'image',data:pngB64,mimeType:'image/png'}]);
+  // 3b) IMAGE-ONLY draft: empty text + nonempty images is ACCEPTED and
+  // delivers an EMPTY text block + the image (no filler text fabricated).
+  const r3b=await request({text:'',requestKey:'k3b',images:[{data:pngB64,mimeType:'image/png'}]});
+  assert.equal(r3b.result?.accepted,true,'image-only send must be accepted');
+  const c3b=calls.at(-1);
+  assert.ok(Array.isArray(c3b));
+  assert.deepEqual(c3b,[{type:'text',text:''},{type:'image',data:pngB64,mimeType:'image/png'}]);
   // 4) validations reject (nothing sent on): bad mime, both data+ref, unknown ref.
   const bad=[
    {code:'invalid_request',params:{text:'x',requestKey:'e1',images:[{data:pngB64,mimeType:'image/bmp'}]}},
@@ -196,11 +203,13 @@ test('prompt.send: text-only stays a string; images build a content array', {tim
    // Unknown blob ref: the blob store's own contract code, not invalid_request.
    {code:'item_not_found',params:{text:'x',requestKey:'e3',images:[{ref:'img:missing:c:0',mimeType:'image/png'}]}},
    {code:'invalid_request',params:{text:'x',requestKey:'e4',images:[]}},
+   // Genuinely empty submission: no text AND no images.
+   {code:'invalid_request',params:{text:'',requestKey:'e5'}},
   ];
   for(const {code,params} of bad){
    const r=await request(params);
    assert.equal(r.error?.code,code,JSON.stringify(params));
-   assert.equal(calls.length,3,'no send after a rejected prompt');
+   assert.equal(calls.length,4,'no send after a rejected prompt');
   }
  } finally {
   handlers.get('session_shutdown')?.({},ctx);
@@ -244,19 +253,22 @@ test('registration declares attachments capability', {timeout:5000}, async () =>
 });
 
 // Send correlation: prompt.send(requestKey) must produce a send.confirmed
-// event whose recordId IS the committed user record's id (not a marker id),
-// with origin proven by text match — a terminal-typed user message never
-// consumes a pending key and never emits send.confirmed.
-test('send.confirmed: real record id, origin-checked, FIFO survives foreign messages', {timeout:5000}, async () => {
+// event whose recordId IS the committed user record's id (not a marker id).
+// Origin is proven by the ATTRIBUTION TOKEN omp echoes into the committed
+// record (never text matching): a terminal-typed user message (no token)
+// never consumes a key; two sends with IDENTICAL text get distinct, correct
+// confirmations for their OWN records.
+test('send.confirmed: token-proven origin — real record id, foreign messages, same-text twins', {timeout:5000}, async () => {
  const dir=await mkdtemp(join(tmpdir(),'chat-send-corr-'));
  const socketPath=join(dir,'broker.sock');
  const old=process.env.HEELER_CHAT_SOCKET;
  process.env.HEELER_CHAT_SOCKET=socketPath;
  const handlers=new Map();
- const events=[]; // {type, requestKey, recordId}
+ const events=[]; // send.confirmed payloads
  const markers=[]; // durable marker entries appended via pi.appendEntry
- // Fake session tree: entries chain parent->child; the leaf is whatever the
- // "agent" last committed. Start with an assistant message as the leaf.
+ const sentAttributions=[]; // attributions the adapter passed to sendUserMessage
+ // Fake session tree mirroring omp: sendUserMessage(text,{attribution}) ->
+ // committed user record carries attribution verbatim.
  const mk=(id,parentId,type,message)=>({id,parentId,type,...(message!==undefined?{message}:{})});
  const entries=new Map([
   ['a1',mk('a1',null,'message',{role:'assistant',content:[{type:'text',text:'prior turn'}]})],
@@ -269,7 +281,11 @@ test('send.confirmed: real record id, origin-checked, FIFO survives foreign mess
   getEntry:id=>entries.get(id),
   appendCustomEntry:(customType,data)=>{const id=`marker-${++nextId}`;entries.set(id,mk(id,leafId,'custom'));markers.push({id,customType,data});return id;},
  },abort(){}};
- const commitUser=(text)=>{const id=`u-${++nextId}`;entries.set(id,mk(id,leafId,'message',{role:'user',content:[{type:'text',text}]}));leafId=id;handlers.get('message_end')({message:{role:'user'}},ctx);return id;};
+ // Commit a user record the way omp does: attribution echoed verbatim.
+ const commitUser=(text,attribution)=>{const id=`u-${++nextId}`;entries.set(id,mk(id,leafId,'message',{role:'user',content:[{type:'text',text}],attribution}));leafId=id;handlers.get('message_end')({message:{role:'user'}},ctx);return id;};
+ // The adapter's queued sends defer like omp: their records commit later,
+ // when the fake harness chooses (driven below after each request).
+ const queuedForCommit=[];
  let conn;
  const registered=Promise.withResolvers();
  const server=net.createServer(socket=>{
@@ -303,34 +319,57 @@ test('send.confirmed: real record id, origin-checked, FIFO survives foreign mess
   server.listen(socketPath);await once(server,'listening');
   extension({
    on:(name,fn)=>handlers.set(name,fn),
-   sendUserMessage(){},
+   sendUserMessage(content,options){
+    const text=typeof content==='string'?content:content.filter(b=>b.type==='text').map(b=>b.text).join(' ');
+    const attribution=typeof options?.attribution==='string'?options.attribution:'user';
+    sentAttributions.push(attribution);
+    queuedForCommit.push({text,attribution});
+   },
    getCommands:()=>[],
    appendEntry:(customType,data)=>ctx.sessionManager.appendCustomEntry(customType,data),
   });
   handlers.get('session_start')({},ctx);
   await registered.promise;
-  // Broker sends with requestKey k1; BEFORE its record lands, a TERMINAL-typed
-  // user message commits (different text) — it must NOT consume k1.
-  const r=await request({text:'broker prompt one',requestKey:'k1'});
-  assert.equal(r.result?.accepted,true);
-  commitUser('typed at the terminal');
-  assert.equal(events.length,0,'a foreign (terminal) user message must not emit send.confirmed');
-  // Now the broker prompt's record commits: k1 confirms with the REAL id.
-  const recordId=commitUser('broker prompt one');
-  await new Promise(r=>setTimeout(r,100)); // event frame delivery over the socket
+  // Broker send k1 (text A). Before its record lands, a TERMINAL-typed user
+  // message commits (no token) — must not consume k1.
+  const r1=await request({text:'shared text',requestKey:'k1'});
+  assert.equal(r1.result?.accepted,true);
+  assert.ok(sentAttributions[0].startsWith('heeler-chat:send:'),'send must carry the origin token in attribution');
+  assert.equal(sentAttributions[0],'heeler-chat:send:k1');
+  commitUser('typed at the terminal','user');
+  assert.equal(events.length,0,'a foreign (terminal, tokenless) user message must not emit send.confirmed');
+  // k1's record commits: confirms with the REAL id.
+  const id1=queuedForCommit.shift();
+  const record1=commitUser(id1.text,id1.attribution);
+  await new Promise(r=>setTimeout(r,100)); // event delivery over the socket
   assert.equal(events.length,1);
   assert.equal(events[0].requestKey,'k1');
-  assert.equal(events[0].recordId,recordId,'recordId must be the committed user record id, not a marker id');
-  assert.equal(events[0].recordId.startsWith('u-'),true);
-  assert.ok(events[0].recordId!=='marker-1','must not be the marker entry id');
-  // The durable marker binds the SAME real record id.
-  assert.equal(markers.length,1);
-  assert.equal(markers[0].customType,'heeler-chat.send.confirmed');
-  assert.equal(markers[0].data.recordId,recordId);
+  assert.equal(events[0].recordId,record1,'recordId must be the committed user record id, not a marker id');
+  assert.ok(!events[0].recordId.startsWith('marker'),'must not be the marker entry id');
+  // THE SAME-TEXT TWIN: send k2 with IDENTICAL text; a same-text terminal
+  // message commits in between; k2's record must confirm to ITS OWN id —
+  // never confused with the already-confirmed k1 record.
+  const r2=await request({text:'shared text',requestKey:'k2'});
+  assert.equal(r2.result?.accepted,true);
+  assert.equal(sentAttributions[1],'heeler-chat:send:k2');
+  commitUser('shared text','user'); // same TEXT as the broker send, tokenless
+  assert.equal(events.length,1,'same-text terminal message must not steal k2');
+  const id2=queuedForCommit.shift();
+  const record2=commitUser(id2.text,id2.attribution);
+  await new Promise(r=>setTimeout(r,100));
+  assert.equal(events.length,2);
+  assert.equal(events[1].requestKey,'k2');
+  assert.equal(events[1].recordId,record2);
+  assert.notEqual(record1,record2,'identical-text sends confirm to DISTINCT records');
+  // The durable markers bind the SAME real record ids.
+  assert.equal(markers.length,2);
   assert.equal(markers[0].data.requestKey,'k1');
-  // A user record with no pending send (empty FIFO) confirms nothing.
-  commitUser('typed again at terminal');
-  assert.equal(events.length,1);
+  assert.equal(markers[0].data.recordId,record1);
+  assert.equal(markers[1].data.requestKey,'k2');
+  assert.equal(markers[1].data.recordId,record2);
+  // Empty FIFO: a terminal message confirms nothing.
+  commitUser('typed again at terminal','user');
+  assert.equal(events.length,2);
  } finally {
   handlers.get('session_shutdown')?.({},ctx);conn?.destroy();
   const closed=Promise.withResolvers();server.close(closed.resolve);await closed.promise;
