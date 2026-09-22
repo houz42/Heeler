@@ -866,11 +866,11 @@ struct ChatScreen: View {
     /// the background blob upload. The upload only exists for history
     /// dedup and lands whenever it lands.
     private var canSend: Bool {
-        if draftItems.contains(where: { item in
-            if case .image = item { return true }
-            return false
-        }) { return true }
-        return !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        // Review round 3, finding 1: ONE sendability predicate, shared
+        // with the submit guard — ChatDraftComposer.isSendable (nonempty
+        // text OR any held item: image, file, or quote). The button and
+        // the guard can never drift apart again.
+        ChatDraftComposer.isSendable(text: composedMessageText(), items: draftItems)
     }
 
     /// Puts the bubble's plain text on the pasteboard.
@@ -1353,13 +1353,15 @@ struct ChatScreen: View {
                         try? await Task.sleep(for: .seconds(2))
                         showSentConfirmation = false
                     }
-                } catch let error as CocoaError where
-                    error.code == .fileReadCorruptFile {
-                    // An attachment could not be resolved (findings
-                    // 1+3): the WHOLE draft stays — text and items —
-                    // and the failed attachment is named, not
-                    // silently skipped.
-                    deliveryError = "One attachment could not be read for sending — it stays in your draft. Remove it or try again."
+                } catch let error as ChatAttachmentSendError {
+                    // Review round 3, finding 2: the failure names the
+                    // attachment, renders BESIDE the tile rail
+                    // (attachmentErrorMessage is the composer's own
+                    // error row), and the WHOLE draft (text + items)
+                    // stays. Local preparation/reads — never an
+                    // uncertain network delivery.
+                    deliveryError = nil
+                    attachmentErrorMessage = error.message
                 } catch {
                     // Visible + retryable: the draft (and items) stay.
                     deliveryError = "Send failed — your message may not have been delivered. Retry when ready."
@@ -1427,16 +1429,27 @@ struct ChatScreen: View {
                 bytes = try? await fetch(remotePath)
             }
             guard let bytes, !bytes.isEmpty else {
-                // Finding 1+3: a resolvable-but-failed attachment is
-                // NEVER silently skipped — the send aborts, the draft
-                // stays, the failure is visible.
-                throw CocoaError(.fileReadCorruptFile)
+                // Findings 1+3 (review round 3, finding 2): a resolvable-
+                // but-failed attachment is NEVER silently skipped — the
+                // send aborts, the draft stays, and the failure names
+                // WHICH attachment failed.
+                throw ChatAttachmentSendError.unreadableAttachment(
+                    name: Self.attachmentDisplayName(item))
             }
             // Finding 4: normalize through the shared local preparation
             // (supported formats, bounded, oriented) — never raw picker
             // data with a guessed MIME.
-            let prepared = try await Self.imagePreparer.prepare(
-                DataImageSelection(data: bytes))
+            let prepared: PreparedImage
+            do {
+                prepared = try await Self.imagePreparer.prepare(
+                    DataImageSelection(data: bytes))
+            } catch {
+                // Round 3, finding 2: preparation failure is LOCAL
+                // (bad/unsupported content), not an uncertain network
+                // delivery — named per attachment.
+                throw ChatAttachmentSendError.unreadableAttachment(
+                    name: Self.attachmentDisplayName(item))
+            }
             defer { try? prepared.remove() }
             let preparedBytes = try Data(contentsOf: prepared.fileURL)
             images.append(AgentChatOutgoingImage(
@@ -1453,6 +1466,17 @@ struct ChatScreen: View {
     /// The shared image preparation instance for the inline send path
     /// (the same default configuration the staging pipeline uses).
     private static let imagePreparer = ImagePreparer()
+
+    /// One attachment's user-facing name for error copy (review round
+    /// 3, finding 2): images are "image", files carry their own name.
+    private static func attachmentDisplayName(_ item: ChatDraftItem) -> String {
+        switch item {
+        case .image: "image"
+        case .file(_, let name, _): name
+        case .quote(_, let text, _):
+            String(text.prefix(24))
+        }
+    }
 
     /// Review gap 7: the structured-send path for attachment-bearing
     /// sends. The deliver closure stays text-only (the router's
@@ -1488,6 +1512,24 @@ struct ChatScreen: View {
             return "image/webp"
         }
         return "image/png"
+    }
+}
+
+/// A structured-send attachment failure that NAMES the attachment
+/// (review round 3, finding 2): local read/preparation failures — the
+/// draft is always retained whole; distinct from uncertain network
+/// delivery, which keeps the generic retryable delivery copy.
+struct ChatAttachmentSendError: Error, Sendable, Equatable {
+    let name: String
+
+    /// One attachment's user-facing name for error copy: images are
+    /// "image", files carry their own name, quotes excerpt their text.
+    static func unreadableAttachment(name: String) -> ChatAttachmentSendError {
+        ChatAttachmentSendError(name: name)
+    }
+
+    var message: String {
+        "The attachment \(name) could not be read for sending — it stays in your draft. Remove it or try again."
     }
 }
 
