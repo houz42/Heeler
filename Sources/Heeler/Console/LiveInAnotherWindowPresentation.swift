@@ -20,7 +20,7 @@ struct LiveInAnotherWindowPresentation: Equatable {
         showsTakeOver = canTakeOver
         message =
             canTakeOver
-            ? "This Host's terminal is open in another Heeler window, and input continues there."
-            : "A Shell Terminal on this Host is open in another Heeler window, and input continues there. Close it to use the terminal here."
+            ? "This Host's terminal is open in another Meadow window, and input continues there."
+            : "A Shell Terminal on this Host is open in another Meadow window, and input continues there. Close it to use the terminal here."
     }
 }

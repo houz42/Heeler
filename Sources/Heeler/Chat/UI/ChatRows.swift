@@ -15,6 +15,8 @@ fileprivate enum ChatWash {
     static func turn(isDark: Bool) -> Double { isDark ? 0.16 : 0.07 }
     /// The orange wash behind the blocked-agent pending card.
     static func pending(isDark: Bool) -> Double { isDark ? 0.12 : 0.06 }
+    /// The tinted wash behind the resolved-ask special element.
+    static func resolved(isDark: Bool) -> Double { isDark ? 0.14 : 0.07 }
 }
 
 /// One full-width chat row. Rows are plain (no bubbles, no avatars) — the
@@ -48,6 +50,12 @@ struct ChatRowView: View {
             // Item 19: the quiet system row — never dropped; the wash
             // strengthens with the level.
             ChatNoticeRow(text: text, level: level)
+        case .specialSection(let section):
+            // Level-dependent initial state is the screen's call; the
+            // plain row renderer (previews) keeps the chip collapsed.
+            ChatSpecialSectionRow(section: section)
+        case .resolvedAsk(let ask):
+            ChatResolvedAskRow(ask: ask)
         case .image:
             // Handled by the screen (fetch seam + reader); the plain
             // row renderer never sees it.
@@ -367,6 +375,178 @@ struct ChatPendingRow: View {
     }
 }
 
+/// One resolved ask — a compact SPECIAL element at the ask's
+/// anchored position in the flow (question → answer → reply; the
+/// anchor logic in ChatFiltering places it). NOT a chat bubble:
+/// its own glanceable treatment — two compact labeled lines over a
+/// subtle tinted wash: 'Q: <question>' on the LEFT (the agent's
+/// side), 'A: <answer>' RIGHT-ALIGNED (the user's action position)
+/// with the resolved checkmark. Long text CLAMPS (two lines,
+/// ellipsis) — tapping the element toggles the full text
+/// expanded/collapsed, so the summary stays glanceable and the
+/// detail is one tap away. 'You answered: <labels>' when this
+/// device's acknowledged answer won; the honest outcome note
+/// otherwise.
+struct ChatResolvedAskRow: View {
+    let ask: ResolvedAsk
+
+    @Environment(\.colorScheme) private var colorScheme
+    private var isDark: Bool { colorScheme == .dark }
+    /// Tap toggles the clamped Q/A lines to their full text.
+    @State private var isExpanded = false
+
+    /// The collapsed clamp: two lines, ellipsis.
+    private static let collapsedLines = 2
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // Q — the question recap: left, secondary, compact.
+            // Omitted entirely when the question text is unknown
+            // (legacy records): the A line alone is still honest.
+            if let question = questionDisplay, !question.isEmpty {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("Q")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.tint)
+                    Text(question)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(isExpanded ? nil : Self.collapsedLines)
+                        .truncationMode(.tail)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            // A — the answer: right-aligned (the user's action
+            // position), with the resolved checkmark.
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tint)
+                Text(answerDisplay)
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(isExpanded ? nil : Self.collapsedLines)
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            .tint.opacity(ChatWash.resolved(isDark: isDark)),
+            in: RoundedRectangle(cornerRadius: 12))
+        .contentShape(Rectangle())
+        .onTapGesture { withAnimation(.snappy) { isExpanded.toggle() } }
+        .accessibilityElement(children: .combine)
+        .accessibilityHint(
+            isExpanded ? "Tap to collapse" : "Tap to read the full text")
+    }
+
+    /// The Q line's text: the answered question's own text, or nil
+    /// when unknown.
+    private var questionDisplay: String? {
+        guard let question = ask.questionText else { return nil }
+        let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// The A line's text: the resolved body ('You answered: …' /
+    /// the honest outcome note).
+    private var answerDisplay: String { ask.body }
+}
+
+
+// MARK: - Special sections (system notices & IRC)
+
+/// A `<system-notice>`/`<irc>` section: chrome, not conversation, so
+/// it renders as a SHORT SUMMARY chip — a capsule with the kind's
+/// label and a one-line excerpt — never the full body inline. Tap
+/// toggles the full body below the chip; `initiallyExpanded` is set
+/// by the screen from the detail level (L3 opens the body, lower
+/// levels keep the chip collapsed). The accent (green) carries the
+/// section identity: icon + label + the capsule's accent wash, the
+/// same quiet accent-bar language the user-turn rail and pending
+/// card speak. The body is terminal-ish output — plain monospace
+/// via `ChatBlockText(.output)`, never markdown (a fenced block
+/// inside a notice is data, not markup).
+struct ChatSpecialSectionRow: View {
+    let section: ChatSpecialSection
+    /// True = the full body renders below the chip (the screen's
+    /// level wiring: L3 starts expanded, lower levels collapsed).
+    var initiallyExpanded: Bool = false
+
+    @State private var expanded: Bool
+    @Environment(\.colorScheme) private var colorScheme
+    private var isDark: Bool { colorScheme == .dark }
+
+    init(section: ChatSpecialSection, initiallyExpanded: Bool = false) {
+        self.section = section
+        self.initiallyExpanded = initiallyExpanded
+        self._expanded = State(initialValue: initiallyExpanded)
+    }
+
+    private var accent: Color { .accentColor }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: section.kind.icon)
+                    .imageScale(.small)
+                    .foregroundStyle(accent)
+                Text(section.kind.label)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(accent)
+                    .fixedSize()
+                Text(section.summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+                Image(
+                    systemName: expanded
+                        ? "chevron.up" : "chevron.down")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                accent.opacity(isDark ? 0.16 : 0.07),
+                in: Capsule())
+            .contentShape(Capsule())
+            .onTapGesture {
+                withAnimation(.snappy(duration: 0.2)) {
+                    expanded.toggle()
+                }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                "\(section.kind.label): \(section.summary)")
+            .accessibilityHint(
+                expanded ? "Collapses the full text" : "Expands the full text")
+
+            if expanded {
+                // Accent bar rail + the verbatim body: the same
+                // accent-bar shape the user-turn rail uses, so the
+                // expanded section still reads as chrome.
+                HStack(alignment: .top, spacing: 8) {
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(accent)
+                        .frame(width: 3)
+                    ChatBlockText(section.body, style: .output)
+                }
+                .padding(.vertical, 2)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+
 // MARK: - Linkified chat text (openers)
 
 /// The linkified form of `ChatBlockText`: same layout, with the
@@ -438,7 +618,7 @@ struct ChatLinkText: View {
                 .foregroundStyle(foregroundOverride ?? style.color)
         } else {
             ChatMarkdownView(
-                markdown: ChatMarkdownText(text).rewritten,
+                markdown: ChatMarkdownText(text).rendered,
                 textColor: foregroundOverride)
         }
     }
@@ -461,11 +641,19 @@ struct LinkifiedChatRow: View {
     /// FAILED-echo error notice row tappable (retry the send); nil keeps
     /// the row inert (previews, unwired surfaces).
     var onRetry: (() -> Void)? = nil
+    /// The pane's detail level: L3 starts special-section chips
+    /// expanded (the reader asked for everything); lower levels keep
+    /// them collapsed.
+    var detailLevel: DetailLevel = .l2
 
-    init(row: ChatRow, router: OpenRouterCore, onRetry: (() -> Void)? = nil) {
+    init(
+        row: ChatRow, router: OpenRouterCore,
+        onRetry: (() -> Void)? = nil, detailLevel: DetailLevel = .l2
+    ) {
         self.row = row
         self.router = router
         self.onRetry = onRetry
+        self.detailLevel = detailLevel
     }
 
     var body: some View {
@@ -479,6 +667,10 @@ struct LinkifiedChatRow: View {
             ) {
                 ChatLinkText(text, style: .thinking, router: router)
             }
+        case .specialSection(let section):
+            ChatSpecialSectionRow(
+                section: section,
+                initiallyExpanded: detailLevel >= .l3)
         case .notice(_, _, _, let level)
         where (level == "error" || level == "resend") && onRetry != nil:
             // Re-review round 4, finding 3: the AX label names the
@@ -703,6 +895,24 @@ private enum ChatRowPreviewFixture {
                     "The retry logic drops the cart because `PaymentCoordinator` resets state on the *first* attempt. I'll preserve the cart across retries and re-run `CheckoutFlowTests`."),
             ]),
             ChatMessage(role: .assistant, blocks: [
+                .text(
+                    """
+                    Before the reply, the harness injected two special \
+                    sections into this turn:
+
+                    <system-notice>Skill "shell-qa" is now active for this \
+                    session. Commands run through the dev-box shell QA \
+                    profile.</system-notice>
+
+                    <irc><Main> The retry fix looks good from my side — \
+                    go ahead and ship it when tests pass.
+                    </irc>
+
+                    With the sections extracted, this prose continues \
+                    as ordinary conversation.
+                    """),
+            ]),
+            ChatMessage(role: .assistant, blocks: [
                 .text("All 18 tests pass. Ready to commit when you are."),
             ]),
         ]
@@ -717,14 +927,22 @@ private enum ChatRowPreviewFixture {
                 question: "Run the full CheckoutFlowTests suite before committing?",
                 options: ["Run the tests", "Commit without tests"]),
         ]
+        let resolvedAsks = [
+            ResolvedAsk(
+                id: "r-preview",
+                body: "You answered: Run the tests",
+                questionText: "Run the suite first?"),
+        ]
         return ChatContent(
-            messages: messages, toolResults: results, pending: pending)
+            messages: messages, toolResults: results, pending: pending,
+            resolvedAsks: resolvedAsks)
     }
 
     static var rows: [ChatRow] {
         ChatFiltering.visibleRows(
             messages: content.messages, toolResults: content.toolResults,
-            pending: content.pending, level: .l3)
+            pending: content.pending, resolvedAsks: content.resolvedAsks,
+            level: .l3)
     }
 }
 
@@ -786,7 +1004,7 @@ private struct ChatRowsPreviewSurface: View {
 struct ChatAssistantArticleView: View {
     let bubble: ChatBubble
     let router: OpenRouterCore
-    /// e.g. "Heeler · omp" — from the real runtime identity, never guessed.
+    /// e.g. "Meadow · omp" — from the real runtime identity, never guessed.
     var authorLabel: String
     /// Short tap toggles the inline actions rail. Long press stays
     /// native text selection.
@@ -796,8 +1014,7 @@ struct ChatAssistantArticleView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(authorLabel)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color(
-                    red: 0x22 / 255.0, green: 0x64 / 255.0, blue: 0x4D / 255.0))
+                .foregroundStyle(Color.accentColor)
             ChatLinkText(bubble.text, style: .assistant, router: router)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -954,6 +1171,23 @@ private func optionIsCompact(_ label: String) -> Bool {
     label.count <= 24 && !label.contains("\n")
 }
 
+/// Ink that clears the ACCENT FILL in both appearances: white on the
+/// dark light-mode accent (#22644D, 7.0:1), the prototype's dark ink
+/// #17251D on the light mint dark accent (#9ACFB2, 9.06:1) — white on
+/// #9ACFB2 measures 1.76:1 (illegible; v2 accent review finding). The
+/// prototype pairs its dark accent with `--primary` #17251d
+/// (`.dark .primary,.dark .send{color:#17251d}`). One production
+/// definition: the pending card's Confirm renders this, and the
+/// contrast regression test resolves the SAME token — reverting the
+/// foreground to white would fail the test.
+enum ChatAccentInk {
+    static let color = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0x17 / 255, green: 0x25 / 255, blue: 0x1D / 255, alpha: 1)
+            : .white
+    })
+}
+
 /// The redesigned pending-question card: border + paper + eyebrow with
 /// step dots + question + quiet instruction + adaptive options. Short
 /// labels flow compactly; descriptive labels stack full-width.
@@ -985,7 +1219,19 @@ struct AgentPendingQuestionCard: View {
     }
 
     private var accent: Color {
-        Color(red: 0x22 / 255.0, green: 0x64 / 255.0, blue: 0x4D / 255.0)
+        Color.accentColor
+    }
+    /// Ink that clears the ACCENT FILL in both appearances — see
+    /// `ChatAccentInk` (the one production definition, also what the
+    /// contrast regression test resolves).
+    private var onAccentInk: Color {
+        ChatAccentInk.color
+    }
+    /// The selected option's fill: the soft accent wash with PRIMARY
+    /// ink (the prototype's `.option.selected` — background var(--soft),
+    /// never white-on-accent).
+    private var accentWash: Color {
+        Color("AccentWash")
     }
     private var cardBorder: Color {
         Color(red: 0xC4 / 255.0, green: 0xD5 / 255.0, blue: 0xCB / 255.0)
@@ -1053,7 +1299,7 @@ struct AgentPendingQuestionCard: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 11)
                         .background(accent, in: RoundedRectangle(cornerRadius: 9))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(onAccentInk)
                 }
                 .disabled(selectedOptionIds.isEmpty)
                 .accessibilityLabel("Confirm answers")
@@ -1092,9 +1338,9 @@ struct AgentPendingQuestionCard: View {
                 .multilineTextAlignment(.leading)
                 .padding(.horizontal, 11)
                 .frame(maxWidth: fullWidth ? .infinity : nil, minHeight: 44, alignment: .leading)
-                .background(selected ? accent : Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
-                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(optionBorder, lineWidth: 1))
-                .foregroundStyle(selected ? .white : .primary)
+                .background(selected ? accentWash : Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(selected ? accent : optionBorder, lineWidth: 1))
+                .foregroundStyle(.primary)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Answer: \(label)")

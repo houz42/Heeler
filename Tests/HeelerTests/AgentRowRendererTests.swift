@@ -15,13 +15,13 @@ struct AgentRowRendererTests {
                 stateLabels: ["working": "busy"], terminalTitle: "◑ Fix the build",
                 terminalTitleStripped: "Fix the build", title: "Manual pane",
                 tokens: ["pin_icon": "📌", "markup": "**literal**", "empty": "", "spaces": " \n"])),
-            workspaceLabel: "Heeler", repositoryCheckout: nil,
+            workspaceLabel: "Meadow", repositoryCheckout: nil,
             tabLabel: tabLabel, tabPosition: tabPosition, workspaceTabCount: tabCount)
     }
 
     @Test func defaultElidesAutomaticSingleTabAndStatusFields() {
         let rows = AgentRowRenderer.render(layout: .heelerDefault, agent: agent())
-        #expect(rows.map { $0.map(\.text).joined() } == ["Heeler", "Reviewer"])
+        #expect(rows.map { $0.map(\.text).joined() } == ["Meadow", "Reviewer"])
         #expect(rows.map { $0.compactMap(\.token) } == [[.workspace], [.agent]])
     }
 
@@ -46,7 +46,7 @@ struct AgentRowRendererTests {
                 agentStatus: .working, focused: false, paneID: "opaque-pane", revision: 1,
                 tabID: "opaque-tab", terminalID: "term", workspaceID: "workspace",
                 agent: "claude", cwd: cwd)),
-            workspaceLabel: "Heeler", repositoryCheckout: nil, hostUsername: hostUsername)
+            workspaceLabel: "Meadow", repositoryCheckout: nil, hostUsername: hostUsername)
     }
 
     @Test func directoryShortensOnlyTheAccountsStandardHome() {
@@ -100,7 +100,7 @@ struct AgentRowRendererTests {
              .init(.agent), .init(.custom("missing"))],
         ])
         #expect(AgentRowRenderer.render(layout: layout, agent: agent()).map { $0.map(\.text).joined() }
-                == ["Heeler · Reviewer"])
+                == ["Meadow · Reviewer"])
     }
 
     @Test func kindOverrideReplacesRowsAndStylesDoNotReachSeparators() throws {

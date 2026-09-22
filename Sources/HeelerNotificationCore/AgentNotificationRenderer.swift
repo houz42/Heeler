@@ -16,7 +16,7 @@ struct AgentNotificationAlert: Sendable, Equatable {
 /// attacker-chosen text (spec #68, user story 20).
 enum AgentNotificationRenderer {
     /// Mirrors the relay's generic wrap copy; deliberately unalarming.
-    static let fallback = AgentNotificationAlert(title: "Heeler", body: "Agent update")
+    static let fallback = AgentNotificationAlert(title: "Meadow", body: "Agent update")
 
     static func alert(
         userInfo: [AnyHashable: Any], keys: [NotificationKeyRecord]

@@ -75,22 +75,34 @@ struct AgentKindGlyphShape: Shape {
     }
 }
 
+/// The kind-icon tile's accent pair — the SAME tokens the rest of the app
+/// consumes, so the tile can never drift from the accent. One source of
+/// truth: the adaptive AccentColor (#22644D light / #9ACFB2 dark) and
+/// AccentWash (#EAF2ED / #2D4236) colorsets in Assets.xcassets. (Formerly
+/// hardcoded hexes in AgentStatusPalette; that file is compiled into the
+/// widgets target, which has no access to the app's asset catalog — the
+/// tile views live in the app target only.)
+enum AgentKindTilePalette {
+    static let accent = UIColor(named: "AccentColor")!
+    static let wash = UIColor(named: "AccentWash")!
+}
+
 /// The glyph as rendered: the approved TILE — soft accent wash background,
-/// accent glyph, rounded-rect container (prototype: wash #eaf2ed, glyph
-/// #22644d; dark pair in AgentStatusPalette). 1.6 stroke at the
-/// prototype's weight, round caps. Dynamic Type scales the slot.
+/// accent glyph, rounded-rect container (the shared AccentColor/AccentWash
+/// assets; see AgentKindTilePalette). 1.6 stroke at the prototype's
+/// weight, round caps. Dynamic Type scales the slot.
 struct AgentKindGlyphView: View {
     let glyph: AgentKindGlyph
 
     var body: some View {
         AgentKindGlyphShape(glyph: glyph)
             .stroke(
-                Color(AgentStatusPalette.kindTileAccent),
+                Color(AgentKindTilePalette.accent),
                 style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
             .padding(4)
             .frame(width: 30, height: 30)
             .background(
-                Color(AgentStatusPalette.kindTileWash),
+                Color(AgentKindTilePalette.wash),
                 in: RoundedRectangle(cornerRadius: 8))
             .accessibilityHidden(true)
     }

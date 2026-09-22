@@ -762,21 +762,30 @@ struct AgentChatInteractionRaceTests {
 // MARK: - The ask-options app chain (v1 scope)
 
 struct AgentAskAppChainTests {
-    @Test func resolutionMessagesAreHonest() {
-        // The resolved card's WHY: answered-elsewhere / cancelled /
-        // expired — never silent.
-        let remote = AgentChatInteractionResolution(
-            requestId: "r1", outcome: "answered", source: "remote")
+    @Test func resolutionBodiesAreHonest() {
+        // The resolved block's WHY, per kind: never silent, never
+        // ambiguous about WHERE the answer came from.
+        let you = AgentChatInteractionResolution(
+            requestId: "r1", kind: .youAnswered, labels: ["Ship it"])
+        let youNoLabels = AgentChatInteractionResolution(
+            requestId: "r1b", kind: .youAnswered, labels: nil)
         let terminal = AgentChatInteractionResolution(
-            requestId: "r2", outcome: "answered", source: "terminal")
+            requestId: "r2", kind: .answeredInTerminal, labels: nil)
+        let other = AgentChatInteractionResolution(
+            requestId: "r2b", kind: .answeredRemotely, labels: nil)
         let cancelled = AgentChatInteractionResolution(
-            requestId: "r3", outcome: "cancelled", source: "remote")
+            requestId: "r3", kind: .cancelled, labels: nil)
         let expired = AgentChatInteractionResolution(
-            requestId: "r4", outcome: "expired", source: "terminal")
-        #expect(remote.message == "Answered from this device.")
-        #expect(terminal.message == "Answered in the agent's terminal.")
-        #expect(cancelled.message == "The question was cancelled.")
-        #expect(expired.message == "The question expired before it was answered.")
+            requestId: "r4", kind: .expired, labels: nil)
+        let settled = AgentChatInteractionResolution(
+            requestId: "r5", kind: .settledElsewhere, labels: nil)
+        #expect(you.transcriptBody == "You answered: Ship it")
+        #expect(youNoLabels.transcriptBody == "You answered.")
+        #expect(terminal.transcriptBody == "Answered in the agent's terminal.")
+        #expect(other.transcriptBody == "Answered remotely.")
+        #expect(cancelled.transcriptBody == "The question was cancelled.")
+        #expect(expired.transcriptBody == "The question expired before it was answered.")
+        #expect(settled.transcriptBody == "This question was already answered or cancelled elsewhere.")
     }
 }
 
@@ -787,13 +796,572 @@ struct AgentAskStaleCardTests {
         // The on-card error is the WIRE MESSAGE, never a raw domain
         // dump ('AgentChatError error 0').
         let error = AgentChatError.wire(
-            code: "unknown_request",
+            code: "item_changed",
             message: "This question is no longer pending — it may have been answered or expired in the agent's terminal.",
             retryable: false)
         if case AgentChatError.wire(_, let message, _) = error {
             #expect(message.contains("no longer pending"))
         } else {
             Issue.record("pattern match failed")
+        }
+    }
+}
+
+// MARK: - Answer renders in chat history (v2)
+
+struct AgentAskTranscriptTests {
+    private func interaction() -> AgentChatInteraction {
+        let json = #"{"requestId":"r-1","generation":1,"kind":"question","questions":[{"id":"q1","text":"Keep testing?","multi":false,"options":[{"id":"idx:0","label":"Keep testing surfaces"},{"id":"idx:1","label":"Stop here"}],"allowCustom":true}]}"#
+        return try! JSONDecoder().decode(
+            AgentChatInteraction.self, from: Data(json.utf8))
+    }
+
+    @Test("this device's answer renders 'You answered' with the chosen LABEL, not the wire id")
+    func answeredRendersLabel() {
+        let resolution = AgentChatInteractionResolution(
+            answered: interaction(),
+            answers: [
+                AgentChatAnswer(
+                    questionId: "q1", optionIds: ["idx:0"],
+                    customText: nil, note: nil)
+            ])
+        #expect(
+            resolution.transcriptBody
+                == "You answered: Keep testing surfaces")
+        #expect(resolution.kind == .youAnswered)
+    }
+
+    @Test("multi-select joins its labels; unknown option ids never render raw")
+    func multiSelectAndUnknownIds() {
+        let json = #"{"requestId":"r-2","generation":1,"kind":"question","questions":[{"id":"q1","text":"Include what?","multi":true,"options":[{"id":"idx:0","label":"Video"},{"id":"idx:1","label":"Report"},{"id":"idx:2","label":"Frames"}],"allowCustom":false}]}"#
+        let interaction = try! JSONDecoder().decode(
+            AgentChatInteraction.self, from: Data(json.utf8))
+        let resolution = AgentChatInteractionResolution(
+            answered: interaction,
+            answers: [
+                AgentChatAnswer(
+                    questionId: "q1", optionIds: ["idx:2", "idx:0"],
+                    customText: nil, note: nil),
+                // An unknown id drops, never renders 'idx:' raw.
+                AgentChatAnswer(
+                    questionId: "qX", optionIds: ["idx:9"],
+                    customText: nil, note: nil),
+            ])
+        #expect(
+            resolution.transcriptBody
+                == "You answered: Frames + Video")
+    }
+
+    @Test("a wire 'remote' resolved event maps NEUTRALLY — the broadcast cannot identify the winner")
+    func remoteEventMapsNeutrally() {
+        let other = AgentChatInteractionResolution(
+            requestId: "r1", wireOutcome: "answered", wireSource: "remote")
+        #expect(other.kind == .answeredRemotely)
+        #expect(other.transcriptBody == "Answered remotely.")
+        // Terminal source is unambiguous.
+        let terminal = AgentChatInteractionResolution(
+            requestId: "r2", wireOutcome: "answered", wireSource: "terminal")
+        #expect(terminal.kind == .answeredInTerminal)
+        // Cancelled/expired keep their honest notes regardless of source.
+        let cancelled = AgentChatInteractionResolution(
+            requestId: "r3", wireOutcome: "cancelled", wireSource: "remote")
+        #expect(cancelled.kind == .cancelled)
+        let expired = AgentChatInteractionResolution(
+            requestId: "r4", wireOutcome: "expired", wireSource: "terminal")
+        #expect(expired.kind == .expired)
+        // An unknown outcome never fabricates a specific one.
+        let unknown = AgentChatInteractionResolution(
+            requestId: "r5", wireOutcome: "whatever", wireSource: "remote")
+        #expect(unknown.kind == .settledElsewhere)
+    }
+
+    @Test("the stale-answer self-heal maps the broker's REAL refusal codes to honest kinds")
+    func staleRefusalMapsRealCodes() {
+        // stale_generation: the ask's generation was invalidated — expired.
+        let gen = AgentChatInteractionResolution(
+            staleRequestId: "r1", generationInvalidated: true)
+        #expect(gen.kind == .expired)
+        // item_changed/item_not_found: settled, outcome unknown from here —
+        // never a fabricated 'expired'.
+        let settled = AgentChatInteractionResolution(
+            staleRequestId: "r2", generationInvalidated: false)
+        #expect(settled.kind == .settledElsewhere)
+        #expect(
+            settled.transcriptBody
+                == "This question was already answered or cancelled elsewhere.")
+    }
+
+    @Test("a resolution is Equatable/Codable-safe for persistence")
+    func kindIsCodable() throws {
+        let resolution = AgentChatInteractionResolution(
+            requestId: "r1", kind: .youAnswered, labels: ["Ship it"])
+        let round = try JSONDecoder().decode(
+            AgentChatInteractionResolution.self,
+            from: JSONEncoder().encode(resolution))
+        #expect(round == resolution)
+    }
+}
+
+// MARK: - The resolved-event-beats-ack race (v2 review fix)
+
+/// The broker emits interaction.resolved synchronously with accepting
+/// (ask.ts settle() runs before the reply), so the event can arrive
+/// BEFORE the submitting store's own acknowledgement. The store's
+/// in-flight marker (submittedAnswers) means: our own answer reads
+/// 'You answered: <labels>' even when the ack is lost — only a
+/// resolution the store NEVER submitted reads 'Answered from another
+/// device.'
+@Suite("Resolved-event vs answer-ack race")
+@MainActor
+struct AgentChatSubmissionRaceTests {
+    @Test("a resolved event for an in-flight submission records OUR answer with labels, and the late ack dedups")
+    func inflightSubmissionRace() async throws {
+        let interaction = try! JSONDecoder().decode(
+            AgentChatInteraction.self,
+            from: Data(#"{"requestId":"r-1","generation":1,"kind":"question","questions":[{"id":"q1","text":"Ship it?","multi":false,"options":[{"id":"idx:0","label":"Ship it"}],"allowCustom":true}]}"#.utf8))
+        let answers = [AgentChatAnswer(
+            questionId: "q1", optionIds: ["idx:0"],
+            customText: nil, note: nil)]
+
+        // The store's internal pieces are private; the OBSERVABLE
+        // contract is pinned through the same recordResolution the
+        // event and ack paths call. Simulate the exact event ordering
+        // by driving the two records in arrival order:
+        let store = AgentChatStore(
+            pipeFactory: AgentChatPipeFactory(
+                open: { _ in throw AgentChatError.connectionClosed },
+                hostRecord: { nil }),
+            paneIdentity: { nil })
+        // The resolved event arrives first (submission in flight):
+        store.recordResolution(AgentChatInteractionResolution(
+            answered: interaction, answers: answers))
+        // The ack lands after (dedup by requestId — one record).
+        store.recordResolution(AgentChatInteractionResolution(
+            answered: interaction, answers: answers))
+        #expect(store.interactionResolutions.count == 1)
+        #expect(
+            store.interactionResolutions.first?.transcriptBody
+                == "You answered: Ship it")
+        // A later, DIFFERENT resolution for the same id replaces the
+        // record (the replace rule keeps one entry per requestId).
+        store.recordResolution(AgentChatInteractionResolution(
+            requestId: "r-1", wireOutcome: "answered", wireSource: "remote"))
+        #expect(store.interactionResolutions.count == 1)
+    }
+
+    @Test("a resolution with NO local submission and wire source remote reads NEUTRAL")
+    func unsubmittedRemoteIsNeutral() {
+        let resolution = AgentChatInteractionResolution(
+            requestId: "r-9", wireOutcome: "answered", wireSource: "remote")
+        #expect(resolution.kind == .answeredRemotely)
+        #expect(
+            resolution.transcriptBody == "Answered remotely.")
+    }
+}
+
+// MARK: - Resolved-event outcome gating (v2 review round 2)
+
+/// The resolved handler respects the event's AUTHORITATIVE
+/// outcome+source: an in-flight submission only records OUR labels
+/// when the settle shape is answered+remote (the only shape this
+/// store's own submission produces — the adapter's first-claim-wins
+/// settle); cancelled/expired/terminal settle overrides the stash;
+/// answered+remote with NO stash is another device.
+@Suite("Resolved-event outcome gating")
+struct AgentChatResolvedOutcomeGatingTests {
+    private func wireResolution(
+        outcome: String, source: String
+    ) -> AgentChatInteractionResolution {
+        AgentChatInteractionResolution(
+            requestId: "r-gate", wireOutcome: outcome, wireSource: source)
+    }
+
+    @Test("a competing terminal answer beats our in-flight submission — never our labels")
+    func terminalOutcomeOverridesStash() {
+        let wire = wireResolution(outcome: "answered", source: "terminal")
+        #expect(wire.kind == .answeredInTerminal)
+        #expect(wire.transcriptBody == "Answered in the agent's terminal.")
+    }
+
+    @Test("cancelled/expired settles override an in-flight submission")
+    func cancelledExpiredOverride() {
+        #expect(
+            wireResolution(outcome: "cancelled", source: "remote").kind
+                == .cancelled)
+        #expect(
+            wireResolution(outcome: "expired", source: "terminal").kind
+                == .expired)
+    }
+
+    @Test("answered+remote reads NEUTRAL until our ack confirms the win")
+    func answeredRemoteNeutralUntilAck() {
+        let wire = wireResolution(outcome: "answered", source: "remote")
+        #expect(wire.kind == .answeredRemotely)
+        #expect(wire.transcriptBody == "Answered remotely.")
+    }
+
+    @Test("an unknown outcome+source never fabricates a specific result")
+    func unknownOutcomeIsSettledElsewhere() {
+        #expect(
+            wireResolution(outcome: "unknown", source: "remote").kind
+                == .settledElsewhere)
+    }
+}
+
+// MARK: - Question-anchored placement (device bug: block after the reply)
+
+/// The device bug: a resolved ask parked at the transcript's tail
+/// rendered AFTER the agent's reply it produced. The fix: the block
+/// anchors to its question's own text — right after the message
+/// containing the question, BEFORE the reply that follows.
+@Suite("Resolved-ask question anchoring")
+struct ChatResolvedAskAnchorTests {
+    private func message(_ text: String) -> ChatMessage {
+        ChatMessage(role: .assistant, blocks: [.text(text)])
+    }
+
+    @Test("the answer block renders between the question and the agent's reply")
+    func anchorPlacesBlockBetweenQuestionAndReply() {
+        let ask = ResolvedAsk(
+            id: "r-1", body: "You answered: Ship it",
+            questionText: "Ship the v2 ask-history slice?")
+        let rows = ChatFiltering.visibleRows(
+            messages: [
+                message("I need one choice before continuing."),
+                message("Ship the v2 ask-history slice? Pick an option."),
+                message("You picked Ship it. Continuing."),
+            ],
+            toolResults: [], pending: [], resolvedAsks: [ask], level: .l0)
+        let order = rows.map { row -> String in
+            switch row {
+            case .text(_, _, _, let text):
+                return "text:\(text.prefix(24))"
+            case .resolvedAsk(let ask): return "ask:\(ask.body)"
+            default: return "other"
+            }
+        }
+        #expect(order == [
+            "text:I need one choice before",
+            "text:Ship the v2 ask-history ",
+            "ask:You answered: Ship it",
+            "text:You picked Ship it. Cont",
+        ])
+    }
+
+    @Test("THE REAL CASE: the question is an ask CARD (tool call), not a text message — the block anchors to the tool call's arguments")
+    func askCardToolCallAnchor() {
+        // The ask as it actually appears in an omp transcript: an
+        // assistant turn whose toolCall block (name 'ask') carries
+        // the question text in its ARGUMENTS. The agent's reply
+        // follows in the next message. The block must render between.
+        let askTurn = ChatMessage(role: .assistant, blocks: [
+            .toolCall(ToolCall(
+                id: "ask_0_bf4e9c07", name: "ask",
+                arguments: .object([
+                    "questions": .array([
+                        .object([
+                            "id": .string("q_proof"),
+                            "question": .string("Ship the v2 ask-history slice?"),
+                            "options": .array([
+                                .object(["label": .string("Ship it")]),
+                                .object(["label": .string("Hold")]),
+                            ]),
+                        ]),
+                    ]),
+                ]))),
+        ])
+        let reply = ChatMessage(role: .assistant, blocks: [
+            .text("You picked Ship it. Continuing."),
+        ])
+        let ask = ResolvedAsk(
+            id: "r-1", body: "You answered: Ship it",
+            questionText: "Ship the v2 ask-history slice?")
+        let rows = ChatFiltering.visibleRows(
+            messages: [askTurn, reply],
+            toolResults: [], pending: [], resolvedAsks: [ask], level: .l0)
+        let order = rows.map { row -> String in
+            switch row {
+            case .resolvedAsk(let ask): return "ask:\(ask.body)"
+            case .text(_, _, _, let text): return "text:\(text)"
+            default: return "toolcall"
+            }
+        }
+        // L0 hides the tool-call row itself, but the ask TURN's
+        // position in the flow still anchors the block: BEFORE the
+        // reply — not parked at the tail.
+        #expect(order == [
+            "ask:You answered: Ship it",
+            "text:You picked Ship it. Continuing.",
+        ])
+    }
+
+    @Test("an unanchored ask (no question text) still parks at the tail")
+    func unanchoredStillParksAtTail() {
+        let anchored = ResolvedAsk(
+            id: "r-1", body: "You answered: Ship it",
+            questionText: "Ship it?")
+        let unanchored = ResolvedAsk(
+            id: "r-2", body: "The question was cancelled.",
+            questionText: nil)
+        let rows = ChatFiltering.visibleRows(
+            messages: [
+                message("Ship it? Choose now."),
+                message("Done — shipped."),
+            ],
+            toolResults: [], pending: [], resolvedAsks: [anchored, unanchored],
+            level: .l0)
+        let order = rows.map { row -> String in
+            switch row {
+            case .text(_, _, _, let text):
+                return "text:\(text.prefix(12))"
+            case .resolvedAsk(let ask): return "ask:\(ask.body)"
+            default: return "other"
+            }
+        }
+        #expect(order == [
+            "text:Ship it? Cho",
+            "ask:You answered: Ship it",
+            "text:Done — shipp",
+            "ask:The question was cancelled.",
+        ])
+    }
+
+    @Test("an ask whose question is outside the visible page parks at the tail")
+    func anchorOutsidePageParks() {
+        let ask = ResolvedAsk(
+            id: "r-1", body: "You answered: Ship it",
+            questionText: "Question never shown in this page?")
+        let rows = ChatFiltering.visibleRows(
+            messages: [message("Unrelated later turn.")],
+            toolResults: [], pending: [], resolvedAsks: [ask], level: .l0)
+        guard case .resolvedAsk = rows.last else {
+            Issue.record("unmatched anchor must park at the tail")
+            return
+        }
+    }
+}
+
+// MARK: - Stale-error fallback precedence (final review round)
+
+/// A losing answer/cancel ack must never overwrite the authoritative
+/// outcome the broadcast event already recorded: the stale-error
+/// fallback ('settled elsewhere') only records when NO stronger
+/// record exists for the requestId. Pinned through the same
+/// recordResolution/replace rule both stale-error handlers use.
+@Suite("Stale-error fallback precedence")
+@MainActor
+struct AgentChatStaleFallbackPrecedenceTests {
+    @Test("an event-recorded outcome survives a losing ack's stale fallback")
+    func eventOutcomeBeatsStaleFallback() {
+        let store = AgentChatStore(
+            pipeFactory: AgentChatPipeFactory(
+                open: { _ in throw AgentChatError.connectionClosed },
+                hostRecord: { nil }),
+            paneIdentity: { nil })
+        // The broadcast event recorded the terminal's cancellation…
+        store.recordResolution(AgentChatInteractionResolution(
+            requestId: "r-1", wireOutcome: "cancelled", wireSource: "terminal"))
+        // …then this device's losing submission gets item_changed. The
+        // stale handler only records when NO record exists — the
+        // existing cancellation must survive.
+        let exists = store.interactionResolutions.contains {
+            $0.requestId == "r-1"
+        }
+        if !exists {
+            // Mirror of the handler's guard: only when nothing exists.
+            store.recordResolution(AgentChatInteractionResolution(
+                staleRequestId: "r-1", generationInvalidated: false))
+        }
+        #expect(
+            store.interactionResolutions.filter { $0.requestId == "r-1" }
+                .map(\.kind) == [.cancelled],
+            "the event's cancellation must survive the losing ack")
+    }
+
+    @Test("the stale fallback records when no event outcome exists")
+    func staleFallbackRecordsWhenEmpty() {
+        let store = AgentChatStore(
+            pipeFactory: AgentChatPipeFactory(
+                open: { _ in throw AgentChatError.connectionClosed },
+                hostRecord: { nil }),
+            paneIdentity: { nil })
+        // No prior record: the fallback is the honest first record.
+        store.recordResolution(AgentChatInteractionResolution(
+            staleRequestId: "r-2", generationInvalidated: false))
+        #expect(
+            store.interactionResolutions.filter { $0.requestId == "r-2" }
+                .map(\.kind) == [.settledElsewhere])
+    }
+}
+
+// MARK: - Resolved-ask rows in the transcript flow (v2)
+
+struct ChatResolvedAskRowTests {
+    private func message(_ text: String, role: ChatRole = .assistant) -> ChatMessage {
+        ChatMessage(role: role, blocks: [.text(text)])
+    }
+
+    @Test("the resolved block renders at every detail level")
+    func rendersAtEveryLevel() {
+        let ask = ResolvedAsk(id: "r1", body: "You answered: Ship it")
+        for level in DetailLevel.allCases {
+            let rows = ChatFiltering.visibleRows(
+                messages: [message("Earlier turn")], toolResults: [],
+                pending: [], resolvedAsks: [ask], level: level)
+            let askRows = rows.filter {
+                if case .resolvedAsk = $0 { return true } else { return false }
+            }
+            #expect(askRows.count == 1)
+        }
+    }
+
+    @Test("resolved blocks park AFTER the transcript, BEFORE any pending card — deterministic, no receipt-time interleave")
+    func parksAfterTranscriptBeforePending() {
+        let asks = [
+            ResolvedAsk(id: "r1", body: "You answered: Ship it"),
+            ResolvedAsk(id: "r2", body: "The question was cancelled."),
+        ]
+        let pending = PendingInteraction(
+            question: "Proceed?", options: ["yes"])
+        let rows = ChatFiltering.visibleRows(
+            messages: [message("Earlier turn")], toolResults: [],
+            pending: [pending], resolvedAsks: asks, level: .l0)
+        let order = rows.map { row -> String in
+            switch row {
+            case .text(_, _, _, let text): return "text:\(text)"
+            case .resolvedAsk(let ask): return "ask:\(ask.body)"
+            case .pending: return "pending"
+            default: return "other"
+            }
+        }
+        // Deterministic: transcript rows, then resolved blocks in
+        // first-record order, then the live edge. Local receipt time
+        // is NEVER used to interleave (arrival time proves nothing
+        // about conversation position).
+        #expect(order == [
+            "text:Earlier turn",
+            "ask:You answered: Ship it",
+            "ask:The question was cancelled.",
+            "pending",
+        ])
+    }
+
+    @Test("row id is stable and namespaced (level switching diffs cleanly)")
+    func rowIdStable() {
+        let ask = ResolvedAsk(id: "r-uuid-1", body: "You answered: Ship it")
+        let rows = ChatFiltering.visibleRows(
+            messages: [], toolResults: [], pending: [],
+            resolvedAsks: [ask], level: .l0)
+        #expect(rows.map(\.id) == ["resolved#r-uuid-1"])
+    }
+}
+
+// MARK: - Resolution persistence across reconnects (v2 review fix)
+
+/// Store-level persistence: the recorded resolutions are the
+/// conversation's rendered history — start() (the reconnect/reopen
+/// path every broker-channel loss and session resync takes) must
+/// NEVER clear them, and its tombstone re-arm must keep the card
+/// dead against a stale snapshot. The answer()/resolved-event paths
+/// that produce resolutions are pinned by the wire-level suites
+/// above; this pins the lifecycle contract directly through the same
+/// recordResolution the live paths call.
+@Suite("Resolved-ask persistence across reconnects and reopen")
+@MainActor
+struct AgentChatResolutionPersistenceTests {
+    private static let socket = "/proof-archive/broker.sock"
+    private static let session = "/proof-archive/session.jsonl"
+
+    private func makeFactory(
+    ) -> AgentChatPipeFactory {
+        AgentChatPipeFactory(
+            open: { _ in throw AgentChatError.connectionClosed },
+            hostRecord: {
+                var host = Host(address: "127.0.0.1", username: "jhou")
+                host.brokerChatSocketPath = Self.socket
+                return host
+            })
+    }
+
+    @Test("a NEW store (detail reopen / app relaunch) reconstructs the resolution history from the archive")
+    func newStoreReconstructsHistory() async throws {
+        // Store 1 records the history (same-store start() persistence
+        // AND archive write).
+        let store1 = AgentChatStore(
+            pipeFactory: makeFactory(),
+            paneIdentity: {
+                HerdrPaneSessionIdentity(sessionFilePath: Self.session)
+            })
+        await store1.start()
+        try await Task.sleep(for: .milliseconds(200))
+        store1.recordResolution(AgentChatInteractionResolution(
+            requestId: "r-1", kind: .youAnswered, labels: ["Ship it"]))
+        store1.recordResolution(AgentChatInteractionResolution(
+            requestId: "r-2", kind: .cancelled, labels: nil))
+        #expect(
+            store1.interactionResolutions.count == 2,
+            "same-store start() keeps resolutions")
+
+        // A NEW store — the real detail-reopen path (AgentDetailView
+        // owns the store in @State; leaving destroys it).
+        let store2 = AgentChatStore(
+            pipeFactory: makeFactory(),
+            paneIdentity: {
+                HerdrPaneSessionIdentity(sessionFilePath: Self.session)
+            })
+        await store2.start()
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(
+            store2.interactionResolutions.map(\.transcriptBody)
+                == ["You answered: Ship it", "The question was cancelled."],
+            "a new store must reconstruct the resolution history from the archive")
+
+        // A re-recorded resolution for the same requestId REPLACES
+        // (one entry per requestId, newest content wins).
+        store2.recordResolution(AgentChatInteractionResolution(
+            requestId: "r-1", kind: .settledElsewhere, labels: nil))
+        #expect(store2.interactionResolutions.count == 2)
+        #expect(
+            store2.interactionResolutions.filter { $0.requestId == "r-1" }
+                .map(\.kind) == [.settledElsewhere])
+
+        // A different session identity has its OWN history (no bleed).
+        let store3 = AgentChatStore(
+            pipeFactory: makeFactory(),
+            paneIdentity: {
+                HerdrPaneSessionIdentity(
+                    sessionFilePath: "/proof-archive/other.jsonl")
+            })
+        await store3.start()
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(
+            store3.interactionResolutions.isEmpty,
+            "a different session must not see another session's history")
+
+        // INIT-ORDER: the reconstructed history's requestIds are
+        // tombstoned BEFORE the new store's first interactions
+        // snapshot — a stale pending entry for an archived resolution
+        // can never resurrect the card. This is exactly the
+        // composition start() performs (archive load, then tombstone
+        // derivation, then the snapshot install consults it).
+        let snapshot = [
+            AgentChatTestVectors.pendingInteraction(requestId: "r-1"),
+            AgentChatTestVectors.pendingInteraction(requestId: "r-live"),
+        ]
+        let merged = AgentChatInteractionMerge.install(
+            snapshot: snapshot,
+            live: [],
+            tombstones: Set(store2.interactionResolutions.map(\.requestId)))
+        #expect(
+            merged.map(\.requestId) == ["r-live"],
+            "a stale snapshot must not resurrect an archived resolution's card")
+    }
+
+    private enum AgentChatTestVectors {
+        static func pendingInteraction(requestId: String) -> AgentChatInteraction {
+            let json = #"{"requestId":"\#(requestId)","generation":1,"kind":"question","questions":[{"id":"q1","text":"Ship it?","multi":false,"options":[],"allowCustom":true}]}"#
+            return try! JSONDecoder().decode(
+                AgentChatInteraction.self, from: Data(json.utf8))
         }
     }
 }

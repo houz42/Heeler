@@ -103,18 +103,36 @@ extension ChatMarkdownTheme {
         row == 0 ? .semibold : .regular
     }
 
-    /// One table cell: chat body size, wrapped, padded; the header row
-    /// carries `tableCellWeight`'s heavier weight.
+    /// One table cell: chat body size, padded; the header row carries
+    /// `tableCellWeight`'s heavier weight. Cells wrap vertically; in
+    /// WIDE mode (a table whose natural width exceeds the chat width,
+    /// laid out inside its horizontal scroll) the cell also takes its
+    /// natural width — one line per cell, whole columns as the reader
+    /// scrolls.
     @MainActor
     static func tableCell(
         _ row: Int, label: MarkdownUI.TableCellConfiguration.Label
     ) -> some View {
+        ChatTableCell(row: row, label: label)
+    }
+}
+
+/// The theme's table cell, split into a view so it can read the
+/// wide-table environment flag (a static closure has no view context).
+private struct ChatTableCell: View {
+    let row: Int
+    let label: MarkdownUI.TableCellConfiguration.Label
+
+    @Environment(\.chatWideTableMode) private var wideMode
+
+    var body: some View {
         label
-            .fixedSize(horizontal: false, vertical: true)
+            .fixedSize(horizontal: wideMode, vertical: true)
             .lineSpacing(2)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .font(SwiftUI.Font.subheadline.weight(tableCellWeight(forRow: row)))
+            .font(SwiftUI.Font.subheadline.weight(
+                ChatMarkdownTheme.tableCellWeight(forRow: row)))
     }
 }
 
@@ -186,12 +204,20 @@ struct ChatCodeBlock: View {
 }
 
 /// One chat table: header row with a filled background, zebra striping,
-/// and thin row separators. The table fits the proposed chat width and
-/// its cells wrap — a horizontal ScrollView would hand it infinite
-/// width and unfold every row onto one line, which reads worse on a
-/// phone than wrapped cells. Striping + row separators read better on a
-/// phone than column borders: columns are implied by cell spacing, and
-/// extra vertical rules would compete with the row separators.
+/// and thin row separators.
+///
+/// WIDTH-ADAPTIVE (v2): a table that fits the chat width wraps its
+/// cells exactly as v1 did; a WIDE table (natural column widths exceed
+/// the proposed width) instead scrolls horizontally with cells at
+/// their natural one-line width — the reader sees whole columns instead
+/// of a tall stripe of over-wrapped slivers. The mode rides an
+/// environment flag so `ChatMarkdownTheme.tableCell` (MarkdownUI
+/// applies it to every cell, no per-cell view hook) can stop wrapping
+/// inside the scroll.
+///
+/// Striping + row separators read better on a phone than column
+/// borders: columns are implied by cell spacing, and extra vertical
+/// rules would compete with the row separators.
 ///
 /// Row backgrounds and borders are MarkdownUI environment styles applied
 /// to the table's own laid-out content; the header's semibold weight
@@ -199,20 +225,97 @@ struct ChatCodeBlock: View {
 struct ChatTableBlock<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
+    @State private var naturalWidth: CGFloat?
+
     var body: some View {
-        content()
-            .markdownTableBackgroundStyle(
-                .alternatingRows(
-                    Color.primary.opacity(0.045),
-                    Color.clear,
-                    header: Color.primary.opacity(0.10))
-            )
-            .markdownTableBorderStyle(
-                TableBorderStyle(
-                    .insideHorizontalBorders,
-                    color: Color.primary.opacity(0.10),
-                    width: 0.5))
-            .padding(.bottom, 8)
+        // The visible table IS the layout: wrapped cells when it fits
+        // (v1 behaviour), or one horizontal ScrollView with natural-
+        // width cells when the measured natural width exceeds the chat
+        // width. The switch needs the CHAT width only — proposed via
+        // onGeometryChange on the visible content itself, so the row
+        // keeps its intrinsic height (no GeometryReader row body: in a
+        // LazyVStack that collapses the row to zero height and rows
+        // draw over each other).
+        ChatTableAdaptiveTable(content: content, naturalWidth: $naturalWidth)
+    }
+
+    private struct ChatTableAdaptiveTable<Inner: View>: View {
+        @ViewBuilder let content: () -> Inner
+        @Binding var naturalWidth: CGFloat?
+
+        @State private var chatWidth: CGFloat?
+
+        private var isWide: Bool {
+            guard let natural = naturalWidth, let chat = chatWidth else {
+                return false
+            }
+            return natural > chat + 1
+        }
+
+        var body: some View {
+            Group {
+                if isWide {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        framed
+                            .environment(\.chatWideTableMode, true)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                } else {
+                    framed
+                }
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { _, w in
+                if w > 0 { chatWidth = w }
+            }
+            .background {
+                // Hidden measuring pass, present ONLY until it reports:
+                // the copy carries MarkdownUI's cell anchor preferences,
+                // and a standing duplicate would corrupt the visible
+                // table's decoration bounds (TableCellBoundsPreference
+                // merges last-writer-wins). Once the natural width
+                // lands, the copy leaves the tree entirely.
+                if naturalWidth == nil {
+                    content()
+                        .environment(\.chatWideTableMode, true)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .hidden()
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { _, w in
+                            if w > 0 { naturalWidth = w }
+                        }
+                }
+            }
+        }
+
+        private var framed: some View {
+            content()
+                .markdownTableBackgroundStyle(
+                    .alternatingRows(
+                        Color.primary.opacity(0.045),
+                        Color.clear,
+                        header: Color.primary.opacity(0.10))
+                )
+                .markdownTableBorderStyle(
+                    TableBorderStyle(
+                        .insideHorizontalBorders,
+                        color: Color.primary.opacity(0.10),
+                        width: 0.5))
+                .padding(.bottom, 8)
+        }
+    }
+}
+
+
+/// Whether the chat table theme's cell style renders cells at natural
+/// (single-line) width — set inside a wide table's horizontal scroll
+/// and its measuring pass, so wrapped-cell and wide-cell metrics agree.
+private struct ChatWideTableModeKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var chatWideTableMode: Bool {
+        get { self[ChatWideTableModeKey.self] }
+        set { self[ChatWideTableModeKey.self] = newValue }
     }
 }
 
@@ -251,12 +354,21 @@ struct ChatMarkdownView: View {
     var textColor: SwiftUI.Color? = nil
 
     var body: some View {
-        // Hard line breaks survive: cmark treats a single newline as a
-        // soft break (renders as a space), which collapsed the user's
-        // multi-line agent messages into one paragraph. The pre-pass
-        // splits prose lines into separate paragraphs (the prototype's
-        // <p> structure) while fenced code blocks stay verbatim.
-        Markdown(ChatMarkdownText.preservingHardBreaks(markdown))
+        // A single newline renders as a line break WITHIN one paragraph
+        // (the v2 contract): cmark calls it a soft break and MarkdownUI
+        // would render it as a space, collapsing multi-line agent
+        // messages into one blob — the fork's `.lineBreak` soft-break
+        // mode fixes the render WITHOUT a source pre-pass. (The v1
+        // pre-pass inserted a blank line between every prose line, which
+        // also shattered GFM tables into per-row paragraphs and
+        // fragmented multi-line blockquotes into one block per line.)
+        // Fenced code stays verbatim: soft-break mode never applies
+        // inside code blocks, which cmark parses as literal lines.
+        // The render pre-pass: IRC log sections fence as code first
+        // (their paths must never gain link markup), then detected
+        // path targets rewrite as link constructs.
+        Markdown(ChatMarkdownText(markdown).rendered)
+            .markdownSoftBreakMode(.lineBreak)
             .markdownTheme(
                 textColor.map(ChatMarkdownTheme.chatColored)
                     ?? ChatMarkdownTheme.chat)
@@ -287,45 +399,23 @@ struct ChatMarkdownText: Hashable {
         self.raw = raw
     }
 
+    /// The markdown source with IRC-format sections fenced as code, so
+    /// they render as one readable monospace block (channel logs a
+    /// paste of an agent transcript carries: `[HH:MM] <nick> msg`,
+    /// `*** nick joined/parted`, `Nick: message` lines). Sections must
+    /// span whole paragraphs (a blank line bounds them) and EVERY line
+    /// must match an IRC pattern — prose that merely contains a time
+    /// reference never converts. Pure static — testable without a view.
+    var ircFenced: String { ChatMarkdownText.fenceIRCSections(raw) }
+
     /// The markdown source with detected path targets rewritten as
     /// explicit markdown link constructs. Parsing happens downstream.
     var rewritten: String { ChatMarkdownText.rewrite(raw) }
 
-    /// Prose lines become separate paragraphs (a blank line between
-    /// them) so MarkdownUI/cmark's soft-break-as-space rule cannot
-    /// collapse multi-line messages into one blob. Fenced code blocks
-    /// pass through verbatim (their line structure is data). Pure
-    /// static — testable without a view.
-    static func preservingHardBreaks(_ text: String) -> String {
-        let lines = text.components(separatedBy: "\n")
-        var result: [String] = []
-        var inFence = false
-        for (index, line) in lines.enumerated() {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
-                inFence.toggle()
-                result.append(line)
-                continue
-            }
-            if inFence || trimmed.isEmpty {
-                result.append(line)
-                continue
-            }
-            // A prose line: separate it from the next non-blank,
-            // non-fence line so cmark sees a paragraph boundary.
-            result.append(line)
-            if index < lines.count - 1 {
-                let next = lines[index + 1]
-                    .trimmingCharacters(in: .whitespaces)
-                let nextIsFence =
-                    next.hasPrefix("```") || next.hasPrefix("~~~")
-                if !next.isEmpty, !nextIsFence {
-                    result.append("")
-                }
-            }
-        }
-        return result.joined(separator: "\n")
-    }
+    /// The full render pre-pass: IRC sections fence FIRST (so their
+    /// paths never gain link markup), then path-link rewriting skips
+    /// the new fences like any other code block.
+    var rendered: String { ChatMarkdownText.rewrite(ircFenced) }
 
     /// The pure seam: raw markdown in, markdown with explicit link
     /// constructs out. Static so tests drive it without a view.
@@ -374,36 +464,42 @@ struct ChatMarkdownText: Hashable {
     /// opening and closing fence lines). Fence-line matching is line-
     /// oriented, mirroring cmark: a line whose (after up to three spaces
     /// of indentation) first non-space characters are three or more
-    /// backticks opens a fence; the closing fence repeats them.
+    /// BACKTICKS or TILDES opens a fence; the closing fence repeats the
+    /// SAME character with at least the opening run's count (cmark never
+    /// lets a backtick fence close a tilde fence or vice versa).
     private static func fencedCodeRanges(in text: String) -> [NSRange] {
         let ns = text as NSString
         var ranges: [NSRange] = []
         var searchRange = NSRange(location: 0, length: ns.length)
         while true {
             // Opening fence: after up to three spaces of indentation,
-            // three or more backticks (cmark's fence rule).
+            // three or more backticks or tildes (cmark's fence rule).
             let open = ns.range(
-                of: #"(?m)^ {0,3}(`{3,})[^\n]*\n"#,
+                of: #"(?m)^ {0,3}([`~]{3,})[^\n]*\n"#,
                 options: .regularExpression,
                 range: searchRange)
             guard open.location != NSNotFound else { break }
-            // The closing fence must repeat at least the opening run's
-            // backtick count (cmark rule — a shorter run is content).
+            // The closing fence must repeat the SAME fence character
+            // at least the opening run's count (cmark rules — a shorter
+            // run is content, and the other character never closes).
             let fence = ns.substring(with: open).drop(while: { $0 == " " })
-            let ticks = fence.prefix(while: { $0 == "`" }).count
-            // The closing fence: a line of at least `ticks` backticks
-            // (optionally spaced) — NSRegularExpression lacks backref
-            // quantifiers, so enumerate candidate closers explicitly.
+            let fenceChar = fence.first ?? "`"
+            let fenceCount = fence.prefix(while: { $0 == fenceChar }).count
+            // The closing fence: a line of at least `fenceCount` of
+            // the SAME character (optionally spaced) — NSRegularExpression
+            // lacks backref quantifiers, so enumerate candidate closers
+            // explicitly.
             let afterOpen = NSRange(
                 location: open.location + open.length,
                 length: searchRange.location + searchRange.length
                     - open.location - open.length)
-            let closePattern = #"(?m)^ {0,3}(`{3,})[ \t]*(\n|$)"#
+            let escaped = fenceChar == "`" ? "`" : "~"
+            let closePattern = #"(?m)^ {0,3}(\#(escaped){3,})[ \t]*(\n|$)"#
             let closeRegex = try! NSRegularExpression(pattern: closePattern)
             var close = NSRange(location: NSNotFound, length: 0)
             for match in closeRegex.matches(in: text, range: afterOpen) {
                 let run = match.range(at: 1)
-                if ns.substring(with: run).count >= ticks {
+                if ns.substring(with: run).count >= fenceCount {
                     close = match.range
                     break
                 }
@@ -426,6 +522,144 @@ struct ChatMarkdownText: Hashable {
                     - close.location - close.length)
         }
         return ranges
+    }
+
+    /// Fences IRC-format sections as code. A SECTION is a WHOLE
+    /// PARAGRAPH — a maximal run of consecutive non-blank lines —
+    /// where EVERY line matches one of the IRC log patterns and the
+    /// run is at least two lines (a single matching line stays prose —
+    /// one `Nick: hi` line is ordinary chat text, not a log). Sections
+    /// are classified COMPLETE before any rewriting: a paragraph that
+    /// does not qualify passes through UNCHANGED (the review's data-
+    /// loss case — a lone `Note: keep this` matched `Nick: ...` and the
+    /// flush dropped it). A fence is emitted only over the complete
+    /// qualifying paragraph, never over a matching subsequence inside
+    /// mixed prose.
+    ///
+    /// Patterns (line-oriented, prefix-anchored):
+    /// - `[HH:MM(:SS)?]`-stamped lines (classic channel log);
+    /// - `<nick>`-spoken lines (relay bots, e.g. `<jhou> hello`);
+    /// - `***`/`--`/`==` join/part/nick-change markers;
+    /// - `Nick: message` (agent-relay format) — a word-ish nick
+    ///   followed by `: ` at the line head.
+    ///
+    /// Already-fenced code (backtick OR tilde fences) is protected
+    /// verbatim: any paragraph overlapping a protected range passes
+    /// through untouched, so a log pasted inside a fence never
+    /// double-fences and prose inside a fence is never reclassified.
+    static func fenceIRCSections(_ text: String) -> String {
+        let protected = fencedCodeRanges(in: text)
+        let lines = text.components(separatedBy: "\n")
+
+        // Line-parallel fence map: which line indices sit inside an
+        // existing fence (their content is data, never re-fenced).
+        var lineStarts: [Int] = []
+        var offset = 0
+        for line in lines {
+            lineStarts.append(offset)
+            offset += line.utf16.count + 1
+        }
+        func lineRange(_ index: Int) -> NSRange {
+            NSRange(
+                location: lineStarts[index],
+                length: (lines[index] as NSString).length)
+        }
+        func paragraphOverlapsFence(_ indices: [Int]) -> Bool {
+            indices.contains { index in
+                protected.contains { overlaps($0, lineRange(index)) }
+            }
+        }
+
+        // Pass 1: split into paragraphs (maximal non-blank runs). A
+        // paragraph is FENCEABLE when it is >= 2 lines, EVERY line
+        // matches, and it overlaps no protected fence range.
+        struct Paragraph {
+            let lineIndices: [Int]
+            let fenceable: Bool
+        }
+        var paragraphs: [Paragraph] = []
+        var current: [Int] = []
+        func classify() {
+            guard !current.isEmpty else { return }
+            let qualifies =
+                current.count >= 2
+                && !paragraphOverlapsFence(current)
+                && current.allSatisfy {
+                    isIRCLine(lines[$0].trimmingCharacters(in: .whitespaces))
+                }
+            paragraphs.append(Paragraph(lineIndices: current, fenceable: qualifies))
+            current = []
+        }
+        for (index, line) in lines.enumerated() {
+            if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                classify()
+            } else {
+                current.append(index)
+            }
+        }
+        classify()
+
+        // Pass 2: emit. Fenceable paragraphs get one fence around their
+        // COMPLETE line run; everything else passes through in order,
+        // line for line — blank separators included, no line ever
+        // dropped or merged.
+        var fencedIndices = Set<Int>()
+        for paragraph in paragraphs where paragraph.fenceable {
+            paragraph.lineIndices.forEach { fencedIndices.insert($0) }
+        }
+        var result: [String] = []
+        var index = 0
+        while index < lines.count {
+            if fencedIndices.contains(index) {
+                // The paragraph's COMPLETE run, one fence around it.
+                guard let paragraph = paragraphs.first(where: {
+                    $0.fenceable && $0.lineIndices.contains(index)
+                }) else {
+                    result.append(lines[index])
+                    index += 1
+                    continue
+                }
+                result.append("```irc")
+                for i in paragraph.lineIndices {
+                    result.append(lines[i])
+                }
+                result.append("```")
+                index = paragraph.lineIndices.last! + 1
+            } else {
+                result.append(lines[index])
+                index += 1
+            }
+        }
+        return result.joined(separator: "\n")
+    }
+
+    /// Whether one line carries an IRC-log shape. Prefix-anchored and
+    /// deliberately conservative: ordinary prose containing a colon
+    /// ("Note: this is prose") also matches `Word: ...` — the
+    /// `run.count >= 2` gate above is the other half of that guard.
+    private static func isIRCLine(_ line: String) -> Bool {
+        // [HH:MM] or [HH:MM:SS] stamped — classic channel log.
+        if line.range(
+            of: #"^\[\d{1,2}:\d{2}(:\d{2})?\] "#,
+            options: .regularExpression) != nil
+        { return true }
+        // <nick> spoken — relay/bridge format.
+        if line.range(
+            of: #"^<[A-Za-z0-9_\-\[\]{}|^`]{1,32}> "#,
+            options: .regularExpression) != nil
+        { return true }
+        // *** / -- / == markers: joins, parts, nick changes, topics.
+        if line.hasPrefix("*** ") || line.hasPrefix("-- ")
+            || line.hasPrefix("== ")
+        { return true }
+        // Nick: message — a short nick (letters, digits, _ - . [ ]),
+        // colon-space, then the line. Markdown list/heading shapes are
+        // excluded by the nick character class (no `#`, `-`, `*`, `>`).
+        if line.range(
+            of: #"^[A-Za-z0-9_\-\.\[\]]{1,32}: "#,
+            options: .regularExpression) != nil
+        { return true }
+        return false
     }
 
     /// The label of a `[label](target)` construct, when the span IS one

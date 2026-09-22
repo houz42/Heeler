@@ -49,9 +49,9 @@ struct AgentListFieldsAddFieldSheet: View {
                                 fieldButton(for: token)
                             }
                         } header: {
-                            Text("Heeler fields")
+                            Text("Meadow fields")
                         } footer: {
-                            Text("These fields exist only in Heeler.")
+                            Text("These fields exist only in Meadow.")
                         }
                     }
                 }

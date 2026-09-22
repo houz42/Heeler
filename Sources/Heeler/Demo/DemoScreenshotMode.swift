@@ -37,11 +37,23 @@
             /// The Host detail page stopped on the pick between two
             /// reachable addresses.
             case hostDetailPick
+            /// The chat surface with a pending multi-select ask — the
+            /// accent-bearing pending-card capture surface (Confirm
+            /// button + selected-option chip). v2 accent proofs.
+            case chatPendingAsk
+            /// The chat surface with special sections in the transcript
+            /// (a `<system-notice>` and an `<irc>` block) — the
+            /// v2 special-sections capture surface. The initial detail
+            /// level rides `--demo-detail-level=<n>`.
+            case chatSpecialSections
+
 
             static func fromArguments() -> Route {
                 let arguments = ProcessInfo.processInfo.arguments
-                if arguments.contains(hostDetailProbingLaunchArgument) { return .hostDetailProbing }
+                if arguments.contains(chatSpecialSectionsLaunchArgument) { return .chatSpecialSections }
+                if arguments.contains(chatPendingAskLaunchArgument) { return .chatPendingAsk }
                 if arguments.contains(hostListLaunchArgument) { return .hostList }
+                if arguments.contains(hostDetailProbingLaunchArgument) { return .hostDetailProbing }
                 if arguments.contains(hostFormLaunchArgument) { return .hostForm }
                 return .none
             }
@@ -50,6 +62,8 @@
         static let hostFormLaunchArgument = "--demo-host-form"
         static let hostListLaunchArgument = "--demo-host-list"
         static let hostDetailProbingLaunchArgument = "--demo-host-detail-probing"
+        static let chatPendingAskLaunchArgument = "--demo-chat-pending-ask"
+        static let chatSpecialSectionsLaunchArgument = "--demo-chat-special-sections"
         static let hostDetailPickLaunchArgument = "--demo-host-detail-pick"
 
         /// The multi-path demo Host: the same machine over LAN and VPN.
@@ -142,7 +156,123 @@
                 multipathDetail(midProbe: true)
             case .hostDetailPick:
                 multipathDetail(midProbe: false)
+            case .chatPendingAsk:
+                chatPendingAskSurface
+            case .chatSpecialSections:
+                chatSpecialSectionsSurface
             }
+        }
+
+        /// The pending-ask capture surface: ChatScreen with a blocked
+        /// agent, one assistant article (the accent author line), and
+        /// a multi-select pending interaction — the v2 accent
+        /// proofs tap an option and capture Confirm + the selected
+        /// chip in BOTH appearances. The composer's deliver/onAsk
+        /// callbacks are wired so the surface is interactive (a tap
+        /// really selects; Confirm really fires) without any backend.
+        private var chatPendingAskSurface: some View {
+            ChatScreen(
+                paneID: "demo:pending",
+                agentName: "ios-polish",
+                state: .blocked,
+                content: ChatContent(
+                    messages: [
+                        ChatMessage(
+                            id: UUID(),
+                            role: .assistant,
+                            blocks: [
+                                .text(
+                                    """
+                                    I found two candidate fixes for the \
+                                    attach retry path. I need your call on \
+                                    which risks to take before I continue.
+                                    """)
+                            ])
+                    ],
+                    pending: [
+                        PendingInteraction(
+                            id: "demo-ask",
+                            question: "",
+                            options: [],
+                            questions: [
+                                PendingAskQuestion(
+                                    id: "q0",
+                                    text: "Which checks should run before the retry lands?",
+                                    multi: true,
+                                    options: [
+                                        PendingAskQuestion.Option(
+                                            id: "o0", label: "Unit suite"),
+                                        PendingAskQuestion.Option(
+                                            id: "o1", label: "UI smoke"),
+                                        PendingAskQuestion.Option(
+                                            id: "o2", label: "Device build"),
+                                    ])
+                            ])
+                    ]),
+                initialLevel: .l0,
+                changeLevel: { _, _ in },
+                deliver: { _ in },
+                authorLabel: "Meadow · omp",
+                onAskAnswer: { _, _ in },
+                onAskCancel: { _ in })
+        }
+
+        /// The special-sections capture surface: ChatScreen with a
+        /// realistic transcript carrying BOTH tags (a harness-injected
+        /// `<system-notice>` mid-turn and an `<irc>` peer message
+        /// near the end), so the capture suite pins the chip render,
+        /// the L0 hide, and the tap-through expansion without a
+        /// backend. The initial detail level rides
+        /// `--demo-detail-level=<n>` (default L1 — the chip level).
+        private var chatSpecialSectionsSurface: some View {
+            ChatScreen(
+                paneID: "demo:special-sections",
+                agentName: "checkout",
+                state: .idle,
+                content: ChatContent(
+                    messages: [
+                        ChatMessage(role: .user, blocks: [
+                            .text("Ship the checkout fix — run the **targeted** tests first."),
+                        ]),
+                        ChatMessage(role: .assistant, blocks: [
+                            .text(
+                                """
+                                I extracted the retry logic into `PaymentCoordinator` \
+                                so the cart survives a failed attempt.
+
+                                <system-notice>Skill "shell-qa" is now active for this \
+                                session. Commands run through the dev-box shell QA \
+                                profile.
+                                Exit code semantics: step logs record their own \
+                                status.</system-notice>
+
+                                While validating the fix, a peer weighed in:
+
+                                <irc><Main> The retry fix looks good from my side — \
+                                go ahead and ship it when tests pass.</irc>
+
+                                All 18 targeted tests pass. Ready to commit when \
+                                you are.
+                                """),
+                        ]),
+                    ]),
+                initialLevel: Self.demoDetailLevel,
+                changeLevel: { _, _ in },
+                deliver: { _ in },
+                authorLabel: "Meadow · omp")
+        }
+
+        /// The `--demo-detail-level=<n>` argument's value (0–3);
+        /// defaults to L1 so an unspecified run still shows chips.
+        private static var demoDetailLevel: DetailLevel {
+            for argument in ProcessInfo.processInfo.arguments {
+                guard argument.hasPrefix("--demo-detail-level="),
+                    let raw = Int(argument.dropFirst("--demo-detail-level=".count)),
+                    let level = DetailLevel(rawValue: raw)
+                else { continue }
+                return level
+            }
+            return .l1
         }
 
         private var consoleRoot: some View {
@@ -354,7 +484,7 @@
                             paneID: "mobile:p1", status: .working,
                             workspaceID: "mobile", kind: "codex",
                             name: "ios-polish", title: "Polish the Attach experience",
-                            cwd: "/workspace/heeler",
+                            cwd: "/workspace/meadow",
                             transcriptPath: chatTranscriptPath),
                         agent(
                             paneID: "docs:p2", status: .idle,
@@ -365,12 +495,12 @@
                             paneID: "mobile:p4", status: .done,
                             workspaceID: "mobile", kind: "gemini",
                             name: "accessibility", title: "Audit VoiceOver labels",
-                            cwd: "/workspace/heeler",
+                            cwd: "/workspace/meadow",
                             transcriptPath: chatTranscriptPath),
                     ],
                     workspaces: [
                         workspace(
-                            id: "mobile", label: "iOS App", repo: "heeler",
+                            id: "mobile", label: "iOS App", repo: "meadow",
                             isLinkedWorktree: true),
                         workspace(id: "docs", label: "Product Docs", repo: "docs-site"),
                     ]),

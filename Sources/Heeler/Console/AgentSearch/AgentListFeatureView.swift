@@ -63,8 +63,11 @@ struct AgentListCountBarView: View {
     }
 }
 
-/// One collapsible group header of the grouped Agents list: chevron, title,
-/// the full parent identity as a quiet line, and the matching count.
+/// One collapsible group header of the grouped Agents list (v2 layout
+/// directive): the WORKSPACE header line shows the full three-part
+/// context path `host · session · workspace`, with the workspace's own
+/// name as the primary title, the matching count, and the toggle
+/// chevron.
 struct AgentListGroupHeaderView: View {
     let section: AgentListSection
     let isCollapsed: Bool
@@ -83,8 +86,8 @@ struct AgentListGroupHeaderView: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                    if !section.parentLine.isEmpty {
-                        Text(section.parentLine)
+                    if !section.contextLine.isEmpty {
+                        Text(section.contextLine)
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -99,9 +102,7 @@ struct AgentListGroupHeaderView: View {
             .contentShape(Rectangle())
             .padding(.vertical, 4)
         }
-        .buttonStyle(.plain)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(section.title), \(section.count) agents")
+        .accessibilityLabel("\(section.title), \(section.contextLine), \(section.count) agents")
         .accessibilityValue(isCollapsed ? "Collapsed" : "Expanded")
         .accessibilityHint(isCollapsed ? "Expands this group." : "Collapses this group.")
         .accessibilityAddTraits(.isHeader)

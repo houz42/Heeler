@@ -259,7 +259,7 @@ struct HostOnboardingView: View {
         return HStack(spacing: 10) {
             if isInUse {
                 Image(systemName: "bolt.fill")
-                    .foregroundStyle(.green)
+                    .foregroundStyle(Color.accentColor)
             } else {
                 switch state {
                 case .unknown:

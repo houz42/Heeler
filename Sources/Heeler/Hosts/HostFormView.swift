@@ -331,7 +331,7 @@ struct HostFormView: View {
         } footer: {
             if draft.authMethod == .deviceKey {
                 Text(
-                    "Heeler signs in with this device's key. The private key "
+                    "Meadow signs in with this device's key. The private key "
                         + "never leaves this device.")
             }
         }
