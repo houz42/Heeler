@@ -106,7 +106,7 @@ function liveAgentCount() {
   return new Promise((resolve) => {
     const sock = net.connect(brokerSocketPath());
     let buf = "";
-    let id = 1;
+    const id = "status-1"; // wire contract: request ids are strings
     let settled = false;
     const finish = (v) => {
       if (settled) return;
@@ -117,6 +117,10 @@ function liveAgentCount() {
     };
     const timer = setTimeout(() => finish(null), 1500);
     sock.on("error", () => finish(null));
+    sock.on("connect", () => {
+      // The broker speaks only after the v1 hello handshake.
+      sock.write(JSON.stringify({ type: "hello", protocol: 1, peer: "client" }) + "\n");
+    });
     sock.on("data", (chunk) => {
       buf += chunk.toString("utf8");
       let nl;

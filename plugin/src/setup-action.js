@@ -30,7 +30,9 @@ import {
 import { installOmpAdapter, uninstallOmpAdapter, adapterStatus } from "./agent-adapters.js";
 import { refreshSidebarSnapshot } from "./sidebar-config.js";
 
-const actionId = process.env.HERDR_PLUGIN_ACTION_ID ?? "heeler.setup";
+// herdr injects the LOCAL action id ("setup", not "heeler.setup").
+const raw = process.env.HERDR_PLUGIN_ACTION_ID ?? "setup";
+const actionId = raw.startsWith("heeler.") ? raw : `heeler.${raw}`;
 const json = process.argv.includes("--json");
 
 function line(msg) {
