@@ -20,6 +20,7 @@ struct MeadowFirstConnectProvisioningTests {
         private(set) var prompts: [AgentPromptParams] = []
         private(set) var restarts: [(paneID: String, arguments: [String])] = []
         var responses: [String: RemoteCommandResult] = [:]
+        private var responseSequences: [String: [RemoteCommandResult]] = [:]
         private(set) var stagedFiles: [String] = []
         private(set) var snapshotAgents: [AgentInfo] = []
         func setSnapshotAgents(_ agents: [AgentInfo]) {
@@ -32,8 +33,21 @@ struct MeadowFirstConnectProvisioningTests {
                 stdout: Data(stdout.utf8), exitStatus: exit)
         }
 
+        /// Queues a scripted answer AFTER the static one: the flow's
+        /// detect-inspect and post-install refresh-inspect issue the
+        /// SAME command, and each run must see its own answer.
+        func queueScript(_ command: String, stdout: String, exit: Int32 = 0) {
+            responseSequences[command, default: []].append(
+                RemoteCommandResult(stdout: Data(stdout.utf8), exitStatus: exit))
+        }
+
         func runProvisioningCommand(_ command: String) async throws -> RemoteCommandResult {
             commands.append(command)
+            if var sequence = responseSequences[command], !sequence.isEmpty {
+                let result = sequence.removeFirst()
+                responseSequences[command] = sequence
+                return result
+            }
             if let result = responses[command] {
                 return result
             }
@@ -60,7 +74,10 @@ struct MeadowFirstConnectProvisioningTests {
             if promptShouldFail {
                 throw TransportError.channelFailed(detail: "prompt refused")
             }
-            throw TransportError.channelFailed(detail: "test double returns no agent")
+            return Agent(AgentInfo(
+                agentStatus: .idle, focused: false, paneID: params.target,
+                revision: 1, tabID: "t", terminalID: "term",
+                workspaceID: "w"))
         }
 
         func restartAgent(
@@ -155,25 +172,47 @@ struct MeadowFirstConnectProvisioningTests {
     private func scriptProvisionPath(
         transport: FlowTransport
     ) async throws {
+        // The remote post-staging checksum verification must answer "ok".
+        let layout = BrokerProvisioningLayout.standard(
+            platform: .linux, homeDirectory: "/home/dev")
+        let packageBytes = Data("flow-package".utf8)
+        let sha = SHA256.hash(data: packageBytes).map { String(format: "%02x", $0) }.joined()
+        await transport.addScript(
+            try layout.remoteChecksumCommand(
+                path: "/remote/staging/file.targz", expectedSHA256: sha),
+            stdout: "ok")
         // Platform probe.
         await transport.addScript(
             "printf '%s\\n%s\\n' \"$(uname)\" \"${HOME:-\"\"}\"",
             stdout: "Linux\n/home/dev")
-        // The layout for the flow is the Meadow standard, so the socket
-        // probe + writes target it.
         // Inspect answers: nothing installed, prerequisites satisfied.
-        let layout = BrokerProvisioningLayout.standard(
-            platform: .linux, homeDirectory: "/home/dev")
-        await transport.addScript(
+        // (`layout` declared at the top of this helper.)
+        await transport.queueScript(
             layout.inspectCommand,
             stdout: inspectAnswer(version: nil, service: "inactive"))
-        await transport.addScript(
-            layout.readAdapterShimCommand, stdout: "")
-        // Post-install inspect: installed, service active, shim present.
-        await transport.addScript(
+        await transport.queueScript(layout.readAdapterShimCommand, stdout: "")
+        // Post-install refresh-inspect: installed, service active, shim
+        // present. QUEUED (not static) so the second run of the same
+        // command sees the post-install state while detect's run saw
+        // the pre-install one. Enable's own refresh inspect needs a
+        // THIRD answer (the queue replays in order).
+        await transport.queueScript(
             layout.inspectCommand,
             stdout: inspectAnswer(version: "0.1.0-dev.3", service: "active"))
-        await transport.addScript(
+        await transport.queueScript(
+            layout.readAdapterShimCommand,
+            stdout: "// Managed by Heeler. Replaces the broker-adapter extension shim.")
+        await transport.queueScript(
+            layout.inspectCommand,
+            stdout: inspectAnswer(version: "0.1.0-dev.3", service: "active"))
+        await transport.queueScript(
+            layout.readAdapterShimCommand,
+            stdout: "// Managed by Heeler. Replaces the broker-adapter extension shim.")
+        // configureAdapter's refresh inspect (third re-run of the flow).
+        await transport.queueScript(
+            layout.inspectCommand,
+            stdout: inspectAnswer(version: "0.1.0-dev.3", service: "active"))
+        await transport.queueScript(
             layout.readAdapterShimCommand,
             stdout: "// Managed by Heeler. Replaces the broker-adapter extension shim.")
         // Socket resolution.
