@@ -445,7 +445,7 @@ struct AgentDetailView: View {
                         case .ambiguous:
                             try await store
                                 .resendAcknowledgingPossibleDuplicate(echoID: echoID)
-                        case .sending, .sent, .unconfirmed:
+                        case .sending, .sent:
                             break
                         }
                     }
@@ -592,13 +592,6 @@ struct AgentDetailView: View {
                 }
             case .sending, .sent:
                 break
-            case .unconfirmed:
-                // Re-review round 4, finding 1: correlated but NOT
-                // authoritatively — the honest marker, never a silent
-                // match claim.
-                blocks.append(.notice(
-                    text: "Delivered (unconfirmed) — the agent's record for this send cannot be verified yet.",
-                    level: "warning"))
             }
             // Re-review round 3, finding 1: the message id IS the
             // ORIGINAL outgoing UUID — no derivation (a derived id

@@ -170,7 +170,7 @@ internal enum ChatRow: Sendable, Equatable, Identifiable {
              .toolCall(let id, _, _, _), .image(let id, _, _),
              .notice(let id, _, _, _):
             return id
-        case .orphanResult, .pending:
+        case .orphanResult, .pending, .specialSection, .resolvedAsk:
             return nil
         }
     }

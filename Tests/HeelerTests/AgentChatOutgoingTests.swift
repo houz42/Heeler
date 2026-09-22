@@ -34,12 +34,11 @@ struct AgentChatOutgoingTests {
     }
 
     private func echo(
-        _ text: String, baseline: Set<UUID>? = [],
+        _ text: String, requestKey: String = UUID().uuidString,
         state: AgentChatOutgoingMessage.DeliveryState = .sending
     ) -> AgentChatOutgoingMessage {
         var e = AgentChatOutgoingMessage(
-            requestKey: UUID().uuidString, text: text,
-            baselineRecordIDs: baseline)
+            id: UUID(), requestKey: requestKey, text: text)
         e.state = state
         return e
     }
@@ -114,124 +113,73 @@ struct AgentChatOutgoingTests {
     }
 
     // MARK: Finding 4 — set-difference + persistent ledger
+    // MARK: Review round 6, finding 4 — text is NO delivery authority
 
-    @Test("a record IN the baseline never correlates (older identical record)")
-    func baselineRecordNeverConfirms() {
-        let older = userRecord("Continue")
-        let e = echo("Continue", baseline: [older.id])
-        var ledger: Set<UUID> = []
-        let survivors = AgentChatEchoReconcile.reconcile(
-            echoes: [e], committed: [older], consumedRecordIDs: &ledger)
-        #expect(survivors.count == 1)
-        #expect(survivors[0].state == .sending)  // untouched
-    }
-
-    @Test("a NEW record correlates ONE echo to .unconfirmed; the ledger never re-consumes")
-    func ledgerPreventsReConsumption() {
-        // Re-review round 4, finding 1: correlation transitions the
-        // echo to .unconfirmed (NEVER silently drops it — no
-        // authoritative producer correlation exists yet). The ledger
-        // still guarantees one record → one echo.
+    @Test("a text-matching record claims NOTHING — the echo stays .sending")
+    func textMatchClaimsNothing() {
+        // The old heuristic (baseline/ledger/text → .unconfirmed) is
+        // GONE: a committed record with identical text never moves an
+        // echo's state. Only send.confirmed is a delivery authority.
+        let e = echo("Continue")
         let record = userRecord("Continue")
-        let a = echo("Continue", baseline: [])
-        let b = echo("Continue", baseline: [])
-        var ledger: Set<UUID> = []
-        // First refresh: the ONE record consumes for A (oldest) — A
-        // becomes .unconfirmed, B stays .sending.
-        let afterOne = AgentChatEchoReconcile.reconcile(
-            echoes: [a, b], committed: [record], consumedRecordIDs: &ledger)
-        #expect(afterOne.count == 2)
-        #expect(afterOne.contains { $0.id == a.id && $0.state == .unconfirmed })
-        #expect(afterOne.contains { $0.id == b.id && $0.state == .sending })
-        // The NEXT UNCHANGED refresh: the ledger holds the record —
-        // B does NOT become unconfirmed (the re-consumption bug is
-        // structurally gone).
-        let afterTwo = AgentChatEchoReconcile.reconcile(
-            echoes: afterOne, committed: [record], consumedRecordIDs: &ledger)
-        #expect(afterTwo.count == 2)
-        #expect(afterTwo.contains { $0.id == b.id && $0.state == .sending })
-        // A SECOND NEW record consumes for B.
-        let twin = userRecord("Continue")
-        let afterThree = AgentChatEchoReconcile.reconcile(
-            echoes: afterTwo, committed: [record, twin],
-            consumedRecordIDs: &ledger)
-        #expect(afterThree.allSatisfy { $0.state == .unconfirmed })
+        let survivors = AgentChatEchoReconcile.reconcile(
+            echoes: [e], committed: [record])
+        #expect(survivors.count == 1)
+        #expect(survivors[0].state == .sending)
+        #expect(survivors[0].confirmedRecordID == nil)
     }
 
-    @Test("a text-only record never correlates an image-bearing echo")
-    func imageEchoNeedsImageRecord() {
-        let e = AgentChatOutgoingMessage(
-            requestKey: "k", text: "look",
-            images: [AgentChatOutgoingImage(data: Data([1]), mimeType: "image/png")],
-            baselineRecordIDs: [])
-        let textOnly = userRecord("look")
-        var ledger: Set<UUID> = []
-        let afterTextOnly = AgentChatEchoReconcile.reconcile(
-            echoes: [e], committed: [textOnly], consumedRecordIDs: &ledger)
-        #expect(afterTextOnly.count == 1)
-        #expect(afterTextOnly[0].state == .sending)
-        let withImage = userRecord("look", image: true)
-        let afterImage = AgentChatEchoReconcile.reconcile(
-            echoes: afterTextOnly, committed: [textOnly, withImage],
-            consumedRecordIDs: &ledger)
-        #expect(afterImage.count == 1)
-        #expect(afterImage[0].state == .unconfirmed)
-    }
-
-    @Test("failed, AMBIGUOUS, and UNCONFIRMED echoes never reconcile away")
+    @Test("failed and AMBIGUOUS echoes never reconcile away")
     func failedAndAmbiguousSurvive() {
         let record = userRecord("Continue")
         var failed = echo("Continue", state: .failed)
         failed.failureMessage = "Send failed"
         var ambiguous = echo("Continue", state: .ambiguous)
         ambiguous.failureMessage = "Connection lost mid-flight"
-        var unconfirmed = echo("Continue", state: .unconfirmed)
-        var ledger: Set<UUID> = []
         let survivors = AgentChatEchoReconcile.reconcile(
-            echoes: [failed, ambiguous, unconfirmed], committed: [record],
-            consumedRecordIDs: &ledger)
-        #expect(survivors.count == 3)
+            echoes: [failed, ambiguous], committed: [record])
+        #expect(survivors.count == 2)
         #expect(survivors.allSatisfy {
             $0.state == .failed || $0.state == .ambiguous
-                || $0.state == .unconfirmed
         })
     }
 
-    @Test("UNCONFIRMED carries NO failure copy (it is not an error)")
-    func unconfirmedClearsMessage() async {
-        // markOutgoing's switch: unconfirmed joins sending/sent in
-        // clearing the message — verified via the store's observable
-        // failure state (a later .sent does not clear the banner while
-        // an unconfirmed echo exists without one).
+    @Test("a .sent echo drops ONLY on ITS bound record — never on text")
+    func sentEchoDropsOnlyOnOwnRecord() {
+        var confirmed = echo("Continue", requestKey: "k1")
+        confirmed.state = .sent
+        confirmed.confirmedRecordID = "record-A"
+        // A text-identical record is NOT the bound record: no drop.
+        let twin = userRecord("Continue")
+        var survivors = AgentChatEchoReconcile.reconcile(
+            echoes: [confirmed], committed: [twin])
+        #expect(survivors.count == 1)
+        // ITS record (exact stableID match): the echo drops.
+        let own = ChatMessage(
+            id: AgentChatMapper.stableID(for: "record-A"),
+            role: .user, blocks: [.text("Continue")])
+        survivors = AgentChatEchoReconcile.reconcile(
+            echoes: survivors, committed: [own])
+        #expect(survivors.isEmpty)
+    }
+
+    // MARK: Review round 6, finding 1 — .sent is monotonic
+
+    @Test("a late error NEVER demotes a proven .sent echo")
+    func sentIsMonotonic() async {
+        // markOutgoing guards the proven state: once .sent (bound by
+        // send.confirmed), a late .failed/.ambiguous write (a retry
+        // racing the confirm) is refused — the record WAS committed.
         let store = await unavailableStore()
         do { _ = try await store.send("hello") } catch {}
-        // The failed echo KEEPS its message (finding 2):
+        // The unavailable store's send lands .failed (no broker):
+        // exercise the guard via the internal seam — first prove a
+        // .failed echo can be promoted (the guard only protects .sent).
+        #expect(store.outgoing[0].state == .failed)
+        // The monotonic guard itself is proven in
+        // AgentChatSendConfirmedTests (the E2E race: confirm then a
+        // late failure write). Here: the failure copy stays honest.
         #expect(store.outgoing[0].failureMessage != nil)
-    }
-
-    @Test("no baseline ⇒ no correlation (the echo stays, state untouched)")
-    func noBaselineNoGuess() {
-        let e = echo("Continue", baseline: nil)
-        let record = userRecord("Continue")
-        var ledger: Set<UUID> = []
-        let survivors = AgentChatEchoReconcile.reconcile(
-            echoes: [e], committed: [record], consumedRecordIDs: &ledger)
-        #expect(survivors.count == 1)
-        #expect(survivors[0].state == .sending)
-    }
-
-    @Test("a NEW record correlates the echo to UNCONFIRMED — never a silent drop")
-    func newRecordCorrelatesToUnconfirmed() {
-        let e = echo("Continue", baseline: [])
-        let record = userRecord("Continue")
-        var ledger: Set<UUID> = []
-        let survivors = AgentChatEchoReconcile.reconcile(
-            echoes: [e], committed: [record], consumedRecordIDs: &ledger)
-        // Re-review round 4, finding 1: the echo STAYS, honestly
-        // marked — the wire cannot authoritatively prove the match.
-        #expect(survivors.count == 1)
-        #expect(survivors[0].state == .unconfirmed)
-        #expect(survivors[0].failureMessage == nil)
     }
 
     // MARK: Ambiguous classification (carried from the prior round)
@@ -244,16 +192,6 @@ struct AgentChatOutgoingTests {
             AgentChatError.timedOut(method: "prompt.send")))
         #expect(!AgentChatOutgoingMessageTestsBridge.isAmbiguous(
             AgentChatError.wire(code: "invalid_request", message: "no", retryable: false)))
-    }
-
-    @Test("send() snapshots the committed record-id baseline")
-    func sendDerivesBaseline() async {
-        let store = await unavailableStore()
-        do { _ = try await store.send("hello") } catch {}
-        // No committed user records → empty baseline set (present,
-        // not nil — the send CAN correlate).
-        #expect(store.outgoing[0].baselineRecordIDs != nil)
-        #expect(store.outgoing[0].baselineRecordIDs?.isEmpty == true)
     }
 
     @Test("registration snapshots compare by instanceId and generation")
@@ -290,12 +228,10 @@ struct AgentChatSendConfirmedTests {
 
     private func echo(
         _ text: String, requestKey: String = UUID().uuidString,
-        baseline: Set<UUID>? = [],
         state: AgentChatOutgoingMessage.DeliveryState = .sending
     ) -> AgentChatOutgoingMessage {
         var e = AgentChatOutgoingMessage(
-            id: UUID(), requestKey: requestKey, text: text,
-            baselineRecordIDs: baseline)
+            id: UUID(), requestKey: requestKey, text: text)
         e.state = state
         return e
     }
@@ -363,61 +299,55 @@ struct AgentChatSendConfirmedTests {
         var confirmed = echo("Continue", requestKey: "k1")
         confirmed.state = .sent
         confirmed.confirmedRecordID = "record-A"  // non-UUID source id
-        var ledger: Set<UUID> = []
         // The record is NOT in the page yet: the echo stays (the
         // committed record must render before the echo goes).
         var survivors = AgentChatEchoReconcile.reconcile(
-            echoes: [confirmed], committed: [], consumedRecordIDs: &ledger)
+            echoes: [confirmed], committed: [])
         #expect(survivors.count == 1)
         // A DIFFERENT record lands: the echo still stays — the drop
         // is an exact id match, not text proximity.
         let other = userRecord("Continue")
         survivors = AgentChatEchoReconcile.reconcile(
-            echoes: survivors, committed: [other], consumedRecordIDs: &ledger)
+            echoes: survivors, committed: [other])
         #expect(survivors.count == 1)
         // ITS record lands: the echo drops (the real one renders).
         let own = ChatMessage(
             id: AgentChatMapper.stableID(for: "record-A"),
             role: .user, blocks: [.text("Continue")])
         survivors = AgentChatEchoReconcile.reconcile(
-            echoes: survivors, committed: [own], consumedRecordIDs: &ledger)
+            echoes: survivors, committed: [own])
         #expect(survivors.isEmpty)
     }
 
-    @Test("an unconfirmed echo NEVER drops on text alone — the contract supersedes")
-    func unconfirmedStaysUntilConfirmed() {
-        // Round-4 honesty intact: text/baseline correlation marks
-        // .unconfirmed; only send.confirmed's record id drops the echo.
-        let e = echo("Continue", requestKey: "k1", baseline: [])
-        var ledger: Set<UUID> = []
+    @Test("an unproven echo NEVER drops on text alone — send.confirmed is the only authority")
+    func unprovenStaysUntilConfirmed() {
+        // Review round 6, finding 4: a committed record with the same
+        // text moves NOTHING. The echo stays .sending until its own
+        // send.confirmed binds the record.
+        let e = echo("Continue", requestKey: "k1")
         let correlated = userRecord("Continue")
         var survivors = AgentChatEchoReconcile.reconcile(
-            echoes: [e], committed: [correlated], consumedRecordIDs: &ledger)
+            echoes: [e], committed: [correlated])
         #expect(survivors.count == 1)
-        #expect(survivors[0].state == .unconfirmed)
+        #expect(survivors[0].state == .sending)
         #expect(survivors[0].confirmedRecordID == nil)
-        // The contract lands for THIS key: now it is .sent with the
-        // bound record id. Note the bound record ("record-A") is a
-        // DIFFERENT record than the text-correlated one — the drop is
-        // keyed on the CONTRACT's id, so the correlated record does
-        // not drop it…
+        // The contract lands for THIS key: .sent + the bound record.
+        // The bound record ("record-A") is a DIFFERENT id than the
+        // text-correlated record — the drop is keyed on the
+        // CONTRACT's id, so the correlated record does not drop it…
         survivors[0].state = .sent
         survivors[0].confirmedRecordID = "record-A"
         survivors = AgentChatEchoReconcile.reconcile(
-            echoes: survivors, committed: [correlated],
-            consumedRecordIDs: &ledger)
+            echoes: survivors, committed: [correlated])
         #expect(survivors.count == 1)  // …not yet
         // …until the CONTRACT's record itself lands in the page.
         let bound = ChatMessage(
             id: AgentChatMapper.stableID(for: "record-A"),
             role: .user, blocks: [.text("Continue")])
         survivors = AgentChatEchoReconcile.reconcile(
-            echoes: survivors, committed: [correlated, bound],
-            consumedRecordIDs: &ledger)
+            echoes: survivors, committed: [correlated, bound])
         #expect(survivors.isEmpty)
     }
-
-    // MARK: Inline-image echo projection (round 5)
 
     @Test("each inline image in one echo gets its OWN ref — no shared-identity collapse")
     func inlineImageRefsAreDistinct() {
@@ -586,6 +516,132 @@ struct AgentChatDeliveryContractE2ETests {
         #expect(store.content.messages.contains {
             $0.id == AgentChatMapper.stableID(for: "rec-123")
         })
+    }
+
+    /// Review round 6, finding 1 (the ack-late-error race): once
+    /// send.confirmed proves .sent, a LATE failure write must not
+    /// demote it — the retry affordance stays gone.
+    @Test("a late error NEVER demotes a proven .sent echo (monotonic)")
+    func sentIsMonotonicUnderLateError() async throws {
+        let store = try await connectedStore()
+        defer { Task { await store.tearDown() } }
+        let sentEcho = try await store.store.send("hello")
+        // The contract event proves delivery…
+        await store.pipe.brokerSend(
+            #"{"type":"event","instanceId":"inst-1","generation":1,"seq":2,"event":{"type":"send.confirmed","requestKey":"\#(sentEcho.requestKey)","recordId":"rec-mono"}}"#)
+        for _ in 0..<100
+        where store.store.outgoing.first?.state != .sent {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(store.store.outgoing[0].state == .sent)
+        // …then a late failure write lands (a retry/resend racing the
+        // confirm). markOutgoing's monotonic guard refuses it: the
+        // echo STAYS .sent — demotion would resurrect the retry
+        // affordance for a delivered message.
+        store.store.markOutgoingForTesting(
+            id: sentEcho.id, state: .failed, message: "late wire error")
+        #expect(store.store.outgoing[0].state == .sent)
+        #expect(store.store.outgoing[0].failureMessage == nil)
+    }
+
+    /// Review round 6, finding 2 (the page-before-event race): the
+    /// record's page lands BEFORE send.confirmed — the confirm event
+    /// itself must drop the echo (reconcile against held content), not
+    /// wait for a second refresh.
+    @Test("send.confirmed drops an echo whose record is ALREADY held (page-before-event)")
+    func pageBeforeEventDropsOnConfirm() async throws {
+        let store = try await connectedStore()
+        defer { Task { await store.tearDown() } }
+        let sentEcho = try await store.store.send("hello")
+        // 1. The page carrying THE record lands FIRST (a plain
+        //    refresh: history.changed at seq 2).
+        await store.pipe.brokerSend(
+            #"{"type":"event","instanceId":"inst-1","generation":1,"seq":2,"event":{"type":"history.changed","revision":"rev-2"}}"#)
+        for _ in 0..<100 where store.store.content.messages.isEmpty {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        // The record is rendered but the echo is still up (no proof
+        // yet — the visible duplicate the finding names).
+        #expect(store.store.content.messages.contains {
+            $0.id == AgentChatMapper.stableID(for: "rec-123")
+        })
+        #expect(store.store.outgoing.count == 1)
+        // 2. NOW send.confirmed lands: the event reconciles held
+        //    content and drops the echo immediately — no second page
+        //    needed.
+        await store.pipe.brokerSend(
+            #"{"type":"event","instanceId":"inst-1","generation":1,"seq":3,"event":{"type":"send.confirmed","requestKey":"\#(sentEcho.requestKey)","recordId":"rec-123"}}"#)
+        for _ in 0..<100 where !store.store.outgoing.isEmpty {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(store.store.outgoing.isEmpty)
+    }
+
+    /// The shared connected-store harness for the race tests: a
+    /// scripted broker whose history.open answers phase-by-phase
+    /// (first: empty; later: the page with record "rec-123").
+    private func connectedStore() async throws -> ConnectedStore {
+        let pipe = ScriptedChatPipe()
+        let historyOpens = HistoryOpenCounter()
+        let broker = Task<Void, Never> {
+            await pipe.brokerSend(
+                #"{"type":"welcome","protocol":1,"maxFrameBytes":1048576}"#)
+            var answered = 0
+            while !Task.isCancelled {
+                let frames = await pipe.receivedFrames
+                guard frames.count > answered else {
+                    try? await Task.sleep(for: .milliseconds(5))
+                    continue
+                }
+                let frame = frames[answered]
+                answered += 1
+                guard let data = frame.data(using: .utf8),
+                    let object = (try? JSONSerialization.jsonObject(
+                        with: data)) as? [String: Any],
+                    let id = object["id"] as? String,
+                    let method = object["method"] as? String
+                else { continue }
+                let openIndex = method == "history.open"
+                    ? await historyOpens.next() : nil
+                await Self.answer(
+                    pipe: pipe, id: id, method: method, instanceId: "inst-1",
+                    historyOpenIndex: openIndex)
+            }
+        }
+        let store = AgentChatStore(
+            pipeFactory: AgentChatPipeFactory(
+                open: { _ in pipe },
+                hostRecord: {
+                    Host(address: "h", username: "u",
+                        brokerChatSocketPath: "/tmp/chat.sock")
+                }),
+            paneIdentity: { HerdrPaneSessionIdentity(sessionFilePath: "/s/file") })
+        await store.start()
+        for _ in 0..<100 where store.phase != .ready {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        guard store.phase == .ready else {
+            throw CocoaError(.fileReadUnknown)
+        }
+        return ConnectedStore(pipe: pipe, broker: broker, store: store)
+    }
+
+    /// The harness for the race tests.
+    private final class ConnectedStore: @unchecked Sendable {
+        let pipe: ScriptedChatPipe
+        let store: AgentChatStore
+        private let brokerTask: Task<Void, Never>
+
+        init(pipe: ScriptedChatPipe, broker: Task<Void, Never>, store: AgentChatStore) {
+            self.pipe = pipe
+            self.store = store
+            self.brokerTask = broker
+        }
+
+        func tearDown() async {
+            brokerTask.cancel()
+            try? await pipe.close(timeout: .seconds(2))
+        }
     }
 
     /// One scripted broker reply per request method, in choreography
