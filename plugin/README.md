@@ -1,9 +1,10 @@
 # heeler
 
-A [herdr plugin](https://herdr.dev/docs/plugins/) that renders a **Pairing Code**
-QR so the Heeler app can add this machine as a Host by scanning it
-(ADR 0007). The `pair` action opens a popup pane: confirm which of the
-machine's addresses go into the code, then scan the QR with the app.
+A [herdr plugin](https://herdr.dev/docs/plugins/) — the **Meadow host
+package**. It renders a **Pairing Code** QR so the Heeler app can add
+this machine as a Host by scanning it (ADR 0007): the `pair` action opens
+a popup pane where you confirm which of the machine's addresses go into
+the code, then scan the QR with the app.
 
 The Pairing Code carries a single-use **Bootstrap Key**: the app connects with
 it once, submits its Device Key public line, and the plugin's Enrollment
@@ -21,6 +22,71 @@ device that has registered a Live Activity token. See
 Starting with plugin 0.4.0, a startup hook also exports the Host's herdr
 sidebar layout for Heeler. Both event hooks refresh it before their notification
 gates. See [Sidebar layout snapshot (v1)](#sidebar-layout-snapshot-v1).
+
+Starting with plugin 0.5.0, this plugin is the complete **Meadow host
+package**: it owns and bundles the host chat broker (a logical internal
+component — not a separately installed product), the agent adapters, and
+the pairing/sidebar/notification helpers, as ONE installable unit. See
+[Chat broker (host package)](#chat-broker-host-package).
+
+## Chat broker (host package)
+
+The plugin bundles `agent-chat/` (wire protocol v1, the broker, and the omp
+adapter) and runs ONE shared, supervised broker per host serving ALL agent
+sessions on that machine:
+
+- **Single instance.** A detached supervisor process owns the broker and
+  holds the host-wide ownership lock by BINDING `broker.owner.sock` in the
+  Meadow state root — the bind is released by the kernel when the
+  supervisor dies, so ownership is always a live fact, never a stale
+  pidfile. herdr runs the plugin's startup hook in every session; the hook
+  wire-probes the broker socket and spawns a supervisor only when no
+  broker answers and no owner responds. Two herdr sessions can never
+  produce two brokers.
+- **One broker for all agents.** The socket stays at the standard path
+  `${XDG_DATA_HOME:-~/.local/share}/meadow/broker.sock` — the path the
+  Heeler app is already configured to dial (preserved credentials,
+  pairing, and socket).
+- **Adapters run inside agents.** Setup installs ONE omp loader shim at
+  `~/.omp/agent/extensions/heeler-chat.ts` that imports the adapter from
+  the synced runtime. No per-agent daemons.
+- **Supervised.** The supervisor restarts the broker with backoff if it
+  dies; SIGTERM to the supervisor is a graceful stop.
+
+### Setup and lifecycle
+
+```bash
+herdr plugin action invoke heeler.setup          # sync runtime + start broker + install adapter shim
+herdr plugin action invoke heeler.status        # broker health, owner, versions, adapters, live registrations
+herdr plugin action invoke heeler.stop-broker    # graceful stop
+herdr plugin action invoke heeler.upgrade-broker  # re-sync runtime + restart (after a plugin update)
+herdr plugin action invoke heeler.uninstall-adapters
+```
+
+Every command also accepts `--json` for a machine-readable report.
+`heeler.setup` is idempotent: when a broker already answers on the
+standard socket, it does not spawn a second one — which is also the
+migration path for hosts that ran the pre-0.5.0 standalone broker
+(launchd `com.meadow.chat.broker` / systemd): stop the old service, run
+`heeler.setup`, and the plugin's supervisor takes over the SAME socket
+path; running agents re-register through their own reconnect backoff.
+
+### Migrating from the standalone broker
+
+On a host where the old supervised broker (launchd/systemd unit) is
+still serving the standard socket:
+
+1. `herdr plugin action invoke heeler.setup` — verifies the live broker;
+   no second broker is spawned.
+2. Disable the old service (`launchctl bootout gui/$(id -u)/com.meadow.chat.broker`
+   on macOS; `systemctl --user disable --now heeler-chat-broker` on Linux).
+3. Run `heeler.setup` again (or start a herdr session — the startup hook
+   does the same): the plugin supervisor binds the now-free socket.
+
+Agents connected to the old broker reconnect automatically (their
+adapter reconnects with 250ms→5s backoff), so the handover does not
+bounce live sessions beyond that reconnect window. To roll back, re-run
+step 2 in reverse: `heeler.stop-broker`, then re-load the old service.
 
 ## Requirements
 
