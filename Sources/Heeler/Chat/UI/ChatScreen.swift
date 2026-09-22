@@ -770,6 +770,15 @@ struct ChatScreen: View {
         pendingImagePreviewData = data
         attachmentErrorMessage = nil
         attachments.draftStore.clearUploadFailure()
+        // The paste path has the LOCAL bytes in hand at this instant —
+        // the tile with its real thumbnail shows IMMEDIATELY (v2
+        // device note); the upload runs in the background and its
+        // completed remotePath updates the tracked item (no second
+        // tile, no gating on the upload).
+        let itemID = UUID().uuidString
+        pendingDraftItemID = itemID
+        draftItems.append(.image(
+            id: itemID, remotePath: "", previewData: data))
         let canBegin = attachments.staging.begin(
             .photo(DataImageSelection(data: data)), insertPathIntoComposer: false)
         if canBegin == nil {
@@ -777,6 +786,9 @@ struct ChatScreen: View {
                 "An attachment is already uploading. Try again once it finishes.")
             pendingImagePreviewData = nil
             isPasteImageAttachment = false
+            // The staged tile comes back out — no upload will land for it.
+            pendingDraftItemID = nil
+            draftItems.removeAll { $0.id == itemID }
         }
     }
 
@@ -794,17 +806,26 @@ struct ChatScreen: View {
             attachments.draftStore.recordUploadFailure(failure.message)
         case .completed(let outcome):
             attachments.draftStore.clearUploadFailure()
-            if isPasteImageAttachment {
-                // Paste image: the tile carries the attachment; the
-                // path rides the Send composition exactly once.
-                draftItems.append(.image(
-                    id: UUID().uuidString,
-                    remotePath: outcome.path,
-                    previewData: pendingImagePreviewData))
-                pendingImagePreviewData = nil
-                isPasteImageAttachment = false
+            if let itemID = pendingDraftItemID {
+                // The tile has been visible since the pick/paste (v2
+                // device note): the upload's completed remotePath
+                // UPDATES the tracked item — no second tile ever
+                // appears. Covers both paste (preview bytes in hand
+                // instantly) and picker (thumbnail fills from the
+                // local read) paths.
+                pendingDraftItemID = nil
+                switch outcome.medium {
+                case .image:
+                    updateDraftItem(id: itemID, remotePath: outcome.path)
+                    pendingImagePreviewData = nil
+                case .file:
+                    let name = pendingFileURL?.lastPathComponent ?? "File"
+                    updateDraftItemFile(id: itemID, name: name, remotePath: outcome.path)
+                    pendingFileURL = nil
+                }
             } else {
-                // Picker completion: exactly one draft item by medium.
+                // No tracked in-flight tile (a store-driven completion
+                // outside the pick/paste path): append as before.
                 switch outcome.medium {
                 case .image:
                     draftItems.append(.image(
@@ -820,16 +841,26 @@ struct ChatScreen: View {
                     pendingFileURL = nil
                 }
             }
+            isPasteImageAttachment = false
         case nil:
             break
         }
     }
 
-    /// Send needs draft text or a held pending image: a pasted image
-    /// with no message text still sends (the path reference IS the
-    /// message).
+    /// Send needs draft text or held COMPLETED attachments: a tracked
+    /// in-flight tile (upload not landed yet) blocks Send until its
+    /// remotePath lands; the draft stays editable meanwhile.
     private var canSend: Bool {
-        if !draftItems.isEmpty { return true }
+        // A tile still WAITING on its upload (tracked in-flight item
+        // with an empty remotePath) blocks Send — the wire needs the
+        // real path; the draft stays editable while the upload runs.
+        let hasInFlightUpload = draftItems.contains { item in
+            if case .image(_, let path, _) = item, path.isEmpty {
+                return true
+            }
+            return false
+        }
+        if !hasInFlightUpload, !draftItems.isEmpty { return true }
         return !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
@@ -899,6 +930,10 @@ struct ChatScreen: View {
     @State private var pendingFileURL: URL?
     /// The photo picker's item data (the tile's preview thumbnail).
     @State private var pendingPickerImageData: Data?
+    /// The in-flight picked item's DRAFT TILE id (v2 device note): the
+    /// tile shows immediately on pick; the completed upload's
+    /// remotePath updates THIS item (no second tile ever appears).
+    @State private var pendingDraftItemID: String?
 
     /// The composer's text field (the growing/collapsing input), split
     /// out to keep each view expression within the type-checker's
@@ -1104,10 +1139,22 @@ struct ChatScreen: View {
                 isPasteImageAttachment = false
                 attachmentErrorMessage = nil
                 attachments.draftStore.clearUploadFailure()
-                // The tile's preview: the picked item's own bytes.
+                // The tile shows IMMEDIATELY (v2 device note): the draft
+                // item is appended in the SAME frame as the picker's
+                // dismissal with a photo glyph; the local thumbnail
+                // bytes fill the tile as soon as the async read lands
+                // (a local PHAsset read, never gated on the upload —
+                // the staging upload runs in the background and the
+                // completed remotePath UPDATES this tracked item).
+                let itemID = UUID().uuidString
+                pendingDraftItemID = itemID
+                draftItems.append(.image(
+                    id: itemID, remotePath: "", previewData: nil))
                 Task { @MainActor in
-                    pendingPickerImageData =
-                        try? await item.loadTransferable(type: Data.self) ?? nil
+                    let data = try? await item.loadTransferable(type: Data.self) ?? nil
+                    if let data {
+                        updateDraftItemImage(id: itemID, previewData: data)
+                    }
                 }
                 attachments.staging.begin(
                     .photo(PhotosPickerImageSelection(item: item)),
@@ -1178,7 +1225,15 @@ struct ChatScreen: View {
             return
         }
         draft = saved.text
-        draftItems = saved.items.map(ChatDraftItem.init)
+        // Defensive: never restore an in-flight (empty-path) image
+        // item — its upload belonged to a previous surface and will
+        // never complete here.
+        draftItems = saved.items.map(ChatDraftItem.init).filter { item in
+            if case .image(_, let path, _) = item {
+                return !path.isEmpty
+            }
+            return true
+        }
         draftCaret = saved.caretLocation
         caretRequest = ChatCaretRequest(location: saved.caretLocation)
     }
@@ -1186,15 +1241,55 @@ struct ChatScreen: View {
     /// Persists the live draft per edit (item 18). An EMPTY draft clears
     /// the entry — cheap enough to run on every keystroke (the encode is
     /// a small Codable; image preview BYTES never persist by design).
-    /// Keyed by the HOST-QUALIFIED identity (draftKey): two hosts' same-
-    /// named panes keep independent drafts.
     private func persistDraft() {
+        // In-flight image tiles (empty remotePath, upload not landed)
+        // never persist: their upload is a LIVE operation tied to this
+        // surface — a restored empty-path tile would block Send
+        // forever (nothing will ever complete it). Completed items
+        // persist normally.
+        let persistable = draftItems.filter { item in
+            if case .image(_, let path, _) = item {
+                return !path.isEmpty
+            }
+            return true
+        }
         draftStore.save(
             ChatPaneDraft(
                 text: draft,
                 caretLocation: draftCaret,
-                items: draftItems.map(\.paneDraftItem)),
+                items: persistable.map(\.paneDraftItem)),
             paneID: draftKey)
+    }
+
+
+    /// Fills a tracked in-flight tile's local thumbnail (v2 device
+    /// note): the local picker bytes decode in the background and the
+    /// tile's glyph becomes the real preview — never a second tile.
+    private func updateDraftItemImage(id: String, previewData: Data) {
+        for index in draftItems.indices where draftItems[index].id == id {
+            if case .image(let existingID, let path, _) = draftItems[index] {
+                draftItems[index] = .image(
+                    id: existingID, remotePath: path, previewData: previewData)
+            }
+        }
+    }
+
+    /// Completes a tracked in-flight tile with its uploaded remotePath.
+    private func updateDraftItem(id: String, remotePath: String) {
+        for index in draftItems.indices where draftItems[index].id == id {
+            if case .image(let existingID, _, let preview) = draftItems[index] {
+                draftItems[index] = .image(
+                    id: existingID, remotePath: remotePath, previewData: preview)
+            }
+        }
+    }
+
+    /// Completes a tracked in-flight tile as a file chip (the file
+    /// picker's pick flow shares the tracked-tile mechanism).
+    private func updateDraftItemFile(id: String, name: String, remotePath: String) {
+        for index in draftItems.indices where draftItems[index].id == id {
+            draftItems[index] = .file(id: id, name: name, remotePath: remotePath)
+        }
     }
 
     private func removeDraftItem(_ id: String) {
