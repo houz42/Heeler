@@ -308,32 +308,10 @@ struct ConsoleView: View {
     /// The sidebar selection as a projection of the router's path. Setting
     /// it (a row tap, or the collapsed stack popping) writes the path back,
     /// so user navigation and deep links keep one source of truth.
-    /// The grouped container's card: the SAME card the flat rows render,
-    /// WITHOUT the NavigationLink — a Button's label cannot contain a
-    /// NavigationLink (the link swallows the tap and resolves to nothing
-    /// outside the List's selection machinery, the device bug).
-    private func groupedCard(
-        _ agent: ConsoleAgent,
-        mergedTabLabel: String? = nil
-    ) -> some View {
-        let layout = console.rowLayout(for: agent.hostID)
-        let prefix = AgentRowRenderer.unrenderedTabLabel(
-            mergedTabLabel, layout: layout, agent: agent)
-            .map { "\($0) — " } ?? ""
-        return AgentCardView(
-            agent: agent,
-            layout: layout,
-            isPinned: console.pins.isPinned(
-                hostID: agent.hostID, paneID: agent.agent.paneID),
-            headlinePrefix: prefix)
-    }
-
-    /// The grouped row's spoken/tappable identity: the card's own texts
-    /// are combined away by the row wrapper, so expose them explicitly.
-    private func groupedCardLabel(_ agent: ConsoleAgent) -> String {
-        let title = AgentCardRowTitle.title(for: agent)
-        let kind = AgentKindBadgeModel(agent: agent).accessibilityLabel
-        return "\(title), \(kind), status \(agent.agent.status.searchLabel)"
+    private var selectedAgent: Binding<ConsoleAgent.ID?> {
+        Binding(
+            get: { notificationRouter.path.last },
+            set: { notificationRouter.path = $0.map { [$0] } ?? [] })
     }
 
     /// The grouped ScrollView rows' tap action: the SAME router-path write
@@ -349,15 +327,9 @@ struct ConsoleView: View {
         }
         notificationRouter.path = [id]
     }
-
-    private var selectedAgent: Binding<ConsoleAgent.ID?> {
-        Binding(
-            get: { notificationRouter.path.last },
-            set: { notificationRouter.path = $0.map { [$0] } ?? [] })
-    }
-
     /// The split view owns the window's status-bar appearance on iPhone. A
     /// pushed terminal cannot reliably override it from the detail subtree.
+
     private var terminalStatusBarColorScheme: ColorScheme? {
         guard let id = notificationRouter.path.last else { return nil }
         let showsTerminalSurface = console.agents.contains(where: { $0.id == id })
@@ -749,27 +721,19 @@ struct ConsoleView: View {
         }
     }
 
-
-    /// `mergedTabLabel` carries the tab group label a tree row folded
-    /// into this Agent's row. The prefix renders only when the card's
-    /// configured layout does not already show the tab (herdr's default
-    /// Row 1 does), so the label never repeats.
+    /// One agent row of the list surfaces (flat List and grouped
+    /// ScrollView): the v2 two-line card — tab label on line 1, agent
+    /// title as the secondary subtitle on line 2. The workspace group
+    /// header above carries `host · session · workspace`.
     private func agentRow(
         _ agent: ConsoleAgent,
-        mergedTabLabel: String? = nil,
         leadingIndent: CGFloat = 0
     ) -> some View {
-        let layout = console.rowLayout(for: agent.hostID)
-        let prefix = AgentRowRenderer.unrenderedTabLabel(
-            mergedTabLabel, layout: layout, agent: agent)
-            .map { "\($0) — " } ?? ""
-        return NavigationLink(value: agent.id) {
+        NavigationLink(value: agent.id) {
             AgentCardView(
                 agent: agent,
-                layout: layout,
                 isPinned: console.pins.isPinned(
-                    hostID: agent.hostID, paneID: agent.agent.paneID),
-                headlinePrefix: prefix)
+                    hostID: agent.hostID, paneID: agent.agent.paneID))
             // Indentation rides INSIDE the link label: padding on the
             // NavigationLink itself is dropped by List row layout.
             .padding(.leading, leadingIndent)
@@ -840,8 +804,6 @@ struct ConsoleView: View {
     private var visibleHostIssues: [ConsoleHostStatusPresentation] {
         hostIssues
     }
-
-
 
     private struct HostSheet: Identifiable, Equatable {
         let id = UUID()
