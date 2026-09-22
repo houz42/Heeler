@@ -59,13 +59,19 @@ struct HostOnboardingView: View {
                     value: store.host.authMethod == .deviceKey ? "Device Key" : "Password")
             }
 
-            // Every way this Host can be reached — one line per address:
-            // status icon, the address, and an inline Use control on the
-            // reachable rows while a pick is pending. No separate pick
-            // card: picking happens on the rows themselves.
+            // Every way this Host can be reached — one TAPPABLE row per
+            // route (user directive: tap a route to use it). Tapping
+            // makes that route the Host's active route — the path the
+            // next dial leads with, persisted per Host. A live session
+            // keeps its dialed route marked (bolt); the active route
+            // carries the checkmark. No separate pick card: switching
+            // happens on the rows themselves.
             Section {
+                if store.host.usesJumpHost {
+                    jumpHopRow
+                }
                 ForEach(store.orderedCandidates, id: \.self) { address in
-                    candidateRow(address)
+                    routeRow(address)
                 }
                 if store.pendingAddressChoice != nil {
                     Text(
@@ -75,9 +81,9 @@ struct HostOnboardingView: View {
                         .foregroundStyle(.secondary)
                 }
             } header: {
-                Text("Addresses")
+                Text("Routes")
             } footer: {
-                Text(addressSectionFooter)
+                Text(routeSectionFooter)
             }
 
             if retryConnection != nil {
@@ -242,64 +248,138 @@ struct HostOnboardingView: View {
         return "default"
     }
 
-    /// One line per address: status icon, the address (with an inline,
-    /// subtle Preferred mark), and a Use button on every reachable row
-    /// that is not the live connection — picking is not a one-shot state,
-    /// the user can switch paths anytime a probe proved them reachable.
-    /// The connected row shows the bolt instead; unreachable rows show no
-    /// control (using them cannot succeed until they answer again).
-    private func candidateRow(_ address: String) -> some View {
+    /// One TAPPABLE row per route (user directive): the route's name
+    /// (`routeLabels`, address as fallback), its exact address:port, a
+    /// probe state icon, and the ACTIVE mark — a checkmark on the route
+    /// the next dial leads with, a bolt on the route a live session is
+    /// dialed through right now. Tapping ANY row makes it the active
+    /// route, any time — instant, reversible, no confirmation; the
+    /// switch takes effect on the next connect (a live session is never
+    /// torn down by a tap). Reuses the card rows' quiet-dot + green
+    /// accent language.
+    private func routeRow(_ address: String) -> some View {
         let state = store.candidateStates[address] ?? .unknown
-        let isPreferred = store.orderedCandidates.first == address
+        let isActive = store.preferredRoute == address
         let isInUse = connectedAddress == address
-        let isReachable =
-            state == .reachable
-            || store.pendingAddressChoice?.contains(address) ?? false
-        let pickable = isReachable && !isInUse
-        return HStack(spacing: 10) {
-            if isInUse {
-                Image(systemName: "bolt.fill")
-                    .foregroundStyle(Color.accentColor)
-            } else {
-                switch state {
-                case .unknown:
-                    Image(systemName: "questionmark.circle")
+        let routeName = store.host.routeName(for: address)
+        return Button {
+            tapRoute(address)
+        } label: {
+            HStack(spacing: 10) {
+                // The leading icon: probe state while unknown/checking,
+                // the in-use bolt on the live route, else the state glyph.
+                if isInUse {
+                    Image(systemName: "bolt.fill")
+                        .foregroundStyle(Color.accentColor)
+                        .accessibilityHidden(true)
+                } else {
+                    switch state {
+                    case .unknown:
+                        Image(systemName: "circle.dashed")
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                    case .probing:
+                        ProgressView()
+                            .controlSize(.small)
+                    case .reachable:
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .accessibilityHidden(true)
+                    case .unreachable:
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.red)
+                            .accessibilityHidden(true)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(routeName)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.primary)
+                    Text("\(address):\(String(store.host.port))")
+                        .font(.caption)
+                        .monospaced()
                         .foregroundStyle(.secondary)
-                case .probing:
-                    ProgressView()
-                        .controlSize(.small)
-                case .reachable:
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                case .unreachable:
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.red)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer()
+                if isActive {
+                    Image(systemName: "checkmark")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
                 }
             }
-            Text(address)
-            if isPreferred, !isInUse {
-                Text("Preferred")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            if pickable {
-                Button("Use") {
-                    Task { await store.chooseAddress(address) }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(
+            "Route \(routeName), \(address):\(String(store.host.port)), "
+                + (isInUse
+                    ? (isActive
+                        ? "currently in use and the active route"
+                        : "currently in use")
+                    : (isActive
+                        ? "active route"
+                        : "alternate route"))
+                + ". Double tap to switch to this route.")
+        .accessibilityHint(
+            "Sets this route as the dial path for the next connection to "
+                + store.host.displayAliasName)
+        .accessibilityIdentifier("host-detail-route-\(address)")
+    }
+
+    /// One route-row tap, two honest meanings: with a pick pending
+    /// (several paths just answered), the tap IS the pick — persist AND
+    /// connect now through it, like `Use` always did. Otherwise the tap
+    /// switches the active route for the NEXT connect — instant,
+    /// reversible, and never tears down a live session.
+    private func tapRoute(_ address: String) {
+        if store.pendingAddressChoice?.contains(address) == true {
+            Task { await store.chooseAddress(address) }
+        } else {
+            store.setActiveRoute(address)
         }
     }
 
-    private var addressSectionFooter: String {
+    /// The jump hop all routes share, when the Host is reached through a
+    /// Jump Host: informational (the hop is a Host-level setting, edited
+    /// on the form — no per-route meaning), shown as a quiet non-tappable
+    /// row so the route list stays the honest picture of the dial path:
+    /// jump → route address.
+    private var jumpHopRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.triangle.branch")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("via Jump Host")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
+                Text(
+                    "\(store.host.jumpAddress):\(String(store.host.jumpPort)) · "
+                        + store.host.resolvedJumpUsername)
+                    .font(.caption)
+                    .monospaced()
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "All routes dial through jump host \(store.host.jumpAddress):"
+                + String(store.host.jumpPort))
+    }
+
+    private var routeSectionFooter: String {
         if store.pendingAddressChoice != nil {
             return "Several paths answered — pick the one to connect through."
         }
         if store.host.candidateAddresses.count > 1 {
-            return "Addresses are dialed in order until one answers. "
-                + "A pick made here becomes the preferred path."
+            return "Tap a route to make it the one the next connection "
+                + "dials. A live connection keeps using its current route "
+                + "until it reconnects."
         }
         return ""
     }

@@ -8,6 +8,13 @@ Entries reference the issue that motivated them.
 ## [Unreleased]
 
 ### Added
+- Host detail: every connection route is a tappable row. Tapping a route
+  makes it the Host's active route — the path the next connection dials
+  first — persisted per Host and marked with a green checkmark (a live
+  session keeps its bolt on the route it dialed; the switch applies on
+  the next connect, never tearing down a working connection). A Host
+  reached through a Jump Host shows the shared jump hop above its
+  routes.
 - `<system-notice>` and `<irc>` blocks in an agent transcript (harness
   notices and peer messages) render as collapsed summary chips —
   a label plus a one-line excerpt — instead of raw block text. They

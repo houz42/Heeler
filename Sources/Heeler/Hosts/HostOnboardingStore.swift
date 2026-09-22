@@ -49,9 +49,13 @@ final class HostOnboardingStore {
     private(set) var pendingHostKeyReplacement: HostKeyReplacement?
     private(set) var report: PreflightReport?
     private(set) var serverInfo: ServerInfo?
-    /// Which candidate address the preflight connection succeeded on. nil
-    /// until a connect succeeds; single-address Hosts report their one
-    /// address.
+    /// Which candidate address the NEXT dial leads with: the persisted
+    /// preferred path, falling back to the configured default. Published
+    /// so the detail's route rows re-render the active mark the moment a
+    /// tap lands. The live session's dialed route is a different fact —
+    /// see the view's `connectedAddress`.
+    private(set) var preferredRoute: String
+
     private(set) var workingAddress: CandidateDialResult?
     private(set) var availableSessions: [HerdrSession] = []
     private(set) var sessionDiscoveryError: String?
@@ -92,12 +96,31 @@ final class HostOnboardingStore {
         self.credentials = credentials
         self.preferredAddresses = preferredAddresses
         self.fingerprintTimeout = fingerprintTimeout
+        // The persisted pick, if any, is already on disk; read it once so
+        // the detail renders the active mark without a probe first.
+        self.preferredRoute =
+            preferredAddresses.preferredOrder(for: host.candidateAddresses).first
+            ?? host.address
     }
 
     /// The addresses to render and probe: the Host's candidates in the
     /// preferred dial order (a stored pick moves its address first).
     var orderedCandidates: [String] {
         preferredAddresses.preferredOrder(for: host.candidateAddresses)
+    }
+
+    /// TAP = SWITCH, on any candidate, any time: persists `address` as the
+    /// Host's active route — the path the NEXT dial leads with (the same
+    /// `PreferredAddressStore` order the real dial consumes via
+    /// `SSHTransportSettings.init(host:)`). Deliberately does NOT tear
+    /// down a live session: a route switch while connected takes effect on
+    /// the next connect (Reconnect, or the session's own redial), so a
+    /// working connection is never dropped on a tap. Reversible by
+    /// tapping another route; a no-op on the already-active route.
+    func setActiveRoute(_ address: String) {
+        guard host.candidateAddresses.contains(address) else { return }
+        preferredAddresses.prefer(address, candidates: host.candidateAddresses)
+        preferredRoute = address
     }
 
     /// Runs the preflight once: probe when the Host has several candidates
