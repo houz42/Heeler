@@ -164,6 +164,14 @@ struct AppDestinationDrawer: View {
     /// button's Escape shortcut — an offscreen drawer must never
     /// intercept hardware Escape meant for the pages.
     let isOpen: Bool
+    /// The UNIFIED lifecycle predicate (review re-round): the root's
+    /// `drawerIsPresented` — resting open, finger-tracked, MID-SETTLE,
+    /// or any live reveal — the SAME value that drives the mount and
+    /// the pages' exclusion. The drawer's modal containment, escape
+    /// action, and focus binding (DrawerAccessibilityChrome) track
+    /// THIS, so the AX chrome never detaches while the drawer is
+    /// still mounted (settling included).
+    let isPresented: Bool
     /// Assistive focus (v1 semantics): the AccessibilityFocusState
     /// binding — part of the drawer's AX chrome, mounted with it.
     var isFocused: AccessibilityFocusState<Bool>.Binding?
@@ -271,7 +279,7 @@ struct AppDestinationDrawer: View {
         // close) — mounting is the one mechanism that actually
         // removes a view from the tree.
         .modifier(DrawerAccessibilityChrome(
-            isPresented: isOpen || reveal > 0,
+            isPresented: isPresented,
             close: close,
             isFocused: isFocused))
     }

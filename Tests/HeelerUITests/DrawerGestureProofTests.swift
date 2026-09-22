@@ -327,9 +327,12 @@ final class DrawerGestureProofTests: XCTestCase {
         XCTAssertTrue(
             trigger.waitForExistence(timeout: UITestTimeouts.launch))
 
-        // Reveal target ≈ 80 pt (0.20 normalized on a 402 pt phone) —
-        // deliberately BELOW the 92 pt settle point so the release after
-        // the hold snaps the drawer back closed.
+        // Reveal target ≈ 60 pt (0.15 normalized on a 402 pt phone) —
+        // below the 92 pt settle point WITH MARGIN: the synthesized
+        // release can still carry the .slow drag's 250 px/s, which
+        // projects +30 pt at the settle horizon; 60 + 30 = 90 stays
+        // under the settle, so the release deterministically snaps
+        // the drawer back closed.
         let box = CaptureBox()
         // The hold runs 2.0 s; capture at ~1.2 s in — mid-hold, finger
         // down, drawer parked at the partial reveal.
@@ -338,7 +341,7 @@ final class DrawerGestureProofTests: XCTestCase {
             .press(
                 forDuration: 0.1,
                 thenDragTo: app.coordinate(
-                    withNormalizedOffset: CGVector(dx: 0.20, dy: 0.5)),
+                    withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5)),
                 withVelocity: .slow,
                 thenHoldForDuration: 2.0)
 

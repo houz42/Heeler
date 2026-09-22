@@ -342,6 +342,7 @@ struct AppRootView: View {
                     },
                     reveal: $drawerReveal,
                     isOpen: isDrawerOpen,
+                    isPresented: drawerIsPresented,
                     isFocused: $isDrawerAXFocused,
                     onTracking: { tracking in
                         isTrackingDrawer = tracking
