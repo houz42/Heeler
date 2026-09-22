@@ -16,6 +16,15 @@ struct HostOnboardingView: View {
     /// The address the live Console session is dialed through right now,
     /// nil while disconnected. Supplied by the Console's single-source map.
     let connectedAddress: String?
+    /// The Host's active route as the Console derives it (the same
+    /// PreferredAddressStore the list card renders). nil keeps the
+    /// store's own view (previews, lists without a Console). When the
+    /// LIST switches the route out-of-band, this input changes and the
+    /// open detail reconciles — both pages read one source of truth.
+    let activeRouteInput: String?
+    /// The unified route-switch action (persist + redial), shared with
+    /// the Hosts list's rows — see the init doc for the contract.
+    let switchRoute: (@MainActor @Sendable (String) async -> Void)?
     @State private var store: HostOnboardingStore
     @State private var isEditing = false
     @State private var isConfirmingHostKeyReplacement = false
@@ -33,6 +42,20 @@ struct HostOnboardingView: View {
         /// map (`ConsoleStore.hostConnectedAddresses`) supplies it: at most
         /// one candidate can ever carry the in-use mark.
         connectedAddress: String? = nil,
+        /// The Console-derived active route (single source of truth with
+        /// the Hosts list); nil keeps the store's own read.
+        activeRouteInput: String? = nil,
+        /// The process-wide observable active-route store: the detail's
+        /// taps broadcast through it so the Hosts list's marks re-render.
+        activeRouteStore: HostActiveRouteStore? = nil,
+        /// The SAME route-switch action the Hosts list's rows run
+        /// (persist through the shared store + redial via the Console).
+        /// A route tap on this page runs exactly that, so both entry
+        /// points (root Hosts page, Console Hosts sheet) and both
+        /// surfaces behave identically. nil keeps the page's own
+        /// fallback (store persist + `retryConnection`, or persist-only
+        /// where no Console exists: previews, demo compositions).
+        switchRoute: (@MainActor @Sendable (String) async -> Void)? = nil,
         /// Pre-built store override for demo screenshots; nil builds the
         /// production store keyed to this Host.
         store: HostOnboardingStore? = nil
@@ -43,10 +66,13 @@ struct HostOnboardingView: View {
         self.isManualReconnectInFlight = isManualReconnectInFlight
         self.retryConnection = retryConnection
         self.connectedAddress = connectedAddress
+        self.activeRouteInput = activeRouteInput
+        self.switchRoute = switchRoute
         _store = State(
             initialValue: store ?? HostOnboardingStore(
                 host: host,
-                preferredAddresses: PreferredAddressStore(hostID: host.id)))
+                preferredAddresses: PreferredAddressStore(hostID: host.id),
+                activeRouteBroadcaster: activeRouteStore))
     }
 
     var body: some View {
@@ -219,6 +245,18 @@ struct HostOnboardingView: View {
                 await store.runChecks()
             }
         }
+        .onChange(of: activeRouteInput) { _, _ in
+            // The list (or any other surface) switched this Host's
+            // active route out-of-band; re-read the shared store so this
+            // page's checkmark agrees with the list's mark.
+            store.syncPreferredRoute()
+        }
+        .onChange(of: connectionStatus) { _, _ in
+            // A status tick from the Console can accompany an
+            // out-of-band route switch (the list's tap reconnects); the
+            // persisted pick is cheap to re-read, so reconcile here too.
+            store.syncPreferredRoute()
+        }
     }
 
     /// Presentation tracks the pending candidate; dismissal is decided by
@@ -328,16 +366,28 @@ struct HostOnboardingView: View {
         .accessibilityIdentifier("host-detail-route-\(address)")
     }
 
-    /// One route-row tap, two honest meanings: with a pick pending
-    /// (several paths just answered), the tap IS the pick — persist AND
-    /// connect now through it, like `Use` always did. Otherwise the tap
-    /// switches the active route for the NEXT connect — instant,
-    /// reversible, and never tears down a live session.
+    /// ONE route-row tap, the SAME action the Hosts list's rows run
+    /// (review round 2: every entry point must behave identically —
+    /// persist through the shared store, then redial via the Console).
+    /// When the presenting list supplies `switchRoute` (both production
+    /// entry points do), the tap runs exactly that closure — the very
+    /// same code a list-card tap executes. With a pick pending (several
+    /// paths just answered), the tap IS the pick and the onboarding
+    /// connect plays that role. Without either (previews, demo), the
+    /// fallback persists and redials through this page's own
+    /// retryConnection, or persists only where no Console exists.
     private func tapRoute(_ address: String) {
         if store.pendingAddressChoice?.contains(address) == true {
             Task { await store.chooseAddress(address) }
+        } else if let switchRoute {
+            Task { @MainActor in
+                await switchRoute(address)
+            }
         } else {
             store.setActiveRoute(address)
+            Task { @MainActor in
+                await retryConnection?()
+            }
         }
     }
 
@@ -372,23 +422,22 @@ struct HostOnboardingView: View {
                 + String(store.host.jumpPort))
     }
 
-    private var routeSectionFooter: String {
-        if store.pendingAddressChoice != nil {
-            return "Several paths answered — pick the one to connect through."
-        }
-        if store.host.candidateAddresses.count > 1 {
-            return "Tap a route to make it the one the next connection "
-                + "dials. A live connection keeps using its current route "
-                + "until it reconnects."
-        }
-        return ""
-    }
-
     private func retry() {
         guard !isManualReconnectInFlight, let retryConnection else { return }
         Task { @MainActor in
             await retryConnection()
         }
+    }
+
+    private var routeSectionFooter: String {
+        if store.pendingAddressChoice != nil {
+            return "Several paths answered — pick the one to connect through."
+        }
+        if store.host.candidateAddresses.count > 1 {
+            return "Tap a route to switch to it — the connection redials "
+                + "through it now."
+        }
+        return ""
     }
 
     private var connectionPresentation: HostOnboardingConnectionPresentation {

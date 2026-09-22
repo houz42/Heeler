@@ -15,6 +15,14 @@ Entries reference the issue that motivated them.
   the next connect, never tearing down a working connection). A Host
   reached through a Jump Host shows the shared jump hop above its
   routes.
+- One source of truth for route state: the Hosts list, the Hosts sheet,
+  and the Host detail all read a shared observable active-route store
+  (backed by the same persisted preference the dialer consumes), so the
+  list's marks and the detail's checkmark can never disagree. A route
+  tap on the LIST now also reconnects through the Console's own
+  lifecycle: the tapped row shows a connecting spinner while the dial
+  runs, and a failed dial lands on the honest Unavailable status dot —
+  never the stale prior state.
 - `<system-notice>` and `<irc>` blocks in an agent transcript (harness
   notices and peer messages) render as collapsed summary chips —
   a label plus a one-line excerpt — instead of raw block text. They

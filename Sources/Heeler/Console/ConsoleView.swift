@@ -6,6 +6,11 @@ import SwiftUI
 struct ConsoleView: View {
     let hosts: HostStore
     let console: ConsoleStore
+    /// The ONE observable active-route store shared with the Hosts page
+    /// and Host detail: the Hosts sheet's route rows read it so a route
+    /// switched anywhere re-renders every mark. The Console itself owns
+    /// only the connect lifecycle.
+    var activeRouteStore: HostActiveRouteStore? = nil
     let terminal: TerminalSettings
     let inputMode: AgentInputModeSettings
     let appearance: AppAppearanceSettings
@@ -124,8 +129,22 @@ struct ConsoleView: View {
                 standingFailures: console.hostStandingFailures,
                 latencies: console.hostLatencies,
                 connectedAddresses: console.hostConnectedAddresses,
+                activeRouteStore: activeRouteStore,
                 manualReconnectInFlightHostIDs: manualReconnectInFlightHostIDs,
                 retryConnection: { await reconnectHost($0) },
+                switchRoute: { hostID, address in
+                    // Same unified action as the Hosts page: persist
+                    // through the shared observable store, then drive
+                    // the Console's own connect lifecycle — status,
+                    // animation, and failure all surface through the
+                    // single-source map.
+                    let candidates =
+                        hosts.hosts.first(where: { $0.id == hostID })?
+                        .candidateAddresses ?? []
+                    activeRouteStore?.setActiveRoute(
+                        address, hostID: hostID, candidates: candidates)
+                    await console.retryHost(hostID)
+                },
                 // One discovery store per sheet presentation, probing over
                 // the Console's live connections.
                 discovery: SessionDiscoveryStore(

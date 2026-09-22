@@ -32,6 +32,11 @@
             /// The Hosts list page: host cards with named routes (the
             /// card-tap and route-inspector demo route).
             case hostList
+            /// The Hosts list page wired to the REAL demo Console: live
+            /// connection statuses, the shared active-route store, and a
+            /// route tap that persists + reconnects — the unified
+            /// state-sync and route-switch-lifecycle proof surface.
+            case hostListConsole
             /// The Host detail page with its candidate list mid-probe.
             case hostDetailProbing
             /// The Host detail page stopped on the pick between two
@@ -51,6 +56,7 @@
             static func fromArguments() -> Route {
                 let arguments = ProcessInfo.processInfo.arguments
                 if arguments.contains(chatSpecialSectionsLaunchArgument) { return .chatSpecialSections }
+                if arguments.contains(hostListConsoleLaunchArgument) { return .hostListConsole }
                 if arguments.contains(chatPendingAskLaunchArgument) { return .chatPendingAsk }
                 if arguments.contains(hostListLaunchArgument) { return .hostList }
                 if arguments.contains(hostDetailProbingLaunchArgument) { return .hostDetailProbing }
@@ -61,6 +67,7 @@
 
         static let hostFormLaunchArgument = "--demo-host-form"
         static let hostListLaunchArgument = "--demo-host-list"
+        static let hostListConsoleLaunchArgument = "--demo-host-list-console"
         static let hostDetailProbingLaunchArgument = "--demo-host-detail-probing"
         static let chatPendingAskLaunchArgument = "--demo-chat-pending-ask"
         static let chatSpecialSectionsLaunchArgument = "--demo-chat-special-sections"
@@ -93,6 +100,11 @@
         @State private var appearance: AppAppearanceSettings
         @State private var inputMode: AgentInputModeSettings
         @State private var pushRegistration: PushRegistrationStore
+        /// The demo's active-route store: the same observable instance
+        /// the list and (navigated) detail share, so marks cannot
+        /// disagree in captures. Standard defaults — persistence across
+        /// relaunch is part of what the proofs show.
+        @State private var activeRoutes = HostActiveRouteStore()
         @State private var notificationPreferences: NotificationPreferencesStore
         @State private var relaySettings: NotificationRelaySettings
         @State private var notificationRouter: AgentNotificationRouter
@@ -152,6 +164,8 @@
                                 "studio.demo.invalid",
                         ])
                 }
+            case .hostListConsole:
+                hostListConsoleSurface
             case .hostDetailProbing:
                 multipathDetail(midProbe: true)
             case .hostDetailPick:
@@ -160,6 +174,44 @@
                 chatPendingAskSurface
             case .chatSpecialSections:
                 chatSpecialSectionsSurface
+            }
+        }
+
+        /// The Hosts list wired to the REAL demo Console (the unified
+        /// route-state proof surface): live statuses/failures/latencies
+        /// from `console`, the shared observable active-route store, and
+        /// a route tap that persists through the store then reconnects
+        /// through the Console — so the list's marks, the connecting
+        /// animation, and the failed dot are all the production
+        /// lifecycle. Studio Mac + Build Server connect (profiles);
+        /// Offline Server and Field Laptop fail (no profile), giving a
+        /// deterministic tap → connecting → failed dot lifecycle.
+        private var hostListConsoleSurface: some View {
+            NavigationStack {
+                HostListView(
+                    store: hosts,
+                    connectionStatuses: console.hostStatuses,
+                    standingFailures: console.hostStandingFailures,
+                    latencies: console.hostLatencies,
+                    connectedAddresses: console.hostConnectedAddresses,
+                    activeRouteStore: activeRoutes,
+                    manualReconnectInFlightHostIDs: [],
+                    retryConnection: { _ in },
+                    switchRoute: { hostID, address in
+                        let candidates =
+                            hosts.hosts.first(where: { $0.id == hostID })?
+                            .candidateAddresses ?? []
+                        activeRoutes.setActiveRoute(
+                            address, hostID: hostID, candidates: candidates)
+                        await console.retryHost(hostID)
+                    })
+            }
+            .task {
+                console.setHosts(hosts.hosts)
+                await console.resume()
+            }
+            .onDisappear {
+                console.setHosts([])
             }
         }
 
@@ -468,7 +520,28 @@
                 address: "offline.demo.invalid",
                 username: "developer",
                 sessionName: "main"),
+            // A multi-route machine with no demo profile: every dial
+            // fails, so a route-switch tap shows the full lifecycle —
+            // connecting animation, then the honest failed dot — through
+            // the real Console pipeline (the route-switch proofs).
+            Host(
+                id: fieldHostID,
+                name: "Field Laptop",
+                address: "field.lan.demo.invalid",
+                username: "field",
+                sessionName: "main",
+                additionalAddresses: ["field.vpn.demo.invalid"],
+                routeLabels: [
+                    "field.lan.demo.invalid": "Home LAN",
+                    "field.vpn.demo.invalid": "VPN tunnel",
+                ]),
         ]
+
+        static let fieldHostID = UUID(
+            uuid: (
+                0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44,
+                0x84, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44
+            ))
 
         static let offlineHostID = UUID(
             uuid: (
@@ -650,6 +723,12 @@
                     subscriptions: subscriptions,
                     connect: {
                         guard let profile = profiles[host.id] else {
+                            // A short, deterministic dial window so the
+                            // route-switch proof can capture the
+                            // connecting state before the honest failure
+                            // lands (a real unreachable dial takes
+                            // seconds; the fixture bounds it).
+                            try? await Task.sleep(for: .milliseconds(6_000))
                             throw TransportError.sshUnreachable(
                                 detail: "No demo profile for Host.")
                         }
