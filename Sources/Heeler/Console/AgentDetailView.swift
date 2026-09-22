@@ -428,11 +428,26 @@ struct AgentDetailView: View {
                     try await store.send(text, images: images)
                 },
                 retrySend: { echoID in
-                    // Re-review finding 1: retry by the ECHO UUID —
-                    // the failed row's messageID (the projection
-                    // derives it from "echo:"+echo.id).
+                    // Re-review round 3, findings 1+3: the row's
+                    // messageID IS the original echo UUID. The STORE
+                    // routes by the echo's own state: .failed → the
+                    // duplicate-safe retry (same key); .ambiguous →
+                    // the explicit may-duplicate resend (fresh key,
+                    // user decision).
                     guard let store = brokerChat else { return }
-                    try await store.retry(echoID: echoID)
+                    if let echo = store.outgoing.first(where: {
+                        $0.id == echoID
+                    }) {
+                        switch echo.state {
+                        case .failed:
+                            try await store.retry(echoID: echoID)
+                        case .ambiguous:
+                            try await store
+                                .resendAcknowledgingPossibleDuplicate(echoID: echoID)
+                        case .sending, .sent:
+                            break
+                        }
+                    }
                 },
                 pendingUnsupported: !store.askSupported,
                 authorLabel: "Heeler · \(agent.agent.kind.lowercased())",
@@ -562,21 +577,37 @@ struct AgentDetailView: View {
                     mimeType: image.mimeType,
                     byteLength: image.byteLength)))
             }
-            if let message = echo.failureMessage,
-                echo.state == .failed || echo.state == .ambiguous
-            {
-                // Failed: retry keeps the same key (broker dedups).
-                // Ambiguous (re-review finding 2): the wire died
-                // mid-flight — the honest uncertain copy; a retry
-                // mints a fresh key in the store, so the tap stays
-                // safe.
-                blocks.append(.notice(
-                    text: "\(message) Tap to retry.",
-                    level: "error"))
+            switch echo.state {
+            case .failed:
+                // The broker answered NO: a replay is duplicate-SAFE
+                // (same key within the registration — the broker
+                // dedups).
+                if let message = echo.failureMessage {
+                    blocks.append(.notice(
+                        text: "\(message) Tap to retry.",
+                        level: "error"))
+                }
+            case .ambiguous:
+                // Re-review round 3, finding 3: acceptance UNKNOWN —
+                // the re-send MAY DUPLICATE. The explicit-decision
+                // copy; the tap routes to the resend seam, never a
+                // "safe retry" claim.
+                if let message = echo.failureMessage {
+                    blocks.append(.notice(
+                        text: "\(message) Send again — may duplicate.",
+                        level: "error"))
+                }
+            case .sending, .sent:
+                break
             }
+            // Re-review round 3, finding 1: the message id IS the
+            // ORIGINAL outgoing UUID — no derivation (a derived id
+            // broke the retry lookup: stableID("echo:"+id) ≠ id).
+            // The echo id is already a unique UUID; using it directly
+            // makes the retry row's messageID exactly store.echo.id.
             content.messages.append(
                 ChatMessage(
-                    id: AgentChatMapper.stableID(for: "echo:\(echo.id.uuidString)"),
+                    id: echo.id,
                     role: .user, blocks: blocks, timestamp: echo.sentAt))
         }
         // Provisional stream tails AFTER the echoes: the reply follows

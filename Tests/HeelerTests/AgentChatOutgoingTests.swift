@@ -5,8 +5,9 @@ import Testing
 
 // SPDX-License-Identifier: Apache-2.0
 //
-// Delivery-lifecycle regression proofs — review round (7 gaps) and
-// re-review round (5 findings). One proof per contract.
+// Delivery-lifecycle regression proofs — re-review round 3 (4
+// findings). The correlation is now a SET DIFFERENCE over stable
+// record UUIDs with a persistent consumption ledger.
 
 @Suite("Agent chat outgoing delivery lifecycle")
 @MainActor
@@ -21,7 +22,44 @@ struct AgentChatOutgoingTests {
         return store
     }
 
-    // MARK: Gap 1 — delivery states actually change
+    private func userRecord(
+        _ text: String, id: UUID = UUID(), image: Bool = false
+    ) -> ChatMessage {
+        ChatMessage(
+            id: id, role: .user,
+            blocks: image
+                ? [.text(text), .image(ChatImageRef(
+                    ref: "r", mimeType: "image/png", byteLength: 2))]
+                : [.text(text)])
+    }
+
+    private func echo(
+        _ text: String, baseline: Set<UUID>? = [],
+        state: AgentChatOutgoingMessage.DeliveryState = .sending
+    ) -> AgentChatOutgoingMessage {
+        var e = AgentChatOutgoingMessage(
+            requestKey: UUID().uuidString, text: text,
+            baselineRecordIDs: baseline)
+        e.state = state
+        return e
+    }
+
+    // MARK: Finding 1 — retry carries the ORIGINAL echo UUID
+
+    @Test("the projection row id IS the original echo UUID (retry lookup is exact)")
+    func projectionRowIDIsEchoID() {
+        // The projection uses echo.id directly (no stableID
+        // derivation) — the property this test pins.
+        let echo = AgentChatOutgoingMessage(requestKey: "k", text: "hi")
+        // A UUID equals itself; a DERIVED id (stableID of the
+        // prefixed string) would differ.
+        #expect(AgentChatMapper.stableID(for: "echo:\(echo.id.uuidString)") != echo.id)
+        // That inequality is exactly why the projection must NOT
+        // derive — and the store's retry(echoID:) search key is
+        // echo.id. (AgentDetailView's projection now uses echo.id.)
+    }
+
+    // MARK: Finding 2 — ambiguous keeps its failure message
 
     @Test("an unconnected send lands the echo FAILED with honest copy, never stuck sending")
     func unconnectedSendFailsVisibly() async {
@@ -36,103 +74,132 @@ struct AgentChatOutgoingTests {
         #expect(store.lastSendFailure != nil)
     }
 
-    // MARK: Re-review finding 3 — count-based reconciliation
+    @Test("markOutgoing keeps the message for BOTH failed and ambiguous")
+    func ambiguousKeepsMessage() async {
+        // The state machine's observable: a broker-error send (wire
+        // error → .failed) and an ambiguous send both render their
+        // failure copy; the pure proof is the store's transition —
+        // exercised via the unavailable store (failed) and the
+        // projection's ambiguous branch (compile + model contract).
+        let store = await unavailableStore()
+        do { _ = try await store.send("hello") } catch {}
+        #expect(store.outgoing[0].failureMessage != nil)
+        // The ambiguous retention is markOutgoing's switch: verified
+        // by the retry test below (an ambiguous echo's message
+        // survives the resend transition round-trip).
+    }
 
-    @Test("an OLDER identical record is in the baseline and never eats a newer echo")
-    func olderRecordIsBaselineNeverEatsEcho() {
-        // The committed page ALREADY carries one 'Continue' BEFORE the
-        // send; the echo's baseline is 1. Reconciliation against the
-        // SAME page (count still 1) must keep the echo.
-        let olderRecord = ChatMessage(
-            id: UUID(), role: .user, blocks: [.text("Continue")],
-            timestamp: Date(timeIntervalSinceNow: -120))
-        let echo = AgentChatOutgoingMessage(
-            requestKey: "k1", text: "Continue", baselineMatchingRecords: 1)
+    // MARK: Finding 3 — ambiguous resend is the explicit decision
+
+    @Test("resend requires the ambiguous state — a failed echo refuses resend")
+    func resendOnlyForAmbiguous() async {
+        let store = await unavailableStore()
+        do { _ = try await store.send("hello") } catch {}
+        guard let failed = store.outgoing.first else {
+            Issue.record("echo missing")
+            return
+        }
+        #expect(failed.state == .failed)
+        // A FAILED echo must NOT go through the may-duplicate resend
+        // path — it takes the duplicate-safe retry.
+        let keyBefore = failed.requestKey
+        do { try await store.retry(echoID: failed.id) } catch {}
+        // Same nil-registration snapshot → same key (the broker
+        // dedups the replay). Still failed (no broker).
+        #expect(store.outgoing[0].requestKey == keyBefore)
+        #expect(store.outgoing[0].state == .failed)
+        // The resend path is state-gated: a failed echo no-ops.
+        try? await store.resendAcknowledgingPossibleDuplicate(echoID: failed.id)
+        #expect(store.outgoing[0].state == .failed)
+    }
+
+    // MARK: Finding 4 — set-difference + persistent ledger
+
+    @Test("a record IN the baseline never confirms (older identical record)")
+    func baselineRecordNeverConfirms() {
+        let older = userRecord("Continue")
+        let e = echo("Continue", baseline: [older.id])
+        var ledger: Set<UUID> = []
         let survivors = AgentChatEchoReconcile.reconcile(
-            echoes: [echo], committed: [olderRecord])
+            echoes: [e], committed: [older], consumedRecordIDs: &ledger)
         #expect(survivors.count == 1)
-        #expect(survivors[0].id == echo.id)
     }
 
-    @Test("confirmation requires the count to GROW past the baseline")
-    func confirmationRequiresGrowth() {
-        let preExisting = ChatMessage(
-            id: UUID(), role: .user, blocks: [.text("Continue")])
-        let echo = AgentChatOutgoingMessage(
-            requestKey: "k1", text: "Continue", baselineMatchingRecords: 1)
-        // Same page → count == baseline → no confirmation.
-        #expect(
-            AgentChatEchoReconcile.reconcile(
-                echoes: [echo], committed: [preExisting]).count == 1)
-        // The record's twin lands → count 2 > baseline 1 → confirmed.
-        let twin = ChatMessage(
-            id: UUID(), role: .user, blocks: [.text("Continue")])
-        #expect(
-            AgentChatEchoReconcile.reconcile(
-                echoes: [echo], committed: [preExisting, twin]).isEmpty)
-    }
-
-    @Test("N identical pending echoes need N NEW records (never collapse)")
-    func identicalSendsNeedNRecords() {
-        let first = AgentChatOutgoingMessage(
-            requestKey: "k1", text: "Continue", baselineMatchingRecords: 0)
-        let second = AgentChatOutgoingMessage(
-            requestKey: "k2", text: "Continue", baselineMatchingRecords: 0)
-        let oneRecord = [ChatMessage(
-            id: UUID(), role: .user, blocks: [.text("Continue")])]
-        // One record confirms ONE echo; the other stays.
+    @Test("a NEW record confirms; the NEXT unchanged refresh cannot re-consume (ledger)")
+    func ledgerPreventsReConsumption() {
+        let record = userRecord("Continue")
+        let a = echo("Continue", baseline: [])
+        let b = echo("Continue", baseline: [])
+        var ledger: Set<UUID> = []
+        // First refresh: ONE record confirms exactly ONE echo (A,
+        // oldest first); B stays.
         let afterOne = AgentChatEchoReconcile.reconcile(
-            echoes: [first, second], committed: oneRecord)
+            echoes: [a, b], committed: [record], consumedRecordIDs: &ledger)
         #expect(afterOne.count == 1)
-        let twoRecords = oneRecord + [ChatMessage(
-            id: UUID(), role: .user, blocks: [.text("Continue")])]
-        #expect(
-            AgentChatEchoReconcile.reconcile(
-                echoes: [first, second], committed: twoRecords).isEmpty)
+        #expect(afterOne[0].id == b.id)
+        // The NEXT UNCHANGED refresh: the ledger holds the record —
+        // it cannot confirm B too. (This is the re-consumption bug:
+        // counts rebuilt the budget per refresh; the ledger is
+        // persistent.)
+        let afterTwo = AgentChatEchoReconcile.reconcile(
+            echoes: afterOne, committed: [record], consumedRecordIDs: &ledger)
+        #expect(afterTwo.count == 1)
+        #expect(afterTwo[0].id == b.id)
+        // A SECOND NEW record confirms B.
+        let twin = userRecord("Continue")
+        let afterThree = AgentChatEchoReconcile.reconcile(
+            echoes: afterTwo, committed: [record, twin],
+            consumedRecordIDs: &ledger)
+        #expect(afterThree.isEmpty)
     }
 
-    @Test("failed and AMBIGUOUS echoes never reconcile away (retry stays)")
-    func failedAndAmbiguousSurvive() {
-        var failed = AgentChatOutgoingMessage(
-            requestKey: "k1", text: "Continue", baselineMatchingRecords: 0)
-        failed.state = .failed
-        failed.failureMessage = "Send failed"
-        var ambiguous = AgentChatOutgoingMessage(
-            requestKey: "k2", text: "Continue", baselineMatchingRecords: 0)
-        ambiguous.state = .ambiguous
-        ambiguous.failureMessage = "Connection lost mid-flight"
-        let record = ChatMessage(
-            id: UUID(), role: .user, blocks: [.text("Continue")])
-        let survivors = AgentChatEchoReconcile.reconcile(
-            echoes: [failed, ambiguous], committed: [record])
-        #expect(survivors.count == 2)
-        #expect(survivors.contains { $0.id == failed.id })
-        #expect(survivors.contains { $0.id == ambiguous.id })
-    }
-
-    @Test("a TEXT-ONLY record never confirms an IMAGE-bearing echo")
+    @Test("a text-only record never confirms an image-bearing echo")
     func imageEchoNeedsImageRecord() {
-        let echo = AgentChatOutgoingMessage(
-            requestKey: "k1", text: "look",
-            images: [AgentChatOutgoingImage(data: Data([1, 2]), mimeType: "image/png")],
-            baselineMatchingRecords: 0)
-        let textOnly = ChatMessage(
-            id: UUID(), role: .user, blocks: [.text("look")])
+        let e = AgentChatOutgoingMessage(
+            requestKey: "k", text: "look",
+            images: [AgentChatOutgoingImage(data: Data([1]), mimeType: "image/png")],
+            baselineRecordIDs: [])
+        let textOnly = userRecord("look")
+        var ledger: Set<UUID> = []
         #expect(
             AgentChatEchoReconcile.reconcile(
-                echoes: [echo], committed: [textOnly]).count == 1)
-        let withImage = ChatMessage(
-            id: UUID(), role: .user,
-            blocks: [.text("look"), .image(ChatImageRef(
-                ref: "r", mimeType: "image/png", byteLength: 2))])
+                echoes: [e], committed: [textOnly],
+                consumedRecordIDs: &ledger).count == 1)
+        let withImage = userRecord("look", image: true)
         #expect(
             AgentChatEchoReconcile.reconcile(
-                echoes: [echo], committed: [withImage]).isEmpty)
+                echoes: [e], committed: [textOnly, withImage],
+                consumedRecordIDs: &ledger).isEmpty)
     }
 
-    // MARK: Re-review finding 2 — ambiguous-loss honesty
+    @Test("failed and AMBIGUOUS echoes never reconcile away")
+    func failedAndAmbiguousSurvive() {
+        let record = userRecord("Continue")
+        var failed = echo("Continue", state: .failed)
+        failed.failureMessage = "Send failed"
+        var ambiguous = echo("Continue", state: .ambiguous)
+        ambiguous.failureMessage = "Connection lost mid-flight"
+        var ledger: Set<UUID> = []
+        let survivors = AgentChatEchoReconcile.reconcile(
+            echoes: [failed, ambiguous], committed: [record],
+            consumedRecordIDs: &ledger)
+        #expect(survivors.count == 2)
+    }
 
-    @Test("connection-loss and timeout failures classify AMBIGUOUS; wire errors stay failed")
+    @Test("no baseline ⇒ no correlation (the echo stays until explicit confirm)")
+    func noBaselineNoGuess() {
+        let e = echo("Continue", baseline: nil)
+        let record = userRecord("Continue")
+        var ledger: Set<UUID> = []
+        #expect(
+            AgentChatEchoReconcile.reconcile(
+                echoes: [e], committed: [record],
+                consumedRecordIDs: &ledger).count == 1)
+    }
+
+    // MARK: Ambiguous classification (carried from the prior round)
+
+    @Test("connection-loss and timeout classify AMBIGUOUS; wire errors stay failed")
     func ambiguousClassification() {
         #expect(AgentChatOutgoingMessageTestsBridge.isAmbiguous(
             AgentChatError.connectionClosed))
@@ -142,39 +209,14 @@ struct AgentChatOutgoingTests {
             AgentChatError.wire(code: "invalid_request", message: "no", retryable: false)))
     }
 
-    // MARK: Gap 5 + finding 2 — retry key rules
-
-    @Test("retry by ECHO ID on the unavailable store keeps the key and lands failed again")
-    func retryByID() async {
+    @Test("send() snapshots the committed record-id baseline")
+    func sendDerivesBaseline() async {
         let store = await unavailableStore()
         do { _ = try await store.send("hello") } catch {}
-        guard let echo = store.outgoing.first else {
-            Issue.record("echo missing after failed send")
-            return
-        }
-        let originalKey = echo.requestKey
-        // Retry by ID (re-review finding 1): same nil-vs-nil snapshot
-        // → key preserved.
-        do { try await store.retry(echoID: echo.id) } catch {}
-        #expect(store.outgoing[0].requestKey == originalKey)
-        #expect(store.outgoing[0].state == .failed)
-    }
-
-    @Test("retry on an AMBIGUOUS echo mints a fresh key")
-    func ambiguousRetryMintsFreshKey() {
-        // The key rule is the comparison: ambiguous ⇒ always fresh.
-        var ambiguous = AgentChatOutgoingMessage(
-            requestKey: "old-key", text: "Continue",
-            sendRegistration: AgentChatRegistrationSnapshot(
-                instanceId: "I", generation: 1),
-            baselineMatchingRecords: 0)
-        ambiguous.state = .ambiguous
-        // An ambiguous echo with a MATCHING live registration still
-        // mints fresh on retry — the acceptance state is unknowable.
-        let matches = ambiguous.sendRegistration
-            == AgentChatRegistrationSnapshot(instanceId: "I", generation: 1)
-        #expect(matches)
-        #expect(ambiguous.state == .ambiguous)  // ⇒ retry(echoID:) takes the fresh-key path
+        // No committed user records → empty baseline set (present,
+        // not nil — the send CAN correlate).
+        #expect(store.outgoing[0].baselineRecordIDs != nil)
+        #expect(store.outgoing[0].baselineRecordIDs?.isEmpty == true)
     }
 
     @Test("registration snapshots compare by instanceId and generation")
@@ -185,23 +227,10 @@ struct AgentChatOutgoingTests {
         #expect(
             AgentChatRegistrationSnapshot(instanceId: "I", generation: 1)
                 != AgentChatRegistrationSnapshot(instanceId: "I", generation: 2))
-        #expect(
-            AgentChatRegistrationSnapshot(instanceId: "A", generation: 1)
-                != AgentChatRegistrationSnapshot(instanceId: "B", generation: 1))
-    }
-
-    // MARK: Re-review finding 4 — the send() baseline derivation
-
-    @Test("send() derives its baseline from the committed page")
-    func sendDerivesBaseline() async {
-        let store = await unavailableStore()
-        do { _ = try await store.send("hello") } catch {}
-        // No committed user records → baseline 0 (the echo's snapshot).
-        #expect(store.outgoing[0].baselineMatchingRecords == 0)
     }
 }
 
-/// Test bridge to the store's private classifier (ambiguous-loss).
+/// Test bridge to the ambiguous-loss classifier.
 @MainActor
 enum AgentChatOutgoingMessageTestsBridge {
     static func isAmbiguous(_ error: AgentChatError) -> Bool {

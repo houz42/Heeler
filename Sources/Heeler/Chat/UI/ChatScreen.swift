@@ -432,11 +432,14 @@ struct ChatScreen: View {
                         { Task { @MainActor in
                             guard case .notice = row
                             else { return }
-                            // Re-review finding 1: the row's
-                            // messageID IS the echo's stable UUID
-                            // (the projection derives it from
-                            // "echo:"+echo.id) — retry by ID, never
-                            // by text.
+                            // Re-review round 3, finding 1: the
+                            // projection renders the echo's message
+                            // id as the ORIGINAL outgoing UUID (no
+                            // derivation) — this IS store.echo.id.
+                            // The store routes by the echo's own
+                            // state (failed → duplicate-safe retry;
+                            // ambiguous → explicit may-duplicate
+                            // resend).
                             try? await retry(row.messageID ?? UUID())
                         } }
                     })

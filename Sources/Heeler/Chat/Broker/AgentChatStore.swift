@@ -57,9 +57,8 @@ struct AgentChatOutgoingMessage: Sendable, Equatable, Identifiable {
         case failed
         /// The send's acceptance is UNKNOWN (the connection died or
         /// timed out mid-flight — the broker may have accepted). The
-        /// honest state: never claims non-delivery; a retry mints a
-        /// FRESH requestKey (the old key's dedup state is unknowable
-        /// after the loss, so reuse could double-deliver).
+        /// honest state: never claims non-delivery, and a re-send
+        /// REQUIRES an explicit user decision (it may duplicate).
         case ambiguous
     }
 
@@ -72,29 +71,32 @@ struct AgentChatOutgoingMessage: Sendable, Equatable, Identifiable {
     /// The send's wall-clock moment: the echo's chronological anchor.
     let sentAt: Date
     let sendRegistration: AgentChatRegistrationSnapshot?
-    /// Reconciliation baseline (re-review finding 3): how many
-    /// committed user records carried this echo's text when the send
-    /// began. The echo is confirmed ONLY when the count GROWS — an
-    /// older identical record can never eat it, and N pending echoes
-    /// need N NEW records. -1 = no baseline (the pre-baseline
-    /// fallback: every matching record is treated as new).
-    var baselineMatchingRecords: Int
+    /// Correlation baseline (re-review round 3, findings 3/4): the
+    /// SET of committed user-record UUIDs visible when the send began.
+    /// Confirmation is a SET DIFFERENCE — a committed record confirms
+    /// the echo only if its UUID is NOT in this baseline — with a
+    /// persistent consumption ledger so each record confirms exactly
+    /// one echo, ever (a record never re-consumes across refreshes).
+    /// nil = no baseline (correlation falls back to none: the echo
+    /// only drops on an explicit confirm).
+    var baselineRecordIDs: Set<UUID>?
     var state: DeliveryState = .sending
-    /// The honest failure copy when state == .failed (retryable).
+    /// The honest failure copy when state == .failed or .ambiguous
+    /// (retryable / re-send decision respectively).
     var failureMessage: String?
 
     init(
         id: UUID = UUID(), requestKey: String, text: String,
         images: [AgentChatOutgoingImage] = [],
         sendRegistration: AgentChatRegistrationSnapshot? = nil,
-        baselineMatchingRecords: Int = -1
+        baselineRecordIDs: Set<UUID>? = nil
     ) {
         self.id = id
         self.requestKey = requestKey
         self.text = text
         self.images = images
         self.sendRegistration = sendRegistration
-        self.baselineMatchingRecords = baselineMatchingRecords
+        self.baselineRecordIDs = baselineRecordIDs
         self.sentAt = Date()
     }
 }
@@ -186,6 +188,12 @@ final class AgentChatStore {
     @ObservationIgnored private var reconnectDelay: Duration = .seconds(1)
     @ObservationIgnored private var reconnectTask: Task<Void, Never>? = nil
     @ObservationIgnored private var promptRequestKeys: Set<String> = []
+    /// Echo-correlation consumption ledger (re-review round 3,
+    /// finding 4): committed record UUIDs that already confirmed an
+    /// echo. PERSISTS across refreshes and reconnects (unlike the
+    /// moving history window) so a record confirms exactly one echo,
+    /// ever.
+    @ObservationIgnored private var consumedRecordIDs: Set<UUID> = []
 
     init(
         pipeFactory: AgentChatPipeFactory,
@@ -498,15 +506,15 @@ final class AgentChatStore {
     func send(
         _ text: String, images: [AgentChatOutgoingImage] = []
     ) async throws -> AgentChatOutgoingMessage {
-        // Reconciliation baseline (re-review finding 3): the count of
-        // committed user records with this exact text RIGHT NOW. The
-        // echo confirms only when the count GROWS — older identical
-        // records can never eat it.
-        let baseline = committedUserRecordCount(matching: text)
+        // Correlation baseline (re-review round 3): the SET of
+        // committed user-record UUIDs visible NOW. Confirmation is a
+        // set difference against this — an older identical record is
+        // IN the set and can never confirm the echo.
+        let baseline = committedUserRecordIDs(matching: text)
         let echo = AgentChatOutgoingMessage(
             id: UUID(), requestKey: UUID().uuidString, text: text, images: images,
             sendRegistration: Self.snapshot(of: registration),
-            baselineMatchingRecords: baseline)
+            baselineRecordIDs: baseline)
         outgoing.append(echo)
         do {
             try await sendOnWire(echo)
@@ -522,31 +530,24 @@ final class AgentChatStore {
         }
     }
 
-
-    /// Retries a failed/ambiguous echo (re-review finding 1): the
-    /// caller passes the ECHO ID — never the message text. Key rules
-    /// (finding 2): AMBIGUOUS always mints a fresh key (reuse could
-    /// double-deliver if the broker accepted); registration churn
-    /// mints a fresh key (the dedup cache reset); otherwise the SAME
-    /// key (the broker dedups the replay).
+    /// Retries a FAILED echo (re-review round 3, finding 3): the only
+    /// duplicate-SAFE retry — the broker ANSWERED NO (or the write
+    /// never left), so replaying is always safe. The key rules hold:
+    /// same registration → SAME key (the broker dedups the replay);
+    /// churn → fresh key (the old dedup cache reset; the original was
+    /// rejected, so a fresh key cannot duplicate it).
     func retry(echoID: UUID) async throws {
         guard let index = outgoing.firstIndex(where: { $0.id == echoID }),
-            outgoing[index].state == .failed || outgoing[index].state == .ambiguous
+            outgoing[index].state == .failed
         else { return }
         var echo = outgoing[index]
         let liveRegistration = Self.snapshot(of: registration)
-        let wasAmbiguous = echo.state == .ambiguous
-        if wasAmbiguous || echo.sendRegistration != liveRegistration {
-            // Fresh key: ambiguous acceptance or generation churn both
-            // void the old key's dedup guarantee. The fresh send's
-            // baseline re-derives from the CURRENT committed page (if
-            // the original did land, the count already grew and the
-            // fresh echo reconciles immediately — no duplicate).
-            let baseline = committedUserRecordCount(matching: echo.text)
+        if echo.sendRegistration != liveRegistration {
+            let baseline = committedUserRecordIDs(matching: echo.text)
             echo = AgentChatOutgoingMessage(
                 id: echo.id, requestKey: UUID().uuidString, text: echo.text,
                 images: echo.images, sendRegistration: liveRegistration,
-                baselineMatchingRecords: baseline)
+                baselineRecordIDs: baseline)
         }
         outgoing[index] = echo
         markOutgoing(id: echo.id, state: .sending, message: nil)
@@ -563,17 +564,49 @@ final class AgentChatStore {
         }
     }
 
-    /// The committed user records currently carrying `text`, exactly.
-    private func committedUserRecordCount(matching text: String) -> Int {
-        content.messages
-            .filter { $0.role == .user }
-            .filter { message in
-                message.blocks.compactMap {
-                    if case .text(let value) = $0 { return value }
-                    return nil
-                }.joined(separator: "\n") == text
-            }
-            .count
+    /// Re-sends an AMBIGUOUS echo (re-review round 3, finding 3):
+    /// acceptance was UNKNOWN, so a re-send MAY DUPLICATE — this is
+    /// the explicit user decision, not a "safe retry". The action
+    /// requires its own affordance copy ("Send again — may
+    /// duplicate"); the fresh key bypasses dedup by design.
+    func resendAcknowledgingPossibleDuplicate(echoID: UUID) async throws {
+        guard let index = outgoing.firstIndex(where: { $0.id == echoID }),
+            outgoing[index].state == .ambiguous
+        else { return }
+        let old = outgoing[index]
+        let baseline = committedUserRecordIDs(matching: old.text)
+        let echo = AgentChatOutgoingMessage(
+            id: old.id, requestKey: UUID().uuidString, text: old.text,
+            images: old.images,
+            sendRegistration: Self.snapshot(of: registration),
+            baselineRecordIDs: baseline)
+        outgoing[index] = echo
+        markOutgoing(id: echo.id, state: .sending, message: nil)
+        do {
+            try await sendOnWire(echo)
+            markOutgoing(id: echo.id, state: .sent)
+        } catch {
+            let state: AgentChatOutgoingMessage.DeliveryState =
+                Self.isAmbiguousLoss(error) ? .ambiguous : .failed
+            markOutgoing(
+                id: echo.id, state: state,
+                message: Self.sendFailureText(error))
+            throw error
+        }
+    }
+
+    /// The committed user-record UUIDs currently carrying `text`.
+    private func committedUserRecordIDs(matching text: String) -> Set<UUID> {
+        Set(
+            content.messages
+                .filter { $0.role == .user }
+                .filter { message in
+                    message.blocks.compactMap {
+                        if case .text(let value) = $0 { return value }
+                        return nil
+                    }.joined(separator: "\n") == text
+                }
+                .map(\.id))
     }
 
     /// Whether a send failure leaves acceptance UNKNOWN: the wire
@@ -658,10 +691,20 @@ final class AgentChatStore {
         // .sending forever; review gap 1).
         guard let index = outgoing.firstIndex(where: { $0.id == id }) else { return }
         outgoing[index].state = state
-        outgoing[index].failureMessage = state == .failed ? message : nil
+        // Re-review round 3, finding 2: BOTH .failed and .ambiguous
+        // carry their message — the ambiguous explanation must render
+        // (it was being cleared). Only the transient states clear it.
+        switch state {
+        case .failed, .ambiguous:
+            outgoing[index].failureMessage = message
+        case .sending, .sent:
+            outgoing[index].failureMessage = nil
+        }
         if state == .failed {
             lastSendFailure = message
-        } else if outgoing.allSatisfy({ $0.state != .failed }) {
+        } else if outgoing.allSatisfy({
+            $0.state != .failed && $0.state != .ambiguous
+        }) {
             // A later success supersedes the stale failure banner.
             lastSendFailure = nil
         }
@@ -995,8 +1038,9 @@ final class AgentChatStore {
     /// ``AgentChatEchoReconcile`` (unit-testable without a channel).
     private func reconcileOutgoing(against messages: [ChatMessage]) {
         outgoing = AgentChatEchoReconcile.reconcile(
-            echoes: outgoing, committed: messages)
-        if outgoing.allSatisfy({ $0.state != .failed }) {
+            echoes: outgoing, committed: messages,
+            consumedRecordIDs: &consumedRecordIDs)
+        if outgoing.allSatisfy({ $0.state != .failed && $0.state != .ambiguous }) {
             lastSendFailure = nil
         }
     }
@@ -1065,43 +1109,59 @@ final class AgentChatStore {
 /// - failed echoes NEVER drop (the retry affordance stays).
 /// Records without a parseable timestamp are eligible (the page's
 /// ordering is chronological; the time check refines, never gates).
+/// Echo→committed correlation (re-review round 3, finding 4): a
+/// SET DIFFERENCE over STABLE record UUIDs plus a PERSISTENT
+/// consumption ledger — no counts, no timestamps, no text tricks.
+///
+/// - STABILITY: committed ChatMessage ids derive from the wire item
+///   ids (AgentChatMapper.stableID), so the SAME record is the SAME
+///   UUID across every refresh — the moving-window problem is gone at
+///   the root.
+/// - BASELINE: each echo snapshots the SET of committed user-record
+///   UUIDs visible when its send began. A record can confirm the echo
+///   only if its UUID is NOT in the baseline (an older identical
+///   record is inside the set — it can never eat a newer echo).
+/// - LEDGER: each committed record confirms AT MOST ONE echo, EVER.
+///   The ledger (consumed record ids) is owned by the CALLER (the
+///   store keeps it across refreshes), so an unchanged refresh cannot
+///   re-consume a record for a second echo — N pending echoes still
+///   need N NEW records.
+/// - IMAGES: an image-bearing echo is confirmed only by a record that
+///   BOTH matches the text AND carries an image block — the record
+///   UUID set for image echoes counts image-carrying records only
+///   (the baseline and the candidates use the same rule, so the
+///   earlier mismatch is structurally gone).
+/// - FAILED/AMBIGUOUS echoes never reconcile away (the retry/re-send
+///   affordances stay).
 enum AgentChatEchoReconcile: Sendable {
-    /// COUNT-BASED confirmation (re-review finding 3): each echo
-    /// carries the count of committed user records with its exact text
-    /// at send time (its baseline). Confirmation is a SHARED per-text
-    /// budget: the committed page currently holds C records with that
-    /// text; an echo with baseline B is confirmed only if C > B, and
-    /// each confirmation CONSUMES one unit of the (C - maxBaseline)
-    /// surplus, oldest echo first. An older identical record (already
-    /// inside every baseline) can never eat a newer echo; N pending
-    /// echoes need N NEW records; identical sends never collapse.
-    /// No timestamps, no tolerance windows, no clock skew. Ambiguous/
-    /// failed echoes never drop. Images participate: an image-bearing
-    /// echo counts only records that carry image blocks.
+    /// One reconcile step. `consumedRecordIDs` is the persistent
+    /// ledger IN/OUT — pass the same array across refreshes.
     static func reconcile(
-        echoes: [AgentChatOutgoingMessage], committed: [ChatMessage]
+        echoes: [AgentChatOutgoingMessage],
+        committed: [ChatMessage],
+        consumedRecordIDs: inout Set<UUID>
     ) -> [AgentChatOutgoingMessage] {
-        var textCounts: [String: Int] = [:]
-        var imageTextCounts: [String: Int] = [:]
+        // Candidates: committed user records not in ANY echo's
+        // baseline and not already consumed. Grouped by text; image
+        // echoes draw from the image-carrying subset.
+        struct Candidate {
+            let id: UUID
+            let text: String
+            let hasImage: Bool
+        }
+        var candidates: [Candidate] = []
         for message in committed where message.role == .user {
             let text = message.blocks.compactMap {
                 if case .text(let value) = $0 { return value }
                 return nil
             }.joined(separator: "\n")
             guard !text.isEmpty else { continue }
-            textCounts[text, default: 0] += 1
-            if message.blocks.contains(where: {
+            let hasImage = message.blocks.contains {
                 if case .image = $0 { return true }
                 return false
-            }) {
-                imageTextCounts[text, default: 0] += 1
             }
+            candidates.append(Candidate(id: message.id, text: text, hasImage: hasImage))
         }
-        guard !textCounts.isEmpty else { return echoes }
-        // Per-text surplus budget: how many NEW records each text has
-        // gained relative to the OLDEST baseline among its pending
-        // echoes. Oldest echo reconciles first.
-        var budgets: [String: Int] = [:]
         var survivors: [AgentChatOutgoingMessage] = []
         for echo in echoes.sorted(by: { $0.sentAt < $1.sentAt }) {
             switch echo.state {
@@ -1111,14 +1171,23 @@ enum AgentChatEchoReconcile: Sendable {
             case .sending, .sent:
                 break
             }
-            let current = echo.images.isEmpty
-                ? textCounts[echo.text, default: 0]
-                : imageTextCounts[echo.text, default: 0]
-            let key = echo.images.isEmpty ? echo.text : "img:\(echo.text)"
-            let budget = budgets[key]
-                ?? max(current - max(echo.baselineMatchingRecords, 0), 0)
-            if budget > 0 {
-                budgets[key] = budget - 1
+            guard let baseline = echo.baselineRecordIDs else {
+                // No baseline (pre-baseline echo): cannot correlate —
+                // the honest state is to KEEP it until an explicit
+                // confirm. Never guess on text.
+                survivors.append(echo)
+                continue
+            }
+            // NEW records only: not in the send-time baseline, not
+            // already consumed by an earlier echo.
+            let fresh = candidates.filter {
+                !baseline.contains($0.id)
+                    && !consumedRecordIDs.contains($0.id)
+                    && $0.text == echo.text
+                    && ($0.hasImage || echo.images.isEmpty)
+            }
+            if let match = fresh.min(by: { $0.id.uuidString < $1.id.uuidString }) {
+                consumedRecordIDs.insert(match.id)
                 // Confirmed: the committed record replaces the echo.
             } else {
                 survivors.append(echo)
