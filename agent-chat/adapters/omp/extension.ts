@@ -55,8 +55,11 @@ interface LocalPi {
 	on(event: string, handler: (event: unknown, ctx: LocalCtx) => void | Promise<void>): void;
 	/** Content array form verified against the installed omp build (18.2.6):
 	 *  session.sendUserMessage splits text blocks into the prompt string and
-	 *  passes non-text blocks ({type:'image',data:<base64>,mimeType}) as images. */
-	sendUserMessage(content: string | ContentBlock[]): void;
+	 *  passes non-text blocks ({type:'image',data:<base64>,mimeType}) as
+	 *  images. Options: attribution is echoed verbatim into the committed
+	 *  user record (verified live) — the send-correlation origin token
+	 *  rides it. */
+	sendUserMessage(content: string | ContentBlock[], options?: { attribution?: string }): void;
 	getCommands(): Array<{ name: string; description?: string; source?: string; location?: string; path?: string }>;
 	logger?: { warn: (...args: unknown[]) => void };
 	/** Present in current omp builds; optional so older hosts still load. */
@@ -138,38 +141,41 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 
 	/**
 	 * Broker-originated sends awaiting their committed user record, in send
-	 * order. At each user message_end the FIFO is matched (see
-	 * correlateCommittedSend) and the matched send's requestKey is durably
-	 * bound to the committed record id (marker entry + send.confirmed event).
+	 * order. At each user message_end the committed record's ORIGIN TOKEN
+	 * (a structured attribution echoed verbatim by omp into the committed
+	 * record) identifies which send landed — never text matching.
 	 */
-	const pendingSends: Array<{ requestKey: string; text: string }> = [];
+	const pendingSends: Array<{ requestKey: string; token: string }> = [];
 
-	/** Text of a committed user record: string content, or joined text blocks. */
-	function committedRecordText(entry: { type: string; message?: { content?: unknown } } | undefined): string | undefined {
-		const content = entry?.message?.content;
-		if (typeof content === "string") return content;
-		if (!Array.isArray(content)) return undefined;
-		const texts: string[] = [];
-		for (const block of content) {
-			if (typeof block === "object" && block !== null && "type" in block && block.type === "text" && "text" in block && typeof block.text === "string") {
-				texts.push(block.text);
-			}
-		}
-		return texts.length === 0 ? undefined : texts.join(" ");
+	/**
+	 * Origin token prefix: the adapter marks every broker-originated send's
+	 * attribution with this prefix + the requestKey; omp echoes the
+	 * attribution verbatim into the committed user record (verified live
+	 * against omp 18.2.6). A committed record carrying this token provably
+	 * came from THIS send — terminal-typed messages and same-text twins can
+	 * never steal a key.
+	 */
+	const SEND_TOKEN_PREFIX = "heeler-chat:send:";
+
+	/** requestKey carried in the send's origin token, if this is ours. */
+	function tokenRequestKey(entry: { type: string; message?: { attribution?: unknown; role?: string } } | undefined): string | undefined {
+		const attribution = entry?.message?.attribution;
+		if (typeof attribution !== "string" || !attribution.startsWith(SEND_TOKEN_PREFIX)) return undefined;
+		const requestKey = attribution.slice(SEND_TOKEN_PREFIX.length);
+		return requestKey.length > 0 ? requestKey : undefined;
 	}
 
 	/**
 	 * Correlate the just-committed user record to its broker-originated send.
 	 *
-	 * Origin is proven, not assumed: the committed record (the session leaf,
-	 * verified type message / role user) must TEXT-match a pending send. A
-	 * terminal-typed message matches nothing (or finds the FIFO empty) and
-	 * consumes no requestKey — no send.confirmed is emitted for it. On a
-	 * match the REAL committed record id is bound durably (hidden marker
-	 * entry via pi.appendEntry, consumed by the read-side history attach)
-	 * and announced live via the send.confirmed event. A text that omp
-	 * transformed (mentions, slash commands) matches nothing — honest
-	 * absence (no confirmation) beats a wrong confirmation.
+	 * Origin is PROVEN structurally: broker sends carry an attribution token
+	 * omp echoes into the committed record. A record without the token (a
+	 * terminal-typed message) confirms nothing and consumes no key. The
+	 * token names ITS requestKey, so same-text sends correlate to their OWN
+	 * records — two identical prompts get distinct, correct confirmations.
+	 * On a match the REAL committed record id is bound durably (hidden
+	 * marker entry via pi.appendEntry, consumed by the read-side history
+	 * attach) and announced live via the send.confirmed event.
 	 */
 	function correlateCommittedSend(ctx: LocalCtx | null): void {
 		if (pendingSends.length === 0) return; // terminal-origin: nothing to confirm
@@ -178,23 +184,26 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 		const leafId = sm.getLeafId();
 		const entry = leafId === null ? undefined : sm.getEntry(leafId);
 		if (entry === undefined || entry.type !== "message" || entry.message?.role !== "user") return; // not a committed user record
-		const recordText = committedRecordText(entry);
-		if (recordText === undefined) return;
-		const match = pendingSends.findIndex(s => s.text === recordText);
-		if (match === -1) return; // a terminal/interleaved message must not consume a key
-		const { requestKey } = pendingSends.splice(match, 1)[0]!;
-		const recordId = leafId!; // the REAL committed user record's id
+		const recordKey = tokenRequestKey(entry);
+		if (recordKey === undefined) return; // not broker-originated (no token)
+		const match = pendingSends.findIndex(s => s.requestKey === recordKey);
+		if (match === -1) {
+			log("send-correlation token for unknown requestKey:", recordKey);
+			return; // honest absence: never bind a key we did not queue
+		}
+		pendingSends.splice(match, 1);
+		const recordId = leafId; // the REAL committed user record's id
 		// Durable binding: a hidden marker entry the read side re-attaches as
 		// record metadata. Absent appendEntry (older host) the live event still
 		// fires; only the durable read-side attach degrades.
 		if (pi.appendEntry !== undefined) {
 			try {
-				pi.appendEntry("heeler-chat.send.confirmed", { requestKey, recordId, timestamp: new Date().toISOString() });
+				pi.appendEntry("heeler-chat.send.confirmed", { requestKey: recordKey, recordId, timestamp: new Date().toISOString() });
 			} catch (error) {
 				log("send-correlation marker write failed:", String(error));
 			}
 		}
-		emitEvent("send.confirmed", { requestKey, recordId });
+		emitEvent("send.confirmed", { requestKey: recordKey, recordId });
 	}
 
 	// -- socket + bounded outgoing queue ---------------------------------------
@@ -698,15 +707,19 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 						const oldest = dedupSeen.keys().next().value;
 						if (typeof oldest === "string") dedupSeen.delete(oldest);
 					}
-					// Queue for send-correlation: when this prompt's user record is
-					// committed (user message_end), its requestKey is durably bound
-					// to the record id. The sent TEXT is carried for origin
-					// matching (a terminal-typed message must never consume a key).
-					if (pendingSends.length < PENDING_SENDS_MAX) pendingSends.push({ requestKey: params.requestKey, text: params.text });
+					// Queue for send-correlation: the ORIGIN TOKEN rides this
+					// send's attribution (omp echoes it verbatim into the
+					// committed record), so the committed record provably
+					// corresponds to THIS invocation — never a same-text twin
+					// or a terminal-typed message.
+					const token = SEND_TOKEN_PREFIX + params.requestKey;
+					if (pendingSends.length < PENDING_SENDS_MAX) pendingSends.push({ requestKey: params.requestKey, token });
 					// Text-only send: identical string call as before (byte for
 					// byte); structured send: content ARRAY so images reach the
-					// provider as real image content, not inline text.
-					pi.sendUserMessage(content);
+					// provider as real image content, not inline text. The second
+					// arg is omp's documented options object (attribution
+					// passthrough verified live against 18.2.6).
+					pi.sendUserMessage(content, { attribution: token });
 					// NOTE: no session.changed here — per-turn activity must not trigger a
 					// client resync; turn lifecycle is covered by message.* + history.changed.
 					respond(frame.id, { accepted: true, requestKey: params.requestKey });
