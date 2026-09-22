@@ -67,6 +67,12 @@ targets:
       - path: Sources/Heeler/Resources/Notices
         type: folder
         buildPhase: resources
+      # Meadow chat-broker packages: per-OS artifacts + checksums.json +
+      # manifest.json, produced by the runtime side; first-connect
+      # auto-provisioning stages the matching artifact onto the Host.
+      - path: Sources/Heeler/Resources/Meadow
+        type: folder
+        buildPhase: resources
     info:
       path: Sources/Heeler/Info.plist
       properties:

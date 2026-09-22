@@ -787,6 +787,18 @@ actor HeelerSSHTransport: Transport {
         }
     }
 
+    /// The auto-provisioning restart seam: `agent.start` against an
+    /// EXISTING pane whose agent exited, with the same busy-retry.
+    func restartAgent(
+        paneID: String, kind: String, name: String, arguments: [String]
+    ) async throws -> Agent {
+        let response = try await startAgentAwaitingShell(
+            AgentLaunchRequest(
+                kind: kind, name: name, arguments: arguments),
+            paneID: paneID)
+        return Agent(response.agent)
+    }
+
     func startAgentInNewWorkspace(
         _ launch: AgentLaunchRequest,
         workspace: NewWorkspaceSpec

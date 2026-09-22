@@ -651,47 +651,47 @@ struct BrokerProvisioningTests {
 
     @Test func macOSUnitWriteSubstitutesNodeDirHostSide() throws {
         // The launchd write pipes the base64 body through a host-side
-        // sed that substitutes the __HEELER_NODE_DIR__ placeholder with
+        // sed that substitutes the __MEADOW_NODE_DIR__ placeholder with
         // the discovered node directory — plists carry literal paths only.
         let layout = makeLayout(platform: .macOS, suffix: "nodepath")
         let command = try layout.writeUnitCommand(activeVersion: "0.1.0")
-        #expect(command.contains("sed \"s|__HEELER_NODE_DIR__|$(dirname \"$(command -v node)\")|\""))
+        #expect(command.contains("sed \"s|__MEADOW_NODE_DIR__|$(dirname \"$(command -v node)\")|\""))
         #expect(command.contains("base64 -d"))
     }
 
     @Test func developmentLayoutUsesDisposableRootsAndTestServiceNames() {
         let layout = makeLayout(suffix: "safety")
-        #expect(layout.dataRoot.contains("heeler-chat-test-safety"))
-        #expect(layout.serviceName.contains("heeler-chat-test"))
-        #expect(!layout.usesXDGRuntimeDir)
+        #expect(layout.dataRoot.contains("meadow-test-safety"))
+        #expect(layout.serviceName.contains("meadow-test"))
+        #expect(!layout.usesXDGDataDirSocket)
         #expect(!layout.usesRealLaunchAgentsDir)
-        // Production layout names the real footprint, with the XDG socket
-        // template expanded on the Host.
+        // Production layout names the real Meadow footprint, with the
+        // XDG_DATA_HOME socket template expanded on the Host.
         let production = BrokerProvisioningLayout.standard(
             platform: .linux, homeDirectory: "/home/dev")
-        #expect(production.dataRoot == "/home/dev/.local/share/heeler-chat")
-        #expect(production.serviceName == "heeler-chat-broker")
-        #expect(production.usesXDGRuntimeDir)
+        #expect(production.dataRoot == "/home/dev/.local/share/meadow")
+        #expect(production.serviceName == "meadow-broker")
+        #expect(production.usesXDGDataDirSocket)
         #expect(
             production.shellSocketPath
-                == "${XDG_RUNTIME_DIR:-/home/dev/.local/state/heeler-chat}/broker.sock")
+                == "${XDG_DATA_HOME:-/home/dev/.local/share/meadow}/meadow/broker.sock")
         #expect(
             production.adapterShimPath
-                == "/home/dev/.omp/agent/extensions/heeler-chat.ts")
+                == "/home/dev/.omp/agent/extensions/meadow-chat.ts")
     }
 
-    @Test func macOSStandardLayoutUsesApplicationSupportAndLocalStateSocket() {
+    @Test func macOSStandardLayoutMirrorsTheMeadowDataTree() {
         let production = BrokerProvisioningLayout.standard(
             platform: .macOS, homeDirectory: "/Users/dev")
+        // Binding: the Meadow standard data tree — ~/.local/share/meadow
+        // on BOTH platforms; never Application Support, never ~/.cache.
         #expect(
-            production.dataRoot
-                == "/Users/dev/Library/Application Support/HeelerChat")
-        #expect(production.serviceName == "com.heeler.chat.broker")
-        // Binding: the macOS socket mirrors Linux's ~/.local/state, NOT
-        // the Application Support tree.
+            production.dataRoot == "/Users/dev/.local/share/meadow")
+        #expect(production.serviceName == "com.meadow.chat.broker")
         #expect(
             production.socketPath
-                == "/Users/dev/.local/state/heeler-chat/broker.sock")
+                == "/Users/dev/.local/share/meadow/broker.sock")
+        #expect(production.usesXDGDataDirSocket)
         #expect(production.usesRealLaunchAgentsDir)
     }
 

@@ -79,14 +79,16 @@ protocol Transport: Sendable {
         _ request: AgentLaunchRequest, worktree: WorktreeSpec
     ) async throws -> Agent
 
-    /// Starts a new Agent in a freshly created Workspace (#230):
-    /// `workspace.create` opens the remote directory as its own Workspace
-    /// (no existing Workspace required) and returns a root pane already
-    /// running a shell, so this variant skips `tab.create` and starts the
-    /// agent in that pane directly (the `agent_pane_busy` readiness retry
-    /// still applies). `request.workspaceID` is unused; the started agent
-    /// lives in the returned Workspace and surfaces through the normal
-    /// snapshot/delta machinery.
+    /// Restarts an agent IN ITS EXISTING PANE after it exited (the
+    /// first-connect auto-provisioning restart loop): `agent.start`
+    /// against the same pane with `arguments` (e.g. `["--resume", id]`),
+    /// with the same shell-readiness busy-retry the fresh-start path
+    /// uses. Returns the restarted Agent.
+    func restartAgent(
+        paneID: String, kind: String, name: String, arguments: [String]
+    ) async throws -> Agent
+
+    /// Starts a new agent in a fresh Workspace (#230).
     func startAgentInNewWorkspace(
         _ request: AgentLaunchRequest, workspace: NewWorkspaceSpec
     ) async throws -> Agent
@@ -333,8 +335,17 @@ extension Transport {
         throw AttachmentStagingError.sftpUnavailable
     }
 
-    /// Test doubles and alternative transports without a Host-side plugin
-    /// can report its absence without emulating the plugin CLI.
+    /// Non-SSH test doubles and alternative transports can state the
+    /// restart seam's absence instead of emulating one.
+    func restartAgent(
+        paneID: String, kind: String, name: String, arguments: [String]
+    ) async throws -> Agent {
+        throw TransportError.channelFailed(
+            detail: "This transport cannot restart agents.")
+    }
+
+    /// Test doubles without a Host-side plugin can report its absence
+    /// without emulating the plugin CLI.
     func readNotificationRegistration() async throws -> Data? {
         throw NotificationRegistrationError.pluginNotInstalled
     }

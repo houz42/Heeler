@@ -29,6 +29,7 @@ struct AgentDetailView: View {
     /// backend stays the fallback (and the only backend on Hosts
     /// without a broker).
     @State private var brokerChat: AgentChatStore?
+    @State private var isShowingFirstConnectFlow = false
     /// The chat input's submit router (/ # @ ! routing). Built with the
     /// same per-agent task as the chat store.
     @State private var chatRouter: ComposerRouterStore?
@@ -536,9 +537,20 @@ struct AgentDetailView: View {
                 icon: "hourglass", title: "Connecting to the chat broker…",
                 detail: nil)
         case .unavailable(let reason):
-            AgentChatStateBanner(
-                icon: "person.crop.circle.badge.xmark",
-                title: "No chat broker for this agent", detail: reason)
+            VStack(spacing: 12) {
+                AgentChatStateBanner(
+                    icon: "person.crop.circle.badge.xmark",
+                    title: "No chat broker for this agent", detail: reason)
+                // First-connect auto-provisioning: the "no broker"
+                // surface offers the one-tap bring-up. The flow's own
+                // confirmations gate every mutation.
+                Button {
+                    isShowingFirstConnectFlow = true
+                } label: {
+                    Label("Set up chat broker on this Host…", systemImage: "wand.and.stars")
+                }
+                .buttonStyle(.borderedProminent)
+            }
         case .ambiguous:
             AgentChatStateBanner(
                 icon: "arrow.triangle.branch",
@@ -829,6 +841,20 @@ struct AgentDetailView: View {
             Button("OK", role: .cancel) { openTerminal.dismissCloseFailure() }
         } message: {
             Text(openTerminal.closeFailureMessage ?? "")
+        }
+        .sheet(isPresented: $isShowingFirstConnectFlow) {
+            if let host = hosts.first(where: { $0.id == agent.hostID }) {
+                MeadowFirstConnectFlowView(
+                    host: host,
+                    catalog: nil,
+                    onProvisioned: {
+                        // The Host record changed on disk; rebuild the
+                        // chat store so the broker lane connects at the
+                        // new path without a reopen.
+                        brokerChat = nil
+                        Task { await buildChatIfPossible() }
+                    })
+            }
         }
         .modifier(ConsoleDetailPresentationRegistration(
             agentID: agent.id,

@@ -27,18 +27,23 @@ enum RemoteHostPlatform: String, Sendable, Equatable {
 /// development-testing rule (disposable dirs + service names) is a matter
 /// of swapping the instance, and a layout change is one place.
 ///
-/// Runtime-owner-confirmed contract:
-/// - Linux: install `~/.local/share/heeler-chat/versions/<v>/` + `current`
-///   marker FILE; config `~/.config/heeler-chat/`; socket
-///   `${XDG_RUNTIME_DIR:-$HOME/.local/state}/heeler-chat/broker.sock`.
-/// - macOS: install `~/Library/Application Support/HeelerChat/`; socket
-///   `~/.local/state/heeler-chat/broker.sock` (NOT the Application
-///   Support tree); logs in the Application Support tree.
+/// Runtime-owner-confirmed contract (Meadow standard):
+/// - Data root: `${XDG_DATA_HOME:-$HOME/.local/share}/meadow/` — the
+///   versions tree + `current` marker AND the broker socket
+///   (`broker.sock`) live here: persistent data, never the disposable
+///   XDG cache dir.
+/// - Config: `~/.config/meadow/`.
+/// - Logs: the same meadow data tree (`logs/`).
+/// - The canonical socket path is a VARIABLE everywhere: the app, the
+///   service units, and the shims all construct
+///   `${XDG_DATA_HOME:-$HOME/.local/share}/meadow/broker.sock`; no
+///   hardcoded absolute literal survives anywhere.
 /// - The broker entrypoint resolves its paths RELATIVE TO ITS VERSIONED
 ///   directory; `current` is a text marker, never a symlink.
-/// - launchd plists carry absolute paths only (no shell expansion).
+/// - launchd plists carry absolute paths only (no shell expansion), so
+///   macOS resolves XDG_DATA_HOME host-side while WRITING the plist.
 /// - The adapter shim is ONE helper-owned file,
-///   `~/.omp/agent/extensions/heeler-chat.ts`, importing the versioned
+///   `~/.omp/agent/extensions/meadow-chat.ts`, importing the versioned
 ///   extension path; other user extensions/config are never touched.
 struct BrokerProvisioningLayout: Sendable, Equatable {
     /// Fixed socket name; chat connects direct-streamlocal to this path.
@@ -58,16 +63,15 @@ struct BrokerProvisioningLayout: Sendable, Equatable {
     let configRoot: String
     /// Absolute state dir (socket fallback on Linux, logs everywhere).
     let stateRoot: String
-    /// Service name: `heeler-chat-broker` (systemd) or
-    /// `com.heeler.chat.broker` (launchd).
+    /// Service name: `meadow-broker` (systemd) or
+    /// `com.meadow.chat.broker` (launchd).
     let serviceName: String
-    /// True only for the production Linux layout: the socket directory is
-    /// `${XDG_RUNTIME_DIR:-$HOME/.local/state}/heeler-chat`, expanded ON
-    /// THE HOST (binding: the app never expands it). Every other layout
-    /// (macOS, dev roots) uses `stateRoot` directly.
-    let usesXDGRuntimeDir: Bool
+    /// True only for the production Linux layout: the socket lives in the
+    /// XDG DATA dir, expanded ON THE HOST (`${XDG_DATA_HOME:-...}` — the
+    /// app never expands it). Every other layout uses its literal roots.
+    let usesXDGDataDirSocket: Bool
     /// The single helper-owned adapter shim file. Production:
-    /// `~/.omp/agent/extensions/heeler-chat.ts` (runtime-owner specified);
+    /// `~/.omp/agent/extensions/meadow-chat.ts` (runtime-owner specified);
     /// dev layouts point at the disposable root instead.
     let adapterShimPath: String
     /// True only for the production macOS layout: launchd requires the
@@ -80,42 +84,42 @@ struct BrokerProvisioningLayout: Sendable, Equatable {
         case .linux:
             return BrokerProvisioningLayout(
                 platform: platform,
-                dataRoot: "\(homeDirectory)/.local/share/heeler-chat",
-                configRoot: "\(homeDirectory)/.config/heeler-chat",
-                stateRoot: "\(homeDirectory)/.local/state/heeler-chat",
-                serviceName: "heeler-chat-broker",
-                usesXDGRuntimeDir: true,
-                adapterShimPath: "\(homeDirectory)/.omp/agent/extensions/heeler-chat.ts",
+                dataRoot: "\(homeDirectory)/.local/share/meadow",
+                configRoot: "\(homeDirectory)/.config/meadow",
+                stateRoot: "\(homeDirectory)/.local/share/meadow",
+                serviceName: "meadow-broker",
+                usesXDGDataDirSocket: true,
+                adapterShimPath: "\(homeDirectory)/.omp/agent/extensions/meadow-chat.ts",
                 usesRealLaunchAgentsDir: false)
         case .macOS:
-            // Socket state deliberately mirrors Linux (`~/.local/state`),
-            // per the runtime owner: NOT inside Application Support.
+            // Meadow standard: the data tree (and socket) mirror Linux —
+            // `~/.local/share/meadow/` — NOT inside Application Support.
             return BrokerProvisioningLayout(
                 platform: platform,
-                dataRoot: "\(homeDirectory)/Library/Application Support/HeelerChat",
-                configRoot: "\(homeDirectory)/Library/Application Support/HeelerChat/config",
-                stateRoot: "\(homeDirectory)/.local/state/heeler-chat",
-                serviceName: "com.heeler.chat.broker",
-                usesXDGRuntimeDir: false,
-                adapterShimPath: "\(homeDirectory)/.omp/agent/extensions/heeler-chat.ts",
+                dataRoot: "\(homeDirectory)/.local/share/meadow",
+                configRoot: "\(homeDirectory)/.config/meadow",
+                stateRoot: "\(homeDirectory)/.local/share/meadow",
+                serviceName: "com.meadow.chat.broker",
+                usesXDGDataDirSocket: true,
+                adapterShimPath: "\(homeDirectory)/.omp/agent/extensions/meadow-chat.ts",
                 usesRealLaunchAgentsDir: true)
         }
     }
 
     /// Disposable development layout: a test root and a
-    /// `heeler-chat-test-` service name. Production code never constructs
+    /// `meadow-test-` service name. Production code never constructs
     /// this; tests use it to honor "never install into the user's normal
     /// remote setup during development".
     static func development(platform: RemoteHostPlatform, root: String, suffix: String) -> BrokerProvisioningLayout {
-        let base = "\(root)/heeler-chat-test-\(suffix)"
+        let base = "\(root)/meadow-test-\(suffix)"
         return BrokerProvisioningLayout(
             platform: platform,
             dataRoot: "\(base)/data",
             configRoot: "\(base)/config",
             stateRoot: "\(base)/state",
-            serviceName: "heeler-chat-test-\(suffix)",
-            usesXDGRuntimeDir: false,
-            adapterShimPath: "\(base)/config/heeler-chat.ts",
+            serviceName: "meadow-test-\(suffix)",
+            usesXDGDataDirSocket: false,
+            adapterShimPath: "\(base)/config/meadow-chat.ts",
             usesRealLaunchAgentsDir: false)
     }
 
@@ -126,17 +130,19 @@ struct BrokerProvisioningLayout: Sendable, Equatable {
     var logsDirectory: String { "\(stateRoot)/logs" }
     var brokerEnvironmentFilePath: String { "\(configRoot)/broker.env" }
 
-    /// The socket path as it appears inside shell commands. Production
-    /// Linux expands `$XDG_RUNTIME_DIR` ON THE HOST (binding: the app
-    /// never expands it); every other layout is a literal absolute path.
+    /// The socket path as it appears inside shell commands: the canonical
+    /// Meadow construction, expanded ON THE HOST. Production layouts
+    /// honor `XDG_DATA_HOME`; the fallback is the literal `dataRoot`
+    /// (already `$HOME/.local/share/meadow` for both production
+    /// platforms).
     var shellSocketPath: String {
-        usesXDGRuntimeDir
-            ? "${XDG_RUNTIME_DIR:-\(stateRoot)}/\(Self.socketName)"
+        usesXDGDataDirSocket
+            ? "${XDG_DATA_HOME:-\(dataRoot)}/meadow/\(Self.socketName)"
             : "\(stateRoot)/\(Self.socketName)"
     }
 
     /// The literal socket path for layouts where it is known without
-    /// host-side expansion. Production Linux resolves it through the
+    /// host-side expansion. Production layouts resolve it through the
     /// inspect probe's published `socket=` line instead of this.
     var socketPath: String { "\(stateRoot)/\(Self.socketName)" }
 
@@ -284,7 +290,7 @@ struct BrokerProvisioningLayout: Sendable, Equatable {
     }
 
     /// Writes the ONE helper-owned adapter shim. Runtime-owner contract:
-    /// `~/.omp/agent/extensions/heeler-chat.ts` importing the versioned
+    /// `~/.omp/agent/extensions/meadow-chat.ts` importing the versioned
     /// extension path; other user extensions/config are never touched.
     /// The ask-wrapper flag is env-borne and written only on explicit
     /// opt-in — its absence is the OFF default.
@@ -319,12 +325,13 @@ struct BrokerProvisioningLayout: Sendable, Equatable {
     func systemdUnitBody(activeVersion: String) -> String {
         """
         [Unit]
-        Description=Heeler Chat Broker
+        Description=Meadow chat broker
 
         [Service]
         Type=simple
         ExecStart=\(brokerExecutablePath(activeVersion: activeVersion))
         Environment=PATH=$(dirname "$(command -v node)"):/usr/local/bin:/usr/bin:/bin
+        Environment=HEELER_CHAT_SOCKET=${XDG_DATA_HOME:-$HOME/.local/share}/meadow/broker.sock
         EnvironmentFile=\(brokerEnvironmentFilePath)
         Restart=on-failure
         RestartSec=2
@@ -337,7 +344,7 @@ struct BrokerProvisioningLayout: Sendable, Equatable {
     /// The launchd plist body for macOS. Same Node-PATH requirement: the
     /// plist carries literal absolute values only, so the Node directory
     /// must be RESOLVED host-side before the plist bytes are written —
-    /// `writeUnitCommand` substitutes `__HEELER_NODE_DIR__` via a host-side
+    /// `writeUnitCommand` substitutes `__MEADOW_NODE_DIR__` via a host-side
     /// shell expansion at write time.
     func launchdPlistBody(activeVersion: String, resolvedNodeDirectory: String) -> String {
         let escaped = { (value: String) -> String in
@@ -363,7 +370,7 @@ struct BrokerProvisioningLayout: Sendable, Equatable {
                 <key>PATH</key>
                 <string>\(escaped(servicePath))</string>
                 <key>HEELER_CHAT_SOCKET</key>
-                <string>\(escaped(socketPath))</string>
+                <string>__MEADOW_SOCKET__</string>
                 <key>HEELER_CHAT_LOG_DIR</key>
                 <string>\(escaped(logsDirectory))</string>
             </dict>
@@ -385,21 +392,23 @@ struct BrokerProvisioningLayout: Sendable, Equatable {
     /// node)")`), substituted into the plist body — launchd refuses shell
     /// expansion, so the written file must already be literal.
     func writeUnitCommand(activeVersion: String) throws -> String {
-        let rawBody: String
         switch platform {
         case .linux:
-            rawBody = systemdUnitBody(activeVersion: activeVersion)
+            let rawBody = systemdUnitBody(activeVersion: activeVersion)
             let base64 = Data(rawBody.utf8).base64EncodedString()
             return writePrivateFileCommand(path: unitInstallPath, base64Contents: base64)
         case .macOS:
-            rawBody = launchdPlistBody(
+            // launchd refuses shell expansion, so both the Node
+            // directory AND the canonical socket path are substituted
+            // ON THE HOST, after base64 decoding, inside the same atomic
+            // tmp+mv pipeline.
+            let rawBody = launchdPlistBody(
                 activeVersion: activeVersion,
-                resolvedNodeDirectory: "__HEELER_NODE_DIR__")
+                resolvedNodeDirectory: "__MEADOW_NODE_DIR__")
             let base64 = Data(rawBody.utf8).base64EncodedString()
-            // Substitute the placeholder host-side, after base64 decoding
-            // but inside the same atomic tmp+mv pipeline.
             return "printf '%s' '\(base64)' | base64 -d "
-                + "| sed \"s|__HEELER_NODE_DIR__|$(dirname \"$(command -v node)\")|\" "
+                + "| sed \"s|__MEADOW_NODE_DIR__|$(dirname \"$(command -v node)\")|\" "
+                + "| sed \"s|__MEADOW_SOCKET__|${XDG_DATA_HOME:-$HOME/.local/share}/meadow/broker.sock|\" "
                 + "> \(unitInstallPath).tmp "
                 + "&& chmod 600 \(unitInstallPath).tmp "
                 + "&& mv \(unitInstallPath).tmp \(unitInstallPath)"
