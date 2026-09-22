@@ -860,21 +860,17 @@ struct ChatScreen: View {
         }
     }
 
-    /// Send needs draft text or held COMPLETED attachments: a tracked
-    /// in-flight tile (upload not landed yet) blocks Send until its
-    /// remotePath lands; the draft stays editable meanwhile.
+    /// Send is enabled the moment there is text OR a picked image
+    /// (user directive, v2): an image still uploading sends INLINE
+    /// base64 (the picked bytes are in hand) — Send NEVER waits on
+    /// the background blob upload. The upload only exists for history
+    /// dedup and lands whenever it lands.
     private var canSend: Bool {
-        // A tile still WAITING on its upload (tracked in-flight item
-        // with an empty remotePath) blocks Send — the wire needs the
-        // real path; the draft stays editable while the upload runs.
-        let hasInFlightUpload = draftItems.contains { item in
-            if case .image(_, let path, _) = item, path.isEmpty {
-                return true
-            }
-            return false
-        }
-        if !hasInFlightUpload, !draftItems.isEmpty { return true }
-        return !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        // Review round 3, finding 1: ONE sendability predicate, shared
+        // with the submit guard — ChatDraftComposer.isSendable (nonempty
+        // text OR any held item: image, file, or quote). The button and
+        // the guard can never drift apart again.
+        ChatDraftComposer.isSendable(text: composedMessageText(), items: draftItems)
     }
 
     /// Puts the bubble's plain text on the pasteboard.
@@ -931,6 +927,15 @@ struct ChatScreen: View {
     @State private var isSelectingFile = false
     /// The pending image's preview bytes (the tile's thumbnail).
     @State private var pendingImagePreviewData: Data?
+    /// The in-flight picked item's DRAFT TILE id (v2 device note): the
+    /// tile shows immediately on pick; the completed upload's
+    /// remotePath updates THIS item (no second tile ever appears).
+    @State private var pendingDraftItemID: String?
+    /// The picked PhotosPickerItem per in-flight tile id: a Send that
+    /// races the LOCAL byte read awaits the item's data through here
+    /// (never the upload — the local read is what the inline send
+    /// needs; the blob upload stays a background dedup optimization).
+    @State private var pendingPickerItems: [String: PhotosPickerItem] = [:]
     /// True while the current upload began from the PASTE path (its
     /// completed upload holds in draftStore.pendingImage with the path
     /// removed from the draft); false = picker path (path stays in the
@@ -939,15 +944,15 @@ struct ChatScreen: View {
     /// A picker firing before the bundle exists: honest error, no silent
     /// no-op.
     @State private var attachmentErrorMessage: String?
+    /// Round 4, finding 1: the tile whose attachment failed the send —
+    /// MARKED in the rail (red ring) so the error copy's ordinal maps
+    /// to a visible tile. CLEARS when that tile is removed or a retry
+    /// succeeds (finding 3).
+    @State private var failedAttachmentItemID: String?
     /// The file picker's last selection (name for the rail tile).
     @State private var pendingFileURL: URL?
     /// The photo picker's item data (the tile's preview thumbnail).
     @State private var pendingPickerImageData: Data?
-    /// The in-flight picked item's DRAFT TILE id (v2 device note): the
-    /// tile shows immediately on pick; the completed upload's
-    /// remotePath updates THIS item (no second tile ever appears).
-    @State private var pendingDraftItemID: String?
-
     /// The composer's text field (the growing/collapsing input), split
     /// out to keep each view expression within the type-checker's
     /// budget. The closures are plain methods so the call expression
@@ -1121,6 +1126,7 @@ struct ChatScreen: View {
                 if !draftItems.isEmpty {
                     ChatDraftTileRail(
                         items: draftItems,
+                        failedItemID: failedAttachmentItemID,
                         removeItem: { id in removeDraftItem(id) },
                         openPreview: { item in previewedDraftItem = item },
                         openCollection: { showsDraftCollection = true })
@@ -1161,6 +1167,7 @@ struct ChatScreen: View {
                 // completed remotePath UPDATES this tracked item).
                 let itemID = UUID().uuidString
                 pendingDraftItemID = itemID
+                pendingPickerItems[itemID] = item
                 draftItems.append(.image(
                     id: itemID, remotePath: "", previewData: nil))
                 Task { @MainActor in
@@ -1168,6 +1175,7 @@ struct ChatScreen: View {
                     if let data {
                         updateDraftItemImage(id: itemID, previewData: data)
                     }
+                    pendingPickerItems[itemID] = nil
                 }
                 attachments.staging.begin(
                     .photo(PhotosPickerImageSelection(item: item)),
@@ -1219,6 +1227,10 @@ struct ChatScreen: View {
         draft = ""
         draftItems = []
         draftStore.clear(paneID: draftKey)
+        // Round 4, finding 3: a successful send resolved every
+        // attachment — the tile mark and its error clear with the draft.
+        failedAttachmentItemID = nil
+        attachmentErrorMessage = nil
     }
 
     /// The pane's persisted draft (item 18): loaded on appear (and on
@@ -1307,6 +1319,12 @@ struct ChatScreen: View {
 
     private func removeDraftItem(_ id: String) {
         draftItems.removeAll { $0.id == id }
+        // Round 4, finding 3: removing the failed tile clears its
+        // error — a retained error can't outlive the problem.
+        if failedAttachmentItemID == id {
+            failedAttachmentItemID = nil
+            attachmentErrorMessage = nil
+        }
     }
 
     private func sendDraft() {
@@ -1332,27 +1350,18 @@ struct ChatScreen: View {
             // the agent).
             if ChatDraftComposer.carriesAttachments(items: draftItems) {
                 do {
-                    // Re-review finding 4: the adapter requires an
-                    // img: BLOB ref or INLINE BASE64 — the staged
-                    // remote path is a HOST filesystem path, NOT a
-                    // blob id. The honest shape: read the file's
-                    // bytes through the fetch seam and send them as
-                    // inline data, with the MIME sniffed from the
-                    // bytes (magic numbers, not a hardcoded png).
-                    var images: [AgentChatOutgoingImage] = []
-                    for item in draftItems {
-                        guard case .image(_, let remotePath, _) = item else {
-                            continue
-                        }
-                        guard let bytes = try? await fetch?(remotePath),
-                            !bytes.isEmpty
-                        else {
-                            throw CocoaError(.fileReadCorruptFile)
-                        }
-                        images.append(AgentChatOutgoingImage(
-                            data: bytes,
-                            mimeType: Self.sniffImageMIME(bytes)))
-                    }
+                    // Image draft items ride the structured send as REAL
+                    // image content (send-never-waits, user directive):
+                    // a LANDED blob upload references the broker's img:
+                    // store; an IN-FLIGHT image sends INLINE base64 —
+                    // the picked bytes are in hand and Send NEVER waits
+                    // on the upload (it stays a background history-dedup
+                    // optimization). Re-review finding 4 stays live in
+                    // buildOutgoingImages: MIME is SNIFFED from the
+                    // bytes' magic numbers (Self.sniffImageMIME), never
+                    // hardcoded, and the img: ref is the broker's blob
+                    // id — never the host filesystem path.
+                    let images: [AgentChatOutgoingImage] = try await buildOutgoingImages()
                     try await deliverWithImages(text, images)
                     clearDraftAfterSend()
                     showSentConfirmation = true
@@ -1360,6 +1369,15 @@ struct ChatScreen: View {
                         try? await Task.sleep(for: .seconds(2))
                         showSentConfirmation = false
                     }
+                } catch let error as ChatAttachmentSendError {
+                    // Review rounds 3-4: the failure names the
+                    // attachment AND marks its tile; the error row
+                    // renders beside the tile rail, and the WHOLE draft
+                    // (text + items) stays. Local preparation/reads —
+                    // never an uncertain network delivery.
+                    deliveryError = nil
+                    attachmentErrorMessage = error.message
+                    failedAttachmentItemID = error.itemID
                 } catch {
                     // Visible + retryable: the draft (and items) stay.
                     deliveryError = "Send failed — your message may not have been delivered. Retry when ready."
@@ -1386,6 +1404,101 @@ struct ChatScreen: View {
                     deliveryError = "Send failed — your message may not have been delivered. Retry when ready."
                 }
             }
+        }
+    }
+
+    /// Builds the structured-send image array (send-never-waits, user
+    /// directive + review round on 1d437286, findings 1-4). Every image
+    /// rides INLINE base64, ALWAYS in the ORIGINAL DRAFT ORDER, with
+    /// bytes normalized through the SAME local preparation the upload
+    /// path uses (bounded, orientation-applied, metadata-stripped,
+    /// supported formats only — raw picker data never bypasses prep),
+    /// and the MIME from the PREPARED format. THROWS when an attachment
+    /// cannot be resolved (a failed local read, an unrecoverable
+    /// restored image): the draft is RETAINED and the failed
+    /// attachment reported — never a silent partial send, never a
+    /// silently omitted image. The blob upload continues in the
+    /// background purely for the history record; it never gates this.
+    ///
+    /// Sources per item, in draft order:
+    /// 1. the tile's local bytes (paste: in hand; picker: the async
+    ///    read has usually landed);
+    /// 2. the stored PhotosPickerItem (a Send racing the picker's
+    ///    LOCAL read awaits just that read — a moment, not the upload);
+    /// 3. the staged HOST path via the fetch seam (a RESTORED image
+    ///    after a surface reopen — its upload may have landed while
+    ///    the surface was away; the bytes are the same file the upload
+    ///    staged).
+    private func buildOutgoingImages() async throws -> [AgentChatOutgoingImage] {
+        var images: [AgentChatOutgoingImage] = []
+        // Round 4, finding 1: images are named by their ORDINAL among
+        // the held image tiles (image 1, image 2, …) so the error copy
+        // identifies WHICH tile failed even with several picked.
+        var imageOrdinal = 0
+        for item in draftItems {
+            guard case .image(let id, let remotePath, let localData) = item
+            else { continue }
+            imageOrdinal += 1
+            let displayName = "image \(imageOrdinal)"
+            do {
+                // Resolve THIS attachment's bytes — any of the three
+                // sources, in order; none of them is the upload.
+                var bytes: Data?
+                if let localData, !localData.isEmpty {
+                    bytes = localData
+                } else if let pickerItem = pendingPickerItems[id] {
+                    bytes = try await pickerItem.loadTransferable(type: Data.self) ?? nil
+                } else if !remotePath.isEmpty, let fetch {
+                    bytes = try await fetch(remotePath)
+                }
+                guard let bytes, !bytes.isEmpty else {
+                    // A resolvable-but-failed attachment is NEVER
+                    // silently skipped — the send aborts, the draft
+                    // stays, and the failure is identified per tile.
+                    throw ChatAttachmentSendError(
+                        itemID: id, displayName: displayName)
+                }
+                // Finding 4: normalize through the shared local
+                // preparation (supported formats, bounded, oriented) —
+                // never raw picker data with a guessed MIME.
+                let prepared = try await Self.imagePreparer.prepare(
+                    DataImageSelection(data: bytes))
+                defer { try? prepared.remove() }
+                // Round 4, finding 2: the prepared-file READ is INSIDE
+                // this attachment's error boundary — a read failure is
+                // a typed LOCAL failure naming THIS tile, never a
+                // generic uncertain-delivery error (nothing was
+                // submitted).
+                let preparedBytes = try Data(contentsOf: prepared.fileURL)
+                images.append(AgentChatOutgoingImage(
+                    data: preparedBytes,
+                    mimeType: prepared.format == .png
+                        ? "image/png" : "image/jpeg",
+                    byteLength: preparedBytes.count))
+                // The tile keeps its live preview; the send used the
+                // normalized bytes.
+            } catch let error as ChatAttachmentSendError {
+                throw error
+            } catch {
+                throw ChatAttachmentSendError(
+                    itemID: id, displayName: displayName)
+            }
+        }
+        return images
+    }
+
+    /// The shared image preparation instance for the inline send path
+    /// (the same default configuration the staging pipeline uses).
+    private static let imagePreparer = ImagePreparer()
+
+    /// One attachment's user-facing name for error copy (review round
+    /// 3, finding 2): images are "image", files carry their own name.
+    private static func attachmentDisplayName(_ item: ChatDraftItem) -> String {
+        switch item {
+        case .image: "image"
+        case .file(_, let name, _): name
+        case .quote(_, let text, _):
+            String(text.prefix(24))
         }
     }
 
@@ -1423,6 +1536,24 @@ struct ChatScreen: View {
             return "image/webp"
         }
         return "image/png"
+    }
+}
+
+/// A structured-send attachment failure that IDENTIFIES the attachment
+/// (review rounds 3-4): carries the failing tile's ITEM ID (so the
+/// tile can be MARKED, not just a composer row) and a distinguishing
+/// display name (images are named by their ordinal among the held
+/// image tiles — image 1, image 2 — so several picks are
+/// distinguishable; files carry their own name). Local
+/// read/preparation failures — the draft is always retained whole;
+/// distinct from uncertain network delivery, which keeps the generic
+/// retryable delivery copy.
+struct ChatAttachmentSendError: Error, Sendable, Equatable {
+    let itemID: String
+    let displayName: String
+
+    var message: String {
+        "The attachment \(displayName) could not be read for sending — it stays in your draft. Remove it or try again."
     }
 }
 
