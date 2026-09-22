@@ -1,15 +1,20 @@
 id = "heeler"
 name = "heeler"
-version = "0.4.0"
+version = "0.5.0"
 min_herdr_version = "0.7.5"
-description = "Pair a Meadow device by scanning a QR Pairing Code"
+description = "Meadow host package: pairing, agent notifications, and the host chat broker + agent adapters"
 platforms = ["linux", "macos"]
 
 [[build]]
 command = ["npm", "ci"]
 
+# Per-session broker supervision: idempotent; only the first session with a
+# dead broker spawns a supervisor (single-instance via the owner socket).
 [[startup]]
 command = ["node", "src/sidebar-hook.js"]
+
+[[startup]]
+command = ["node", "src/broker-hook.js"]
 
 [[actions]]
 id = "pair"
@@ -17,6 +22,41 @@ title = "Pair a mobile device"
 description = "Show a Pairing Code QR for the Meadow app"
 contexts = ["global"]
 command = ["node", "src/pair-action.js"]
+
+[[actions]]
+id = "setup"
+title = "Meadow host setup"
+description = "Install the broker runtime, start the shared broker (one per host), install agent adapter shims"
+contexts = ["global"]
+command = ["node", "src/setup-action.js"]
+
+[[actions]]
+id = "status"
+title = "Meadow host status"
+description = "Broker health, supervisor owner, runtime version, adapter shims, live agent registrations"
+contexts = ["global"]
+command = ["node", "src/setup-action.js"]
+
+[[actions]]
+id = "stop-broker"
+title = "Stop the chat broker"
+description = "Gracefully stop the shared broker supervisor (adapters reconnect on next start)"
+contexts = ["global"]
+command = ["node", "src/setup-action.js"]
+
+[[actions]]
+id = "upgrade-broker"
+title = "Upgrade the chat broker"
+description = "Re-sync the broker runtime from this plugin and restart the broker"
+contexts = ["global"]
+command = ["node", "src/setup-action.js"]
+
+[[actions]]
+id = "uninstall-adapters"
+title = "Uninstall agent adapter shims"
+description = "Remove the plugin-owned omp loader shim(s)"
+contexts = ["global"]
+command = ["node", "src/setup-action.js"]
 
 [[panes]]
 id = "pair"
