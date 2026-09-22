@@ -189,6 +189,13 @@ test('prompt.send: text-only stays a string; images build a content array', {tim
   const c3=calls.at(-1);
   assert.ok(Array.isArray(c3));
   assert.deepEqual(c3,[{type:'text',text:'look at this ref'},{type:'image',data:pngB64,mimeType:'image/png'}]);
+  // 3b) IMAGE-ONLY draft: empty text + nonempty images is ACCEPTED and
+  // delivers an EMPTY text block + the image (no filler text fabricated).
+  const r3b=await request({text:'',requestKey:'k3b',images:[{data:pngB64,mimeType:'image/png'}]});
+  assert.equal(r3b.result?.accepted,true,'image-only send must be accepted');
+  const c3b=calls.at(-1);
+  assert.ok(Array.isArray(c3b));
+  assert.deepEqual(c3b,[{type:'text',text:''},{type:'image',data:pngB64,mimeType:'image/png'}]);
   // 4) validations reject (nothing sent on): bad mime, both data+ref, unknown ref.
   const bad=[
    {code:'invalid_request',params:{text:'x',requestKey:'e1',images:[{data:pngB64,mimeType:'image/bmp'}]}},
@@ -196,11 +203,13 @@ test('prompt.send: text-only stays a string; images build a content array', {tim
    // Unknown blob ref: the blob store's own contract code, not invalid_request.
    {code:'item_not_found',params:{text:'x',requestKey:'e3',images:[{ref:'img:missing:c:0',mimeType:'image/png'}]}},
    {code:'invalid_request',params:{text:'x',requestKey:'e4',images:[]}},
+   // Genuinely empty submission: no text AND no images.
+   {code:'invalid_request',params:{text:'',requestKey:'e5'}},
   ];
   for(const {code,params} of bad){
    const r=await request(params);
    assert.equal(r.error?.code,code,JSON.stringify(params));
-   assert.equal(calls.length,3,'no send after a rejected prompt');
+   assert.equal(calls.length,4,'no send after a rejected prompt');
   }
  } finally {
   handlers.get('session_shutdown')?.({},ctx);

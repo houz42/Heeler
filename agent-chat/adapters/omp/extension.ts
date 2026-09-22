@@ -639,6 +639,9 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 	 * prompt.send content: the text-only path is the exact string (identical
 	 * call as before); with images, a content array — text block first, then
 	 * image blocks — matching omp's sendUserMessage content-array contract.
+	 * Image-only drafts carry an EMPTY text block (live-verified: omp commits
+	 * the record with an empty text block + the image and runs the turn; no
+	 * filler text is fabricated).
 	 */
 	function buildPromptContent(text: string, rawImages: unknown): string | ContentBlock[] {
 		const images = resolvePromptImages(rawImages);
@@ -691,8 +694,15 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 					return;
 				}
 				case "prompt.send": {
-					if (typeof params.text !== "string" || params.text.length === 0) {
-						throw new HistoryError("invalid_request", "text (non-empty string) is required");
+					// text may be EMPTY when images carry the content (image-only
+					// draft); a genuinely empty submission — no text AND no
+					// images — is invalid_request. No filler text is fabricated.
+					if (typeof params.text !== "string") {
+						throw new HistoryError("invalid_request", "text (string) is required");
+					}
+					const hasImages = Array.isArray(params.images) && params.images.length > 0;
+					if (params.text.length === 0 && !hasImages) {
+						throw new HistoryError("invalid_request", "text and images are both empty; nothing to send");
 					}
 					if (typeof params.requestKey !== "string" || params.requestKey.length === 0) {
 						throw new HistoryError("invalid_request", "requestKey (non-empty string) is required");
@@ -863,6 +873,43 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 							execution: { kind: "insert", text: `/${c.name}` },
 						})),
 					});
+					return;
+				}
+
+				case "command.invoke": {
+					// v3 (structured commands): explicit invocation by opaque
+					// catalog id; acceptance-only delivery semantics — NEVER
+					// send.confirmed (the text-match origin proof structurally
+					// cannot confirm a command; design §4a).
+					if (typeof params.commandId !== "string" || params.commandId.length === 0) {
+						throw new HistoryError("invalid_request", "commandId (non-empty string) is required");
+					}
+					if (typeof params.requestKey !== "string" || params.requestKey.length === 0) {
+						throw new HistoryError("invalid_request", "requestKey (non-empty string) is required");
+					}
+					if (Array.isArray(params.arguments)) {
+						for (const a of params.arguments) {
+							if (typeof a !== "string") {
+								throw new HistoryError("invalid_request", "arguments must be an array of strings");
+							}
+						}
+					} else if (params.arguments !== undefined) {
+						throw new HistoryError("invalid_request", "arguments must be an array of strings when present");
+					}
+					// Shared per-session requestKey namespace: the same bounded
+					// dedup cache prompt.send uses, cleared on generation bump.
+					if (dedupSeen.has(params.requestKey)) {
+						respond(frame.id, { accepted: true, requestKey: params.requestKey }); // idempotent replay
+						return;
+					}
+					// Closed gate, honestly: omp's extension API exposes no
+					// command-execution surface (sendUserMessage hardcodes
+					// expandPromptTemplates:false; AgentSession.prompt is not
+					// exposed) — the catalog is insert-only, so invocation is
+					// refused rather than degraded to a prompt (never a silent
+					// text fallback). Revisit when upstream omp ships an
+					// execution API; the key is NOT consumed by the refusal.
+					respondError(frame.id, "unsupported_capability", "this session's commands are insert-only; no command execution surface is available");
 					return;
 				}
 				case "interactions.list": {
