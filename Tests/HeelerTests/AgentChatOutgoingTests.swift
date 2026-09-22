@@ -628,6 +628,97 @@ struct AgentChatDeliveryContractE2ETests {
     }
 }
 
+/// Older-history paging over the scripted broker (the v2 device
+/// regression): the recent page's olderCursor MUST surface as
+/// hasOlder (the sentinel's mount condition), and loadOlder must
+/// PREPEND the older page's messages above the recent window.
+@MainActor
+struct AgentChatOlderPagingE2ETests {
+    @Test("recent page installs hasOlder; loadOlder prepends older messages")
+    func olderPagingWorks() async throws {
+        let pipe = ScriptedChatPipe()
+        let instanceId = "inst-1"
+        let broker = Task<Void, Never> {
+            await pipe.brokerSend(
+                #"{"type":"welcome","protocol":1,"maxFrameBytes":1048576}"#)
+            var answered = 0
+            while !Task.isCancelled {
+                let frames = await pipe.receivedFrames
+                guard frames.count > answered else {
+                    try? await Task.sleep(for: .milliseconds(5))
+                    continue
+                }
+                let frame = frames[answered]
+                answered += 1
+                guard let data = frame.data(using: .utf8),
+                    let object = (try? JSONSerialization.jsonObject(
+                        with: data)) as? [String: Any],
+                    let id = object["id"] as? String,
+                    let method = object["method"] as? String
+                else { continue }
+                await Self.answer(pipe: pipe, id: id, method: method,
+                    instanceId: instanceId)
+            }
+        }
+        defer { broker.cancel() }
+        defer { Task { try? await pipe.close(timeout: .seconds(2)) } }
+
+        let store = AgentChatStore(
+            pipeFactory: AgentChatPipeFactory(
+                open: { _ in pipe },
+                hostRecord: {
+                    Host(address: "h", username: "u",
+                        brokerChatSocketPath: "/tmp/chat.sock")
+                }),
+            paneIdentity: { HerdrPaneSessionIdentity(sessionFilePath: "/s/file") })
+        await store.start()
+        for _ in 0..<100 where store.phase != .ready {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(store.phase == .ready)
+
+        // THE regression: the recent page carried an olderCursor —
+        // hasOlder MUST be true (it was permanently false before the
+        // fix: the cursor was never installed, the top sentinel never
+        // mounted, loadOlder could not even run).
+        #expect(store.hasOlder == true)
+        #expect(store.content.messages.count == 1)
+
+        // loadOlder: the older page's messages PREPEND above the
+        // recent window (oldest first — the adapter's page order).
+        await store.loadOlder()
+        #expect(store.hasOlder == false)  // terminal cursor served
+        #expect(store.content.messages.count == 3)
+        #expect(store.content.messages.map(\.id) == [
+            AgentChatMapper.stableID(for: "old-1"),
+            AgentChatMapper.stableID(for: "old-2"),
+            AgentChatMapper.stableID(for: "rec-999"),
+        ])
+    }
+
+    private static func answer(
+        pipe: ScriptedChatPipe, id: String, method: String, instanceId: String
+    ) async {
+        switch method {
+        case "sessions.list":
+            await pipe.brokerSend(
+                #"{"type":"response","id":"\#(id)","result":{"sessions":[{"instanceId":"\#(instanceId)","sessionId":"s1","generation":1,"locator":{"sessionFile":"/s/file"},"agent":{"kind":"omp","version":"1"},"capabilities":{"history":true,"streaming":true,"prompt":true,"interrupt":true,"interactions":false,"commands":true,"attachments":true,"branches":false}}]}}"#)
+        case "sessions.subscribe":
+            await pipe.brokerSend(
+                #"{"type":"response","id":"\#(id)","result":{"subscribed":true}}"#)
+        case "history.open":
+            await pipe.brokerSend(
+                #"{"type":"response","id":"\#(id)","result":{"sessionId":"s1","generation":1,"revision":"rev-1","throughSeq":1,"items":[{"kind":"message","id":"rec-999","author":{"role":"user"},"createdAt":null,"blocks":[{"type":"text","text":"newest message"}]}],"olderCursor":"cursor-page-1"}}"#)
+        case "history.before":
+            await pipe.brokerSend(
+                #"{"type":"response","id":"\#(id)","result":{"sessionId":"s1","generation":1,"revision":"rev-1","throughSeq":0,"items":[{"kind":"message","id":"old-1","author":{"role":"user"},"createdAt":null,"blocks":[{"type":"text","text":"first message"}]},{"kind":"message","id":"old-2","author":{"role":"user"},"createdAt":null,"blocks":[{"type":"text","text":"second message"}]}],"olderCursor":null}}"#)
+        default:
+            await pipe.brokerSend(
+                #"{"type":"response","id":"\#(id)","result":{}}"#)
+        }
+    }
+}
+
 /// Serializes history.open call numbering across the broker task and
 /// the test body.
 actor HistoryOpenCounter {

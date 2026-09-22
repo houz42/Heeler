@@ -417,8 +417,6 @@ final class AgentChatStore {
                     params: .object(["cursor": .string(currentCursor)])))
             let page = try Self.decode(AgentChatPage.self, from: value)
             await prependPage(page)
-            olderCursor = page.olderCursor
-            hasOlder = page.olderCursor != nil
         } catch let error as AgentChatError where error.requiresFreshOpen {
             await start()
         } catch is CancellationError {
@@ -1060,7 +1058,15 @@ final class AgentChatStore {
     /// Maps page items into ChatContent. References (oversized items)
     /// read their full detail BEFORE rendering; a failed read skips the
     /// item rather than render a partial as complete.
+    ///
+    /// The page's olderCursor OWNS the paging window state: a recent
+    /// page (history.open) installs it (the v2 regression — the broker
+    /// cutover dropped this, so hasOlder stayed false and the top
+    /// sentinel never even mounted); an older page (history.before)
+    /// advances it. olderCursor nil = terminal (no more history).
     private func applyPage(_ page: AgentChatPage, replaceRecent: Bool) async {
+        olderCursor = page.olderCursor
+        hasOlder = page.olderCursor != nil
         var messages: [ChatMessage] = []
         for item in page.items {
             var mapped = item
@@ -1082,12 +1088,21 @@ final class AgentChatStore {
         if replaceRecent {
             content = ChatContent(messages: messages, toolResults: results)
         } else {
-            content.messages.append(contentsOf: messages)
-            content.toolResults.append(contentsOf: results)
+            // Older pages arrive chronologically (the adapter walks
+            // newest→oldest and reverses into page order): prepend
+            // ABOVE the current window, never append.
+            content.messages.insert(
+                contentsOf: messages, at: 0)
+            content.toolResults.insert(
+                contentsOf: results, at: 0)
         }
         if replaceRecent {
             reconcileOutgoing(against: messages)
         }
+    }
+
+    private func prependPage(_ page: AgentChatPage) async {
+        await applyPage(page, replaceRecent: false)
     }
 
     /// Echo → committed reconciliation: delegates to the pure
@@ -1099,11 +1114,6 @@ final class AgentChatStore {
         if outgoing.allSatisfy({ $0.state != .failed && $0.state != .ambiguous }) {
             lastSendFailure = nil
         }
-    }
-
-    /// Older pages prepend (above the rendered window).
-    private func prependPage(_ page: AgentChatPage) async {
-        await applyPage(page, replaceRecent: false)
     }
 
     // MARK: Errors
