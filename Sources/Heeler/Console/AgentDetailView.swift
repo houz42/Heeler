@@ -427,16 +427,12 @@ struct AgentDetailView: View {
                     // as one structured prompt.send.
                     try await store.send(text, images: images)
                 },
-                retrySend: { echoText in
-                    // Review gap 2: the failed bubble's retry tap. The
-                    // text is the echo's own text (the seam's
-                    // identifier — the projection row carries it).
-                    guard let store = brokerChat,
-                        let echo = store.outgoing.first(where: {
-                            $0.text == echoText && $0.state == .failed
-                        })
-                    else { return }
-                    try await store.retry(echo)
+                retrySend: { echoID in
+                    // Re-review finding 1: retry by the ECHO UUID —
+                    // the failed row's messageID (the projection
+                    // derives it from "echo:"+echo.id).
+                    guard let store = brokerChat else { return }
+                    try await store.retry(echoID: echoID)
                 },
                 pendingUnsupported: !store.askSupported,
                 authorLabel: "Heeler · \(agent.agent.kind.lowercased())",
@@ -566,7 +562,14 @@ struct AgentDetailView: View {
                     mimeType: image.mimeType,
                     byteLength: image.byteLength)))
             }
-            if let message = echo.failureMessage, echo.state == .failed {
+            if let message = echo.failureMessage,
+                echo.state == .failed || echo.state == .ambiguous
+            {
+                // Failed: retry keeps the same key (broker dedups).
+                // Ambiguous (re-review finding 2): the wire died
+                // mid-flight — the honest uncertain copy; a retry
+                // mints a fresh key in the store, so the tap stays
+                // safe.
                 blocks.append(.notice(
                     text: "\(message) Tap to retry.",
                     level: "error"))
