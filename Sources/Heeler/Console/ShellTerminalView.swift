@@ -244,7 +244,10 @@ struct ShellTerminalView: View {
                 else { return }
                 setKeyboardMode(.text)
             }
-            .onAppear { store.rejoin() }
+            .onAppear {
+                store.rejoin()
+                store.terminalViewDidAppear()
+            }
             .onDisappear { store.leave() }
     }
 

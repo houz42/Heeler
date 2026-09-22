@@ -713,6 +713,13 @@ struct AgentTerminalView: View {
             // Arming again leaves a stale one-shot that can raise a dismissed
             // keyboard on a later replacement.
         }
+        // The pipeline's bounded default-geometry fallback arm: fires for
+        // every pipeline (initial appearance and every replacement), so a
+        // device whose Ghostty surface never reports a valid grid still
+        // opens its PTY (the first real size report corrects in-band).
+        .onChange(of: attach.terminalID, initial: true) { _, _ in
+            attach.terminalViewDidAppear()
+        }
         #if DEBUG
         // A fresh terminal ID means a new Attach pipeline, including a
         // foreground recovery. Mark its visible detail edge separately from

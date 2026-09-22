@@ -320,6 +320,14 @@ final class ShellTerminalStore {
         terminal.viewDidResize(cols: cols, rows: rows)
     }
 
+    /// Arms the current pipeline's bounded default-geometry fallback (a
+    /// device whose Ghostty surface never reports a valid grid still opens
+    /// its PTY; the first genuine size report corrects it in-band).
+    func terminalViewDidAppear() {
+        guard lifecycleState == .active, isOnStage() else { return }
+        terminal.terminalViewDidAppear()
+    }
+
     func send(_ data: Data) { terminal.send(data) }
 
     func scroll(_ sequence: Data, rows: Int) {
@@ -446,6 +454,9 @@ final class ShellTerminalStore {
             self.terminal = replacement
             self.activationRecovery.bind(to: replacement.surfaceID)
             self.isReplacing = false
+            // Same bounded default-geometry fallback as every other
+            // pipeline start.
+            replacement.terminalViewDidAppear()
         }
     }
 
@@ -490,6 +501,10 @@ final class ShellTerminalStore {
             self.terminal = replacement
             self.activationRecovery.bind(to: replacement.surfaceID)
             self.isReplacing = false
+            // The pipeline's bounded default-geometry fallback: a device
+            // whose surface never reports a grid still opens its PTY; the
+            // first genuine size report corrects it in-band.
+            replacement.terminalViewDidAppear()
         }
     }
 

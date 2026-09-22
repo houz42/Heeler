@@ -170,6 +170,14 @@ final class AgentAttachStore {
         terminal.feed
     }
 
+    /// The terminal surface appeared on stage. Feeds the bounded
+    /// default-geometry fallback (a device whose Ghostty surface never
+    /// reports a valid grid still opens its PTY; the first real size
+    /// report corrects it in-band).
+    func terminalViewDidAppear() {
+        terminal.terminalViewDidAppear()
+    }
+
     #if DEBUG
     func terminalDidBecomeVisible() {
         terminal.restorationTrace.emit(.agentDetailVisible, generation: terminal.transportGeneration)

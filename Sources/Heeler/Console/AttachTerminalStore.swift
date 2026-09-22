@@ -228,9 +228,23 @@ final class AttachTerminalStore {
     private(set) var acquiredTransportGeneration: UInt64?
     private var stopRequested = false
     private var preservesPendingPasteOnStop = false
+    private var runTask: Task<Void, Never>?
     private var session: TerminalAttachSession?
     private var inputGeneration: TerminalInputController.SessionGeneration?
-    private var runTask: Task<Void, Never>?
+    /// The bounded wait for a genuine first size report before the fallback
+    /// opens the session at the default geometry.
+    private var sizeFallbackTask: Task<Void, Never>?
+    /// How long the pipeline waits for the surface's first real size report
+    /// before opening the PTY at the fallback geometry. Long enough that an
+    /// ordinary mount's report (first layout, same runloop turns) always
+    /// wins; short enough that a stuck surface reads as connecting, not
+    /// blank.
+    private static let sizeReportGrace: Duration = .seconds(1.5)
+    /// The PTY geometry the fallback opens with. 80×24 is the terminal
+    /// default every remote program handles; the first genuine size report
+    /// corrects it in-band.
+    private static let fallbackColumns = 80
+    private static let fallbackRows = 24
     #if DEBUG
     private(set) var restorationTrace = AttachRestorationTrace()
 
@@ -286,11 +300,40 @@ final class AttachTerminalStore {
             runTerminal: runTerminal)
     }
 
+    /// The terminal view appeared. On some devices the Ghostty surface can
+    /// mount without ever reporting a valid grid (its first size callback
+    /// lands before the store's callbacks are wired, or the surface sits in
+    /// a zero-frame container through the whole appearance), which left the
+    /// pipeline stuck in `.waitingForSize` and the screen blank forever
+    /// (#device). Arm a bounded fallback: if no real size report opens the
+    /// session within the grace window, start it at the default 80×24 — the
+    /// PTY semantics carry the correction, because the first genuine
+    /// `viewDidResize` rides the live channel as a window-change exactly
+    /// like any later resize.
+    func terminalViewDidAppear() {
+        guard status == .waitingForSize, sizeFallbackTask == nil else { return }
+        sizeFallbackTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.sizeReportGrace)
+            guard !Task.isCancelled, let self else { return }
+            self.sizeFallbackTask = nil
+            guard self.status == .waitingForSize, self.runTask == nil else { return }
+            #if DEBUG
+            self.restorationTrace.emit(
+                .initialResize, generation: self.transportGeneration)
+            #endif
+            self.cols = Self.fallbackColumns
+            self.rows = Self.fallbackRows
+            self.start()
+        }
+    }
+
     /// The terminal view's geometry, reported on first layout and on every
     /// change (rotation, split view, keyboard). The first report opens the
     /// session; later changes ride the live channel as window-change.
     func viewDidResize(cols: Int, rows: Int) {
         guard cols > 0, rows > 0, cols != self.cols || rows != self.rows else { return }
+        sizeFallbackTask?.cancel()
+        sizeFallbackTask = nil
         self.cols = cols
         self.rows = rows
         if runTask == nil {
@@ -331,6 +374,8 @@ final class AttachTerminalStore {
 
     /// Reattaches after the session ended remotely.
     func retry() {
+        sizeFallbackTask?.cancel()
+        sizeFallbackTask = nil
         guard case .ended = status, runTask == nil else { return }
         start()
     }
@@ -350,12 +395,17 @@ final class AttachTerminalStore {
         if let session {
             await session.end()
         }
+        if let task = sizeFallbackTask {
+            task.cancel()
+            sizeFallbackTask = nil
+        }
         if let task = runTask {
             task.cancel()
             await task.value
         }
         status = .stopped
     }
+
 
     private func start() {
         status = .connecting
