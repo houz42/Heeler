@@ -1,0 +1,22 @@
+{
+  "name": "agent-chat",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent-agnostic chat broker and client library (wire protocol v1); runtime is Node stdlib ESM, no dependencies.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "agent-chat-broker": "bin/broker.mjs"
+  },
+  "exports": {
+    "./protocol": "./src/protocol.mjs",
+    "./frame": "./src/frame.mjs",
+    "./broker": "./src/broker.mjs",
+    "./client": "./src/client.mjs"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.mjs test/*.test.ts"
+  }
+}

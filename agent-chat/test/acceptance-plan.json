@@ -1,0 +1,12 @@
+{
+  "protocol": 1,
+  "scenarios": [
+    {"id":"history-bounded", "source":"real copied long omp session", "checks":["serialized history result respects byte budget", "opaque cursor pages have no duplicate item IDs", "oversized item references reassemble without data loss", "text thinking tool calls results custom messages and boundaries remain typed"]},
+    {"id":"live-reconcile", "source":"disposable real omp process", "checks":["subscribe before history.open", "snapshot throughSeq separates buffered live events", "real model streaming has stable provisional stream and block IDs", "history.changed reconciles to committed IDs"]},
+    {"id":"lifecycle", "source":"disposable real omp process", "checks":["client reconnect preserves active session", "branch switch invalidates old generation", "old requestKey does not submit duplicate prompt", "two subscribers remain independent"]},
+    {"id":"limits", "source":"isolated broker + protocol fixtures", "checks":["strict UTF8 rejects malformed frames", "unsafe socket paths fail closed", "second broker never removes owner socket", "large image and tool arguments use references", "slow peer cannot grow unbounded buffers", "overload and disconnect reject pending work explicitly"]},
+    {"id":"ask-opt-in", "source":"disposable real omp with wrapper enabled", "checks":["disabled wrapper advertises no interaction answer capability", "pending requests replay after reconnect", "terminal and remote responses first-winner only", "multi-question and multi-select validates IDs", "cancel session switch and shutdown clear pending requests", "native scheduler exclusivity difference remains disclosed"]},
+    {"id":"remote-ssh", "source":"Mac through SSH streamlocal forwarding to devbox broker", "checks":["protocol1 handshake", "real long-history paging", "live streaming", "reconnect", "latency transferred bytes and RSS measured"]}
+  ],
+  "deviceGate":"Simulator interaction proof first; user iPhone acceptance before main merge; no phone install during this implementation phase"
+}
