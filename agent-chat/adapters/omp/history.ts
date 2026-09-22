@@ -88,6 +88,9 @@ export type ChatItem =
 			createdAt?: string;
 			blocks: Block[];
 			status: "committed";
+			/** Send correlation (client prompt.send -> this record); present
+			 *  only when a durable marker bound this record to a requestKey. */
+			metadata?: { requestKey: string };
 	  }
 	| {
 			id: string;
@@ -460,6 +463,11 @@ export class HistoryService {
 	private itemHashes: Map<string, string> = new Map();
 	/** blobId -> raw-bytes hash for chunk-sequence consistency. */
 	private blobHashes: Map<string, string> = new Map();
+	/** recordId -> requestKey from durable send-correlation markers
+	 *  (customType 'heeler-chat.send.confirmed', written by the adapter at
+	 *  user-record commit; stashed during the newest->oldest page walk,
+	 *  attached as item metadata on the correlated user message). */
+	private sendCorrelations: Map<string, string> = new Map();
 
 	constructor(reader: SessionReader) {
 		this.reader = reader;
@@ -468,6 +476,7 @@ export class HistoryService {
 	dispose(): void {
 		this.itemHashes.clear();
 		this.blobHashes.clear();
+		this.sendCorrelations.clear();
 	}
 
 	// -- paging --------------------------------------------------------------
@@ -506,6 +515,36 @@ export class HistoryService {
 		return this.pageFrom(meta, cursor.entryId, limit, maxBytes);
 	}
 
+	/** Marker customType written by the adapter's send-correlation path. */
+	private static readonly SEND_MARKER = "heeler-chat.send.confirmed";
+
+	/**
+	 * Stash a durable send-correlation binding when the newest->oldest walk
+	 * crosses its marker entry (a marker sits NEWER than its record). The
+	 * map persists across pages: a page whose window covers the record
+	 * covered the marker in this or an earlier walk of the same instance.
+	 */
+	private stashSendMarker(entry: SessionEntryLike): void {
+		if (entry.type !== "custom" || entry.customType !== HistoryService.SEND_MARKER) return;
+		const data = entry.data;
+		if (typeof data !== "object" || data === null) return;
+		const recordId = (data as { recordId?: unknown }).recordId;
+		const requestKey = (data as { requestKey?: unknown }).requestKey;
+		if (typeof recordId !== "string" || recordId.length === 0 || typeof requestKey !== "string" || requestKey.length === 0) return;
+		this.sendCorrelations.set(recordId, requestKey);
+		if (this.sendCorrelations.size > CONSISTENCY_MAX) {
+			const oldest = this.sendCorrelations.keys().next().value;
+			if (typeof oldest === "string") this.sendCorrelations.delete(oldest);
+		}
+	}
+
+	/** Attach the stashed correlation to the correlated user-message item. */
+	private attachCorrelation(entryId: string, items: ChatItem[]): ChatItem[] {
+		const requestKey = this.sendCorrelations.get(entryId);
+		if (requestKey === undefined) return items;
+		return items.map(item => (item.kind === "message" && item.id === entryId ? { ...item, metadata: { requestKey } } : item));
+	}
+
 	private pageFrom(meta: PageMeta, startId: string, limit: number, maxBytes: number): PageResult {
 		// Walk newest -> oldest; each ENTRY is embedded atomically (full items, or
 		// references when the full group cannot fit, or nothing at all when even
@@ -518,7 +557,8 @@ export class HistoryService {
 		while (cursorId !== null && groups.length < limit) {
 			const entry = this.reader.getEntry(cursorId);
 			if (entry === undefined) break; // broken chain: stop at the gap
-			const items = projectEntry(this.reader, entry);
+			this.stashSendMarker(entry);
+			const items = this.attachCorrelation(entry.id, projectEntry(this.reader, entry));
 			if (items.length > 0) {
 				const groupBytes = sizeOf(items);
 				if (used + groupBytes <= maxBytes) {

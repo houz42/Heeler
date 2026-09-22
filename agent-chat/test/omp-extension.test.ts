@@ -242,3 +242,99 @@ test('registration declares attachments capability', {timeout:5000}, async () =>
   await rm(dir,{recursive:true,force:true});
  }
 });
+
+// Send correlation: prompt.send(requestKey) must produce a send.confirmed
+// event whose recordId IS the committed user record's id (not a marker id),
+// with origin proven by text match — a terminal-typed user message never
+// consumes a pending key and never emits send.confirmed.
+test('send.confirmed: real record id, origin-checked, FIFO survives foreign messages', {timeout:5000}, async () => {
+ const dir=await mkdtemp(join(tmpdir(),'chat-send-corr-'));
+ const socketPath=join(dir,'broker.sock');
+ const old=process.env.HEELER_CHAT_SOCKET;
+ process.env.HEELER_CHAT_SOCKET=socketPath;
+ const handlers=new Map();
+ const events=[]; // {type, requestKey, recordId}
+ const markers=[]; // durable marker entries appended via pi.appendEntry
+ // Fake session tree: entries chain parent->child; the leaf is whatever the
+ // "agent" last committed. Start with an assistant message as the leaf.
+ const mk=(id,parentId,type,message)=>({id,parentId,type,...(message!==undefined?{message}:{})});
+ const entries=new Map([
+  ['a1',mk('a1',null,'message',{role:'assistant',content:[{type:'text',text:'prior turn'}]})],
+ ]);
+ let leafId='a1';
+ let nextId=0;
+ const ctx={sessionManager:{
+  getSessionId:()=>'test-session',
+  getLeafId:()=>leafId,
+  getEntry:id=>entries.get(id),
+  appendCustomEntry:(customType,data)=>{const id=`marker-${++nextId}`;entries.set(id,mk(id,leafId,'custom'));markers.push({id,customType,data});return id;},
+ },abort(){}};
+ const commitUser=(text)=>{const id=`u-${++nextId}`;entries.set(id,mk(id,leafId,'message',{role:'user',content:[{type:'text',text}]}));leafId=id;handlers.get('message_end')({message:{role:'user'}},ctx);return id;};
+ let conn;
+ const registered=Promise.withResolvers();
+ const server=net.createServer(socket=>{
+  conn=socket;let buffer='';socket.setEncoding('utf8');
+  socket.on('data',chunk=>{
+   buffer+=chunk;
+   for(;;){const end=buffer.indexOf('\n');if(end<0)break;
+    const frame=JSON.parse(buffer.slice(0,end));buffer=buffer.slice(end+1);
+    if(frame.type==='hello')socket.write(JSON.stringify({type:'welcome',protocol:1,maxFrameBytes:1048576})+'\n');
+    if(frame.type==='register'){socket.write(JSON.stringify({type:'registered'})+'\n');registered.resolve();}
+    if(frame.type==='event'&&frame.event?.type==='send.confirmed')events.push(frame.event);
+   }
+  });
+ });
+ const request=(params)=>{
+  const {promise,resolve}=Promise.withResolvers();
+  const id='req-'+Math.random().toString(36).slice(2);
+  let buf='';
+  const onData=chunk=>{
+   buf+=chunk;
+   for(;;){const end=buf.indexOf('\n');if(end<0)break;
+    const frame=JSON.parse(buf.slice(0,end));buf=buf.slice(end+1);
+    if(frame.type==='response'&&frame.id===id){conn.off('data',onData);resolve(frame);}
+   }
+  };
+  conn.on('data',onData);
+  conn.write(JSON.stringify({type:'request',id,method:'prompt.send',params})+'\n');
+  return promise;
+ };
+ try {
+  server.listen(socketPath);await once(server,'listening');
+  extension({
+   on:(name,fn)=>handlers.set(name,fn),
+   sendUserMessage(){},
+   getCommands:()=>[],
+   appendEntry:(customType,data)=>ctx.sessionManager.appendCustomEntry(customType,data),
+  });
+  handlers.get('session_start')({},ctx);
+  await registered.promise;
+  // Broker sends with requestKey k1; BEFORE its record lands, a TERMINAL-typed
+  // user message commits (different text) — it must NOT consume k1.
+  const r=await request({text:'broker prompt one',requestKey:'k1'});
+  assert.equal(r.result?.accepted,true);
+  commitUser('typed at the terminal');
+  assert.equal(events.length,0,'a foreign (terminal) user message must not emit send.confirmed');
+  // Now the broker prompt's record commits: k1 confirms with the REAL id.
+  const recordId=commitUser('broker prompt one');
+  await new Promise(r=>setTimeout(r,100)); // event frame delivery over the socket
+  assert.equal(events.length,1);
+  assert.equal(events[0].requestKey,'k1');
+  assert.equal(events[0].recordId,recordId,'recordId must be the committed user record id, not a marker id');
+  assert.equal(events[0].recordId.startsWith('u-'),true);
+  assert.ok(events[0].recordId!=='marker-1','must not be the marker entry id');
+  // The durable marker binds the SAME real record id.
+  assert.equal(markers.length,1);
+  assert.equal(markers[0].customType,'heeler-chat.send.confirmed');
+  assert.equal(markers[0].data.recordId,recordId);
+  assert.equal(markers[0].data.requestKey,'k1');
+  // A user record with no pending send (empty FIFO) confirms nothing.
+  commitUser('typed again at terminal');
+  assert.equal(events.length,1);
+ } finally {
+  handlers.get('session_shutdown')?.({},ctx);conn?.destroy();
+  const closed=Promise.withResolvers();server.close(closed.resolve);await closed.promise;
+  if(old===undefined)delete process.env.HEELER_CHAT_SOCKET;else process.env.HEELER_CHAT_SOCKET=old;
+  await rm(dir,{recursive:true,force:true});
+ }
+});

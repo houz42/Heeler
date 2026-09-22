@@ -138,26 +138,63 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 
 	/**
 	 * Broker-originated sends awaiting their committed user record, in send
-	 * order. At each user message_end the head is popped and its requestKey
-	 * is durably correlated to the committed record id (marker entry +
-	 * send.confirmed event). FIFO discipline is exact for sequential sends;
-	 * interleaved local/CLI user messages simply never match a key.
+	 * order. At each user message_end the FIFO is matched (see
+	 * correlateCommittedSend) and the matched send's requestKey is durably
+	 * bound to the committed record id (marker entry + send.confirmed event).
 	 */
-	const pendingSends: Array<string> = [];
+	const pendingSends: Array<{ requestKey: string; text: string }> = [];
 
-	/** Correlate a committed user record to its send's requestKey.
-	 * Pops the FIFO head (the oldest in-flight prompt.send), binds it
-	 * durably to the committed record id via sessionManager.appendCustomEntry,
-	 * and emits a send.confirmed event so the client can authoritatively
-	 * match its echo to the landed record. */
-	function correlateCommittedSend(): void {
-		const requestKey = pendingSends.shift();
-		if (requestKey === undefined) return;
-		if (sessionFile !== undefined) {
-			const marker = { type: "send.confirmed", requestKey, timestamp: Date.now() };
-			const recordId = ctx.sessionManager?.appendEntry?.("heeler:send", marker);
-			if (recordId !== undefined) emitEvent("send.confirmed", { requestKey, recordId: String(recordId) });
+	/** Text of a committed user record: string content, or joined text blocks. */
+	function committedRecordText(entry: { type: string; message?: { content?: unknown } } | undefined): string | undefined {
+		const content = entry?.message?.content;
+		if (typeof content === "string") return content;
+		if (!Array.isArray(content)) return undefined;
+		const texts: string[] = [];
+		for (const block of content) {
+			if (typeof block === "object" && block !== null && "type" in block && block.type === "text" && "text" in block && typeof block.text === "string") {
+				texts.push(block.text);
+			}
 		}
+		return texts.length === 0 ? undefined : texts.join(" ");
+	}
+
+	/**
+	 * Correlate the just-committed user record to its broker-originated send.
+	 *
+	 * Origin is proven, not assumed: the committed record (the session leaf,
+	 * verified type message / role user) must TEXT-match a pending send. A
+	 * terminal-typed message matches nothing (or finds the FIFO empty) and
+	 * consumes no requestKey — no send.confirmed is emitted for it. On a
+	 * match the REAL committed record id is bound durably (hidden marker
+	 * entry via pi.appendEntry, consumed by the read-side history attach)
+	 * and announced live via the send.confirmed event. A text that omp
+	 * transformed (mentions, slash commands) matches nothing — honest
+	 * absence (no confirmation) beats a wrong confirmation.
+	 */
+	function correlateCommittedSend(ctx: LocalCtx | null): void {
+		if (pendingSends.length === 0) return; // terminal-origin: nothing to confirm
+		const sm = ctx?.sessionManager ?? currentCtx?.sessionManager;
+		if (sm === undefined) return;
+		const leafId = sm.getLeafId();
+		const entry = leafId === null ? undefined : sm.getEntry(leafId);
+		if (entry === undefined || entry.type !== "message" || entry.message?.role !== "user") return; // not a committed user record
+		const recordText = committedRecordText(entry);
+		if (recordText === undefined) return;
+		const match = pendingSends.findIndex(s => s.text === recordText);
+		if (match === -1) return; // a terminal/interleaved message must not consume a key
+		const { requestKey } = pendingSends.splice(match, 1)[0]!;
+		const recordId = leafId!; // the REAL committed user record's id
+		// Durable binding: a hidden marker entry the read side re-attaches as
+		// record metadata. Absent appendEntry (older host) the live event still
+		// fires; only the durable read-side attach degrades.
+		if (pi.appendEntry !== undefined) {
+			try {
+				pi.appendEntry("heeler-chat.send.confirmed", { requestKey, recordId, timestamp: new Date().toISOString() });
+			} catch (error) {
+				log("send-correlation marker write failed:", String(error));
+			}
+		}
+		emitEvent("send.confirmed", { requestKey, recordId });
 	}
 
 	// -- socket + bounded outgoing queue ---------------------------------------
@@ -662,10 +699,10 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 						if (typeof oldest === "string") dedupSeen.delete(oldest);
 					}
 					// Queue for send-correlation: when this prompt's user record is
-					// committed (user message_end), its requestKey is durably
-					// bound to the record id. FIFO head matches the next committed
-					// broker-originated user message.
-					if (pendingSends.length < PENDING_SENDS_MAX) pendingSends.push(params.requestKey);
+					// committed (user message_end), its requestKey is durably bound
+					// to the record id. The sent TEXT is carried for origin
+					// matching (a terminal-typed message must never consume a key).
+					if (pendingSends.length < PENDING_SENDS_MAX) pendingSends.push({ requestKey: params.requestKey, text: params.text });
 					// Text-only send: identical string call as before (byte for
 					// byte); structured send: content ARRAY so images reach the
 					// provider as real image content, not inline text.
@@ -903,7 +940,7 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 		seq = 0;
 		throughSeq = 0;
 		dedupSeen.clear();
-		activeStreams.clear();
+		pendingSends.length = 0; // old-session sends never confirm in the new one
 		history?.dispose();
 		// A pending resync marker belongs to the OLD wire generation; the new
 		// generation's first history.open is the fresh snapshot, so re-mark it.
@@ -988,7 +1025,7 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 		return last;
 	}
 
-	pi.on("message_end", event => {
+	pi.on("message_end", (event, ctx) => {
 		const role = messageRole((event as { message?: unknown }).message);
 		// Durable history mutation: bump revision so clients reconcile.
 		revision = `rev:${randomUUID()}`;
@@ -999,7 +1036,7 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 				emitEvent("message.finished", { streamId });
 			}
 		}
-		if (role === "user") correlateCommittedSend();
+		if (role === "user") correlateCommittedSend(ctx ?? null);
 		if (role === "assistant" || role === "user" || role === "toolResult") {
 			emitEvent("history.changed", { revision });
 		}
