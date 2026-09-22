@@ -70,11 +70,16 @@ internal struct PendingInteraction: Sendable, Equatable, Identifiable {
 /// won, the honest outcome note otherwise (answered in terminal /
 /// remotely / cancelled / expired). Conversation history, not
 /// chrome — visible at every detail level. PLACEMENT: the block
-/// anchors to its QUESTION — it renders right after the transcript
-/// message that contains the ask's question text, before the
-/// agent's reply that follows it (the correct order: question →
-/// answer → reply). Arrival time is never used to order it. An ask
-/// whose question text is unknown (legacy records) parks after the
+/// anchors to its QUESTION'S OWN TURN — the message that POSED the
+/// ask. The ask is an ask CARD (a tool call whose ARGUMENTS carry
+/// the question text — never a plain text message in real
+/// transcripts), so the anchor matches both text blocks and
+/// toolCall argument string-leaves, and the block renders right
+/// after that message, BEFORE the agent's reply that follows it
+/// (the correct order: question → answer → reply), at every
+/// detail level. Arrival time is never used. An ask whose anchor
+/// never matches (legacy records with no question text, or the
+/// asking message outside the visible page) parks after the
 /// transcript's rows, before any pending card.
 internal struct ResolvedAsk: Sendable, Equatable, Identifiable {
     let id: String
@@ -324,23 +329,42 @@ internal enum ChatFiltering {
                 }
             }
 
-            // ANCHOR: after this message's rows, render every ask
-            // whose question text this message contains — the block
-            // sits at the question's point in the flow, BEFORE the
-            // agent's reply that follows it.
+            // ANCHOR: after this message, render every ask anchored
+            // to it. The ask is an ask CARD — a tool call whose
+            // ARGUMENTS carry the question text (the ask tool's
+            // parameters), not a plain text message; the anchor
+            // therefore matches BOTH text blocks and toolCall
+            // arguments (JSON), and lands the block at the message
+            // that POSED the question — before the reply that
+            // follows. Level-independent: even when the tool-call
+            // rows themselves are hidden (L0), the message's
+            // position in the flow is still the ask's position, and
+            // a message whose only content was the ask still anchors
+            // (an empty match text only skips, never parks early).
             if !unanchoredAsks.isEmpty {
-                let messageText = message.blocks
+                let matchText = message.blocks
                     .compactMap { block -> String? in
-                        guard case .text(let text) = block else { return nil }
-                        return text
+                        switch block {
+                        case .text(let text):
+                            return text
+                        case .toolCall(let call):
+                            // The ask tool's arguments carry the
+                            // question text as a plain STRING value —
+                            // extract string leaves recursively so
+                            // JSON escaping never breaks the match.
+                            return Self.stringLeaves(of: call.arguments)
+                                .joined(separator: "\n")
+                        default:
+                            return nil
+                        }
                     }
                     .joined(separator: "\n")
-                if !messageText.isEmpty {
+                if !matchText.isEmpty {
                     var remaining: [ResolvedAsk] = []
                     for ask in unanchoredAsks {
                         if let anchor = ask.questionText,
                             !anchor.isEmpty,
-                            messageText.contains(anchor)
+                            matchText.contains(anchor)
                         {
                             rows.append(.resolvedAsk(ask))
                         } else {
@@ -383,6 +407,24 @@ internal enum ChatFiltering {
     ///     checklist, which is what L2 is for.
     ///   - `task` rides L3 "Thinking": subagent activity is agent
     ///     internals, same shelf as the agent's own thinking.
+    /// Every string value reachable in a JSON tree (object keys
+    /// excluded, string leaves only — recursion into arrays and
+    /// nested objects). The resolved-ask anchor matches the ask
+    /// tool's arguments against these leaves, so JSON quoting never
+    /// breaks the question-text match.
+    static func stringLeaves(of value: JSONValue) -> [String] {
+        switch value {
+        case .string(let string):
+            return [string]
+        case .array(let items):
+            return items.flatMap { stringLeaves(of: $0) }
+        case .object(let fields):
+            return fields.values.flatMap { stringLeaves(of: $0) }
+        case .null, .bool, .number:
+            return []
+        }
+    }
+
     /// Level nesting is preserved: L3 ⊇ L2 ⊇ L1 ⊇ L0.
     static func visibilityLevel(for call: ToolCall) -> DetailLevel {
         visibilityLevel(toolName: call.name)

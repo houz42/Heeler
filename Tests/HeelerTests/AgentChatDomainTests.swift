@@ -1010,6 +1010,53 @@ struct ChatResolvedAskAnchorTests {
         ])
     }
 
+    @Test("THE REAL CASE: the question is an ask CARD (tool call), not a text message — the block anchors to the tool call's arguments")
+    func askCardToolCallAnchor() {
+        // The ask as it actually appears in an omp transcript: an
+        // assistant turn whose toolCall block (name 'ask') carries
+        // the question text in its ARGUMENTS. The agent's reply
+        // follows in the next message. The block must render between.
+        let askTurn = ChatMessage(role: .assistant, blocks: [
+            .toolCall(ToolCall(
+                id: "ask_0_bf4e9c07", name: "ask",
+                arguments: .object([
+                    "questions": .array([
+                        .object([
+                            "id": .string("q_proof"),
+                            "question": .string("Ship the v2 ask-history slice?"),
+                            "options": .array([
+                                .object(["label": .string("Ship it")]),
+                                .object(["label": .string("Hold")]),
+                            ]),
+                        ]),
+                    ]),
+                ]))),
+        ])
+        let reply = ChatMessage(role: .assistant, blocks: [
+            .text("You picked Ship it. Continuing."),
+        ])
+        let ask = ResolvedAsk(
+            id: "r-1", body: "You answered: Ship it",
+            questionText: "Ship the v2 ask-history slice?")
+        let rows = ChatFiltering.visibleRows(
+            messages: [askTurn, reply],
+            toolResults: [], pending: [], resolvedAsks: [ask], level: .l0)
+        let order = rows.map { row -> String in
+            switch row {
+            case .resolvedAsk(let ask): return "ask:\(ask.body)"
+            case .text(_, _, _, let text): return "text:\(text)"
+            default: return "toolcall"
+            }
+        }
+        // L0 hides the tool-call row itself, but the ask TURN's
+        // position in the flow still anchors the block: BEFORE the
+        // reply — not parked at the tail.
+        #expect(order == [
+            "ask:You answered: Ship it",
+            "text:You picked Ship it. Continuing.",
+        ])
+    }
+
     @Test("an unanchored ask (no question text) still parks at the tail")
     func unanchoredStillParksAtTail() {
         let anchored = ResolvedAsk(
