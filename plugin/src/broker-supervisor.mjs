@@ -83,9 +83,10 @@ fs.chmodSync(OWNER_PATH, 0o600);
 writeOwnerRecord();
 
 function writeOwnerRecord() {
-  const record = { ...ownerInfo, pid: process.pid, brokerPid: broker ? broker.pid : null };
+  ownerInfo.brokerPid = broker ? broker.pid : null;
+  const record = { ...ownerInfo, pid: process.pid };
   try {
-    fs.writeFileSync(OWNER_RECORD, JSON.stringify(record, null, 2) + "\n");
+    fs.writeFileSync(OWNER_RECORD, JSON.stringify(record, null, 2) + "\\n");
   } catch {}
 }
 
