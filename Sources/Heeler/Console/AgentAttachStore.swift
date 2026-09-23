@@ -454,6 +454,15 @@ final class AgentAttachStore {
             self.terminal = replacement
             #endif
             self.activationRecovery.bind(to: replacement.surfaceID)
+            // Arm the replacement's bounded fallback when it is on stage:
+            // the connection it replaces just died (generation replacement),
+            // so its transport may not be ready at its first grace either.
+            // The surface-attach arm covers the mounted-surface case; this
+            // covers a replacement installed while the detail shows another
+            // surface (chat), whose terminal surface mounts only later.
+            if self.isOnStage() {
+                replacement.terminalViewDidAppear()
+            }
             self.finishTerminalRecovery(ownedBy: recoveryOwner)
         }
     }
@@ -581,6 +590,15 @@ final class AgentAttachStore {
             self.terminal = replacement
             #endif
             self.activationRecovery.bind(to: replacement.surfaceID)
+            // Arm the replacement's bounded fallback when it is on stage:
+            // the connection it replaces just died (generation replacement),
+            // so its transport may not be ready at its first grace either.
+            // The surface-attach arm covers the mounted-surface case; this
+            // covers a replacement installed while the detail shows another
+            // surface (chat), whose terminal surface mounts only later.
+            if self.isOnStage() {
+                replacement.terminalViewDidAppear()
+            }
             self.finishTerminalRecovery(ownedBy: recoveryOwner)
         }
     }

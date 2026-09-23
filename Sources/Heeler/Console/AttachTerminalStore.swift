@@ -321,6 +321,13 @@ final class AttachTerminalStore {
             runTerminal: runTerminal)
     }
 
+    /// True while the bounded fallback's grace task is armed (the pipeline
+    /// WILL open a PTY within the grace window — its own liveness signal,
+    /// valid in every status: a failed open re-arms with the store .ended).
+    var sizeFallbackTaskIsArmed: Bool {
+        sizeFallbackTask != nil
+    }
+
     /// The terminal view appeared. On some devices the Ghostty surface can
     /// mount without ever reporting a valid grid (its first size callback
     /// lands before the store's callbacks are wired, or the surface sits in
