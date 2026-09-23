@@ -102,16 +102,33 @@ Entries reference the issue that motivated them.
 
 ### Fixed
 
-- The left-edge swipe opens the navigation drawer reliably: a swipe
-  starting anywhere in a 44 pt band along the left edge now opens the
-  drawer, not only one starting in the narrow bezel strip the stock
-  system edge recognizer claims (a real-thumb swipe routinely starts
-  20–44 pt in, where the old recognizer silently never engaged and
-  the drawer needed retries). The widened band opens only for a
-  horizontal rightward drag — a vertical drag near the edge still
-  scrolls the page, a leftward fling opens nothing — and the pushed
-  detail's back-swipe keeps the edge entirely (the same fail-closed
-  veto, at touch start and live).
+- The leading-edge swipe opens the navigation drawer reliably,
+  including on the Agents list: a swipe starting anywhere in the
+  44 pt leading band can open the drawer, where previously only the
+  stock system edge recognizer's fixed bezel strip engaged (a
+  real-thumb swipe routinely starts 20–44 pt in, so the drawer
+  needed retries) and a first widened cut still lost
+  slightly-diagonal swipes to the agent list's scroll pan. The
+  bezel keeps the stock screen-edge recognizer (measured: the
+  system's bezel gate cancels any plain pan there, and the stock
+  class is the only one it defers to); the 20–44 pt band gets a
+  directional plain pan that resolves intent on the first move
+  event (≥3 pt: inward-horizontal begins the drawer; vertical or
+  outward fails at once, promptly releasing the touch) and wins the
+  race with the touched scroll view through an explicit
+  require-to-fail dependency pointed the only safe way (the scroll
+  pan and its delayed-touches gate wait for the drawer's brief
+  directional decision — never the reverse; the scroll pan is
+  identified by recognizer class, since SwiftUI hosts List content
+  in generic UIView wrappers and a view cast never matched). Both
+  recognizers veto themselves fail-closed on any VISIBLE pushed
+  detail (hidden pages' retained stacks do not deaden the edge; a
+  cancelled Back gesture never becomes a drawer gesture) and ride
+  the same suppression seam as the trigger; the band mirrors for
+  right-to-left layouts. Vertical scrolls and row taps stay
+  responsive (a swipe outside the edge margin scrolls the list
+  exactly as before); a leftward fling opens nothing; the pushed
+  detail's back-swipe keeps the edge entirely.
 - Chat tables fit the phone's reading width again: every markdown
   table is constrained to the available transcript width and its
   cells wrap — long cell text folds onto more lines and rows grow

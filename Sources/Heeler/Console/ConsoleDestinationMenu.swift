@@ -358,44 +358,55 @@ private struct DrawerAccessibilityChrome: ViewModifier {
     }
 }
 
-/// The left-edge swipe that opens the drawer (v2; reliability widening
-/// v3): SwiftUI has no edge-restricted pan, and the pushed detail's
-/// interactive back-swipe must stay the system's own — so this is a
-/// UIKit recognizer pair bridged into the drawer's reveal, attached to
-/// the window's root view (an ancestor of every page — the same
-/// parent-walk ChatScreen's PopGestureEnabler uses to reach its
-/// UINavigationController):
+/// The leading-edge swipe that opens the drawer (v2; v3 reliability
+/// revision): a UIKit recognizer PAIR bridged into the drawer's
+/// reveal, attached to the window's root view (an ancestor of every
+/// page; the same parent-walk ChatScreen's PopGestureEnabler uses),
+/// with DISJOINT territories so the pair never races one finger:
 ///
-/// - `EdgePan` — a UIScreenEdgePanGestureRecognizer, edges .left. Its
-///   begin region is the system's own fixed ~20 pt bezel band (no
-///   public API widens it).
-/// - `NearEdgePan` — the v3 reliability fix: a plain pan that may only
-///   BEGIN for a touch that started within `nearEdgeWidth` (44 pt, the
-///   HIG touch target) of the left edge AND moves horizontal-dominant
-///   RIGHTWARD. A real-phone swipe routinely starts 20–44 pt in from
-///   the bezel, where the stock screen-edge recognizer silently never
-///   engaged and the user had to retry — the sim proofs never caught
-///   it because synthesized HID drags start exactly at the bezel.
-///   The dominance gate keeps the design's rule: a vertical drag that
-///   starts near the edge stays the page's scroll, and a leftward
-///   fling opens nothing.
+/// - `EdgePan` — the stock UIScreenEdgePanGestureRecognizer, owning
+///   the 0–~20 pt bezel. Measured on the agent list: the system's
+///   bezel gesture gate CANCELS a plain pan whose touch starts in
+///   the bezel strip, so the stock class must keep that territory —
+///   a plain recognizer cannot replace it there.
+/// - `DrawerEdgeBandPan` — the v3 reliability fix: a plain pan
+///   owning (20, 44] pt from the leading edge (mirrored for RTL).
+///   A real-phone swipe routinely starts 20–44 pt in from the
+///   bezel, where the stock recognizer silently never engaged and
+///   the drawer needed retries. It resolves direction EARLY
+///   (~8 pt of movement: inward-horizontal intent continues toward
+///   the begin; vertical or outward intent fails at once,
+///   promptly releasing the touch to scrolling) and wins the race
+///   with the touched scroll view through an explicit require-to-
+///   fail dependency pointed the only safe way: the descendant
+///   scroll pan waits for the band pan's brief directional
+///   decision — never the reverse (the drawer must never wait for
+///   a scroll pan that merely claims the touch). The scroll pan is
+///   identified by CLASS, not view: SwiftUI hosts List content in
+///   generic UIView wrappers, so a `view as? UIScrollView` cast
+///   never matched and the dependency silently never installed
+///   (measured — the agent list's scroll pan cancelled the band
+///   pan mid-analysis before the class-name fix).
 ///
-/// Both are enabled ONLY on the phone's ROOT pages, the same
-/// suppression seam as the hamburger trigger: a pushed detail disables
-/// them, so the back-swipe never competes — and both carry the
-/// fail-closed pushed-detail veto (see the delegate below), so no
-/// transient seam state can ever open the drawer over a pushed screen.
-/// The trigger stays the accessible path; the gesture is additive,
+/// ELIGIBILITY is captured at touch start, fail closed, on the
+/// VISIBLE destination's nav state — no VISIBLE navigation
+/// controller with a pushed detail (hidden pages' retained stacks
+/// do not veto) — and re-checked live at begin, so a finger that
+/// started over a pushed detail never opens the drawer (a
+/// cancelled Back gesture never becomes a drawer gesture). Both
+/// recognizers ride the same suppression seam as the hamburger
+/// trigger, so pushed details never participate at all. The
+/// trigger stays the accessible path; the gesture is additive,
 /// never the only affordance.
 struct DrawerEdgePanBridge: UIViewControllerRepresentable {
     /// The recognizer-level pre-gate (the trigger's seam): a disabled
     /// recognizer never even claims the edge. The AUTHORITATIVE veto
-    /// is UIKit ground truth — the pushed-detail VC-tree walk,
-    /// captured at touch start, retained for the gesture, and
-    /// re-checked live at arbitration (see the delegate below); the
-    /// seam proved unreliable for arbitration (it can report a root
-    /// page focused while a detail is pushed), so it only keeps the
-    /// recognizer from engaging where the drawer could never apply.
+    /// is UIKit ground truth — the visible-nav walk below — captured
+    /// at touch start, retained for the gesture, and re-checked live
+    /// at begin; the seam proved unreliable for arbitration (it can
+    /// report a root page focused while a detail is pushed), so it
+    /// only keeps the recognizer from engaging where the drawer
+    /// could never apply.
     let isEnabled: Bool
     let onBegan: () -> Void
     let onTranslate: (_ translationX: CGFloat) -> Void
@@ -422,7 +433,7 @@ struct DrawerEdgePanBridge: UIViewControllerRepresentable {
         context.coordinator.onRelease = onRelease
     }
 
-    /// Attaches the recognizers once the parent chain to the window's
+    /// Attaches the recognizer once the parent chain to the window's
     /// root view controller is complete — `viewDidAppear`, the same
     /// timing PopGestureEnabler's verified parent-walk relies on.
     final class HostViewController: UIViewController {
@@ -436,87 +447,61 @@ struct DrawerEdgePanBridge: UIViewControllerRepresentable {
             // controller, an ancestor of every page (the same chain
             // PopGestureEnabler walks to find its
             // UINavigationController). Attaching there means the
-            // recognizers see the edge gesture anywhere on the current
-            // page, while their enabled state still follows the seam.
+            // recognizer sees the edge gesture anywhere on the current
+            // page, while its enabled state still follows the seam.
             var root: UIViewController? = self
             while let parent = root?.parent {
                 root = parent
             }
             guard let rootView = root?.view else { return }
             rootView.addGestureRecognizer(coordinator.recognizer)
-            rootView.addGestureRecognizer(coordinator.nearEdgePan)
+            rootView.addGestureRecognizer(coordinator.bandPan)
             isAttached = true
         }
     }
 
-    /// Routes the recognizer into the drawer's reveal, and owns the
-    /// ARBITRATION (v2 revision): the app's focus seam proved
-    /// unreliable for gesture arbitration — it can report "root page
-    /// focused" while a detail is pushed (verified by instrumented
-    /// run: the recognizer was re-enabled mid-push; the trigger never
-    /// surfaced the lie because the pushed detail's NavigationStack
-    /// toolbar swap hides it anyway). So the VETO lives here, on
-    /// UIKit ground truth: `gestureRecognizerShouldBegin` walks the
-    /// window and refuses the edge whenever ANY navigation controller
-    /// has a pushed detail — returning false there lets the touch
-    /// fall through to the system's interactive pop gesture, which is
-    /// exactly the behavior the seam promised.
+    /// Routes the recognizer into the drawer's reveal and owns the
+    /// arbitration, on UIKit ground truth: the app's focus seam
+    /// proved unreliable for gesture arbitration (instrumented run:
+    /// it re-enabled the recognizer while a detail was pushed).
     @MainActor
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         let recognizer = EdgePan()
-        /// The widened begin region (v3): a plain pan that only begins
-        /// for touches starting within `nearEdgeWidth` of the left
-        /// edge and moving horizontal-dominant RIGHTWARD. See the
-        /// struct's doc comment for why the stock screen-edge
-        /// recognizer alone made the drawer unreliable on a real
-        /// phone (its begin region is a fixed ~20 pt system band).
-        let nearEdgePan = NearEdgePan()
-        /// How far from the left edge a touch may start and still open
-        /// the drawer — 44 pt, the HIG minimum touch target. True
-        /// bezel starts (0–20 pt) stay the stock recognizer's; the
-        /// widened band only ADDS coverage.
-        static let nearEdgeWidth: CGFloat = 44
+        /// The 20–44 pt band's pan (v3 revision; see the struct's doc
+        /// comment for why the bezel needs its own stock recognizer).
+        let bandPan = DrawerEdgeBandPan()
         var onBegan: () -> Void = {}
         var onTranslate: (CGFloat) -> Void = { _ in }
         var onRelease: (CGFloat, CGFloat, Bool) -> Void = { _, _, _ in }
-
         var isEnabled = true {
             didSet {
                 guard !isRecognizingFlag else { return }
                 recognizer.isEnabled = isEnabled
-                nearEdgePan.isEnabled = isEnabled
+                bandPan.isEnabled = isEnabled
             }
         }
         /// True while EITHER recognizer is mid-gesture: the drawer is
-        /// tracking a finger, so seam-driven enable/disable writes are
-        /// held off until the gesture finishes (the release restores
-        /// the seam state in `finish()`).
+        /// tracking a finger, so seam-driven enable/disable writes
+        /// are held off until the gesture finishes (the release
+        /// restores the seam state in `finish()`).
         var isRecognizingFlag = false
+        /// Which recognizer is routing the in-flight gesture (nil
+        /// when idle). Set at the first .began; cleared on finish.
+        private var activeRecognizer: UIPanGestureRecognizer?
 
         override init() {
             super.init()
             recognizer.edges = .left
             recognizer.delegate = self
             recognizer.addTarget(self, action: #selector(pan(_:)))
-            nearEdgePan.delegate = self
-            nearEdgePan.addTarget(self, action: #selector(pan(_:)))
+            bandPan.delegate = self
+            bandPan.addTarget(self, action: #selector(pan(_:)))
         }
 
-        /// The screen-edge pan itself (v2 revision): captures UIKit's
-        /// pushed-detail veto AT TOUCH START and retains it for the
-        /// whole gesture. A recognizer can claim a touch that began
-        /// BEFORE it was enabled — so an interactive back-swipe that
-        /// POPS the detail mid-drag would otherwise see this
-        /// recognizer come alive and steal the still-down finger,
-        /// opening the drawer over the root the moment the pop lands
-        /// (verified in the proof video). The touch-start check is
-        /// the SAME VC-tree walk the arbitration uses — the app's
-        /// focus seam proved unreliable for gesture arbitration
-        /// (instrumented run: it re-enabled the recognizer while a
-        /// detail was pushed) — and it FAILS CLOSED: until the walk
-        /// proves no navigation controller has a pushed detail, the
-        /// touch is not drawer-eligible, so no transient seam state
-        /// can ever open the drawer over a pushed screen.
+        /// The bezel's stock screen-edge pan (v2, kept by measurement
+        /// — see the struct's doc comment): the ONLY recognizer
+        /// class the system's bezel gesture gate defers to, so the
+        /// 0–20 pt territory must stay its.
         final class EdgePan: UIScreenEdgePanGestureRecognizer {
             /// UIKit ground truth captured at touch start, retained
             /// for the gesture. Starts NOT eligible (fail closed).
@@ -526,58 +511,159 @@ struct DrawerEdgePanBridge: UIViewControllerRepresentable {
                 _ touches: Set<UITouch>, with event: UIEvent
             ) {
                 beganEligible =
-                    (delegate as? Coordinator)?.noPushedDetail(self)
+                    (delegate as? Coordinator)?.noVisiblePushedDetail(self)
                     ?? false
                 super.touchesBegan(touches, with: event)
             }
         }
 
-        /// The widened begin-region recognizer (v3): a plain pan — the
-        /// stock screen-edge recognizer's begin band is a fixed
-        /// system-owned ~20 pt and cannot be widened, so a swipe that
-        /// starts 20–44 pt in never engaged and the drawer was
-        /// "unreliable" on a real phone. This pan may only BEGIN when
-        /// `gestureRecognizerShouldBegin` sees ALL of:
-        ///   - the touch STARTED within `nearEdgeWidth` of the left
-        ///     edge (captured at touchesBegan, same fail-closed
-        ///     pattern as EdgePan: ineligible until proven),
-        ///   - horizontal-dominant RIGHTWARD motion (a vertical drag
-        ///     near the edge stays the page's scroll — the design's
-        ///     rule; a leftward fling opens nothing),
-        ///   - the pushed-detail veto, at touch start AND live.
-        /// Outside that region the recognizer fails, so the touch
-        /// belongs to whatever the page was doing (scroll, tap) — the
-        /// added coverage never steals an interior horizontal drag.
-        final class NearEdgePan: UIPanGestureRecognizer {
-            /// Touch-start facts, captured at touchesBegan and
-            /// retained for the gesture (fail closed until then).
+        /// The 20–44 pt band's directional pan (v3 revision): a plain
+        /// pan — the stock screen-edge recognizer's begin band is a
+        /// fixed system-owned ~20 pt and cannot be widened, so a
+        /// swipe that starts 20–44 pt in never engaged and the
+        /// drawer was "unreliable" on a real phone. The band's
+        /// territory is EXCLUSIVE of the bezel (the stock EdgePan
+        /// owns 0–~20 pt) so the pair never races one finger:
+        ///   - BAND: the touch must START in (bezelWidth, bandWidth]
+        ///     from the leading edge (RTL-mirrored), captured
+        ///     fail-closed at touchesBegan;
+        ///   - DIRECTION resolved EARLY: as soon as movement passes
+        ///     `decisionDistance` (~8 pt), non-inward intent fails
+        ///     the recognizer at once — the touch releases promptly
+        ///     to the waiting scroll view — while inward-horizontal
+        ///     intent carries through to the begin;
+        ///   - ELIGIBILITY captured at touch start (the visible-nav
+        ///     veto) and re-checked live at begin, so a finger that
+        ///     started over a pushed detail never opens the drawer
+        ///     (a cancelled Back gesture never becomes a drawer
+        ///     gesture) no matter what state changes underneath.
+        final class DrawerEdgeBandPan: UIPanGestureRecognizer {
+            /// How far from the leading edge a touch may start and
+            /// still open the drawer — 44 pt, the HIG minimum touch
+            /// target, full height.
+            static let bandWidth: CGFloat = 44
+            /// The bezel strip the stock screen-edge recognizer owns
+            /// (measured: the system's bezel gesture gate cancels a
+            /// plain pan whose touch starts inside it). The band's
+            /// territory starts just past it.
+            static let bezelWidth: CGFloat = 20
+            /// Movement (pt) after which the direction is judged —
+            /// the FIRST move event ≥ this distance decides. 3 pt:
+            /// small enough to precede the ~6 pt edge-gate cancel
+            /// window (measured), large enough to ride a real first
+            /// move event.
+            static let decisionDistance: CGFloat = 3
+
+            /// UIKit ground truth captured at touch start, retained
+            /// for the gesture. Starts NOT eligible (fail closed).
             var beganEligible = false
-            var beganNearLeftEdge = false
+            /// The touch started inside the leading band.
+            var beganInBand = false
+            /// The touch's start point in the attached view's
+            /// coordinates — the direction verdict is computed from
+            /// RAW touch locations, NOT the recognizer's
+            /// translation: `translation(in:)` is UNDEFINED while
+            /// the pan sits in .possible over the list's scroll
+            /// stack (measured: it reads a constant 0.0 through an
+            /// entire moving stroke — 21 move events, locations 24→
+            /// 204 pt, translation 0.0 every event — so any gate on
+            /// translation never decides).
+            var beganLocation: CGPoint?
+            /// The early-direction verdict: inward-horizontal intent.
+            var decidedInward = false
+
+            /// The screen's leading edge, mirrored for RTL — the
+            /// drawer slides in from the leading side either way.
+            private var isRTL: Bool {
+                view?.effectiveUserInterfaceLayoutDirection == .rightToLeft
+            }
 
             override func touchesBegan(
                 _ touches: Set<UITouch>, with event: UIEvent
             ) {
-                // The same captured-veto pattern as EdgePan: a
+                // Fail closed: until the visible-nav walk proves no
+                // VISIBLE navigation controller has a pushed
+                // detail, the touch is not drawer-eligible — and a
                 // recognizer can claim a touch that began before it
                 // was enabled, so eligibility is grounded at touch
                 // start, not at arbitration time.
                 beganEligible =
-                    (delegate as? Coordinator)?.noPushedDetail(self)
+                    (delegate as? Coordinator)?.noVisiblePushedDetail(self)
                     ?? false
-                beganNearLeftEdge =
-                    (touches.first?.location(in: view).x
-                        ?? .infinity)
-                    <= Coordinator.nearEdgeWidth
+                beganInBand = {
+                    guard let view,
+                        let x = touches.first?.location(in: view).x
+                    else { return false }
+                    // The WHOLE band (≤ bandWidth from the leading
+                    // edge), overlapping the stock EdgePan's bezel
+                    // territory on purpose: the system bezel band's
+                    // exact width is private (measured behavior puts
+                    // it somewhere under ~20 pt), and a non-overlap
+                    // split left a dead gap at 12 pt — no
+                    // recognizer's territory. The overlap's race is
+                    // between the drawer's OWN two recognizers and
+                    // is settled by UIKit exclusivity plus the
+                    // active-routing guards in `pan(_:)`; on true
+                    // bezel starts the stock EdgePan wins anyway
+                    // (its system-level precedence).
+                    let fromLeading = isRTL
+                        ? view.bounds.width - x
+                        : x
+                    return fromLeading <= Self.bandWidth
+                }()
+                beganLocation = touches.first?.location(in: view)
+                decidedInward = false
                 super.touchesBegan(touches, with: event)
+            }
+            override func touchesMoved(
+                _ touches: Set<UITouch>, with event: UIEvent
+            ) {
+                super.touchesMoved(touches, with: event)
+                guard state == .possible, beganInBand, beganEligible,
+                    let start = beganLocation,
+                    let location = touches.first?.location(in: view)
+                else { return }
+                // The direction verdict on RAW LOCATIONS: the
+                // recognizer's translation(in:) is undefined in
+                // .possible over the list's scroll stack (measured
+                // constant 0.0 through a full stroke — see
+                // beganLocation's comment), so the delta is
+                // computed from the touch's own coordinates. The
+                // FIRST move event that carries ≥3 pt of movement
+                // from the start decides (measured: the edge gate
+                // cancels an undecided in-band pan at ~6 pt): a
+                // straight-line stroke's ratio is already its true
+                // direction by then, inward-horizontal carries
+                // through to the begin, and anything else — a
+                // vertical scroll that started in the band, a
+                // leftward fling — fails AT ONCE, promptly
+                // releasing the touch to the scroll pan that is
+                // waiting on this pan's verdict.
+                let dx = location.x - start.x
+                let dy = location.y - start.y
+                guard abs(dx) >= Self.decisionDistance
+                    || abs(dy) >= Self.decisionDistance
+                else { return }
+                let inwardX = isRTL ? -dx : dx
+                if inwardX > 0, abs(dx) > abs(dy) {
+                    decidedInward = true
+                } else {
+                    state = .failed
+                }
             }
         }
 
-        /// The pushed-detail veto on UIKit ground truth (v2): true
-        /// only when the walk over the window's view-controller tree
-        /// proves NO navigation controller currently has a pushed
-        /// detail. Used at touch START (captured, fail closed) and at
-        /// gesture-arbitration time.
-        nonisolated private func noPushedDetail(
+        /// The pushed-detail veto on UIKit ground truth (design
+        /// contract revision): true only when the walk over the
+        /// window's view-controller tree proves NO VISIBLE
+        /// navigation controller currently has a pushed detail.
+        /// VISIBLE matters: AppRootView keeps every page mounted
+        /// (hidden ones at opacity 0), and a hidden page's retained
+        /// stack — a deep-linked route that landed while the user
+        /// was elsewhere — must not deaden the edge on the page the
+        /// user is actually looking at. Used at touch START
+        /// (captured, fail closed) and at begin time.
+        nonisolated private func noVisiblePushedDetail(
             _ gestureRecognizer: UIGestureRecognizer
         ) -> Bool {
             MainActor.assumeIsolated {
@@ -587,7 +673,9 @@ struct DrawerEdgePanBridge: UIViewControllerRepresentable {
                 var stack = [root]
                 while let next = stack.popLast() {
                     if let nav = next as? UINavigationController,
-                        nav.viewControllers.count > 1 {
+                        nav.viewControllers.count > 1,
+                        Self.isEffectivelyVisible(nav)
+                    {
                         return false
                     }
                     stack.append(contentsOf: next.children)
@@ -599,45 +687,130 @@ struct DrawerEdgePanBridge: UIViewControllerRepresentable {
             }
         }
 
+        /// A view controller is effectively visible when its view
+        /// is mounted in a window and nothing on its UIKit ancestor
+        /// chain is hidden or faded to (near) zero — the state
+        /// AppRootView puts non-staged pages in (opacity 0). The
+        /// seam can lie; this is the UIKit ground truth the veto
+        /// trusts.
+        private static func isEffectivelyVisible(
+            _ viewController: UIViewController
+        ) -> Bool {
+            guard let view = viewController.viewIfLoaded,
+                view.window != nil
+            else { return false }
+            var current: UIView? = view
+            while let candidate = current {
+                if candidate.isHidden || candidate.alpha < 0.01 {
+                    return false
+                }
+                current = candidate.superview
+            }
+            return true
+        }
+
         nonisolated func gestureRecognizerShouldBegin(
             _ gestureRecognizer: UIGestureRecognizer
         ) -> Bool {
             guard gestureRecognizer === recognizer
-                || gestureRecognizer === nearEdgePan
+                || gestureRecognizer === bandPan
             else { return true }
             return MainActor.assumeIsolated {
                 // The touch-start UIKit veto RETAINED: a finger that
                 // started over a pushed detail NEVER opens the
                 // drawer, no matter what state changes underneath
                 // (an interactive pop completing mid-drag included).
-                // Each recognizer reads ITS OWN captured flag — a
-                // screen-edge recognizer's touch delivery outside its
-                // band is not guaranteed, so the pair never trusts
-                // one sibling's capture for the other.
+                // Each recognizer reads ITS OWN captured flag — the
+                // pair never trusts one sibling's capture for the
+                // other.
                 let beganEligible =
-                    gestureRecognizer === nearEdgePan
-                    ? nearEdgePan.beganEligible
+                    gestureRecognizer === bandPan
+                    ? bandPan.beganEligible
                     : recognizer.beganEligible
                 guard beganEligible,
-                    noPushedDetail(gestureRecognizer)
+                    noVisiblePushedDetail(gestureRecognizer)
                 else { return false }
-                if gestureRecognizer === nearEdgePan {
-                    // The widened band's own gates: the touch must
-                    // have started within `nearEdgeWidth` of the left
-                    // edge, and the motion must be
-                    // horizontal-dominant RIGHTWARD — a vertical
-                    // drag near the edge stays the page's scroll (the
-                    // design's rule), and a leftward fling opens
-                    // nothing.
-                    guard nearEdgePan.beganNearLeftEdge else {
-                        return false
-                    }
-                    let view = nearEdgePan.view
-                    let translation = nearEdgePan.translation(in: view)
-                    guard translation.x > 0,
-                        abs(translation.x) > abs(translation.y)
+                if gestureRecognizer === bandPan {
+                    // The band's own gates: the touch started past
+                    // the bezel but inside the band, and the EARLY
+                    // direction verdict already read inward intent.
+                    guard bandPan.beganInBand, bandPan.decidedInward
                     else { return false }
                 }
+                return true
+            }
+        }
+
+        /// EXPLICIT arbitration with the touched scroll view
+        /// (design contract): UIKit gives a stock screen-edge pan
+        /// system-level precedence over scroll views, but a plain
+        /// pan gets NONE — so without this dependency the agent
+        /// list's scroll pan raced the band pan and won
+        /// slightly-diagonal in-band swipes (the reported
+        /// list-specific failure). This hook installs the same
+        /// dependency by hand, pointed the ONLY safe way: the
+        /// descendant scroll pan must wait for the band pan's
+        /// verdict when the touch started in the band — and the
+        /// band pan resolves FAST (the early-direction verdict in
+        /// `touchesMoved`, ~8 pt), so the scroll is held only for
+        /// that brief decision window and proceeds the moment the
+        /// band pan fails. The reverse dependency — the drawer
+        /// waiting for the scroll — would starve the drawer (a
+        /// scroll pan never fails for a touch it merely claims),
+        /// and is deliberately NOT what this returns. The stock
+        /// EdgePan needs nothing here — the bezel's system gate
+        /// already holds every scroll off its territory.
+        nonisolated func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldBeRequiredToFailBy
+            otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            guard gestureRecognizer === bandPan else { return false }
+            return MainActor.assumeIsolated {
+                // UNCONDITIONAL while enabled (measured ordering
+                // race): the beganInBand flag is set in touchesBegan,
+                // but UIKit's dependency analysis can run BEFORE that
+                // flag is set for the very touch it is analyzing —
+                // the first swipe of a session then carried a STALE
+                // false, the dependency silently never installed, and
+                // the scroll stack damped the band pan's touch
+                // delivery into starvation (measured: 21 zero-
+                // translation move events, then silence — the pan
+                // could never produce the verdict the scroll was
+                // owed). Conditioning on ENABLED alone is safe: a
+                // touch that starts OUTSIDE the band never reaches
+                // the band pan's touchesBegan, so the pan is not a
+                // participant and fails instantly for it — the
+                // scroll proceeds with no measurable delay.
+                guard bandPan.isEnabled
+                else { return false }
+                // Descendant of the recognizer's own view (the
+                // window root): the current page's scroll stack,
+                // never a sibling surface's.
+                guard let rootView = bandPan.view,
+                    let otherView = otherGestureRecognizer.view,
+                    otherView !== rootView,
+                    otherView.isDescendant(of: rootView)
+                else { return false }
+                // The scroll pan is identified by CLASS, not by its
+                // view: SwiftUI hosts List/ScrollView content inside
+                // generic UIView wrappers, so the pan's own view is
+                // a plain UIView and a `view as? UIScrollView` cast
+                // never matched (measured on the agent list — the
+                // dependency silently never installed, and the
+                // scroll pan cancelled the band pan mid-analysis).
+                // The DELAYED-TOUCHES gate is deliberately EXCLUDED:
+                // it is the scroll view's touch-delivery damper, and
+                // making IT wait for the band pan's verdict starves
+                // the very movement events the verdict needs
+                // (measured on a fresh sim: 21 zero-translation move
+                // events then silence — the gate must keep DELIVERING
+                // while the pan alone is held).
+                let otherType =
+                    String(describing: type(of: otherGestureRecognizer))
+                guard otherType.contains("ScrollViewPan"),
+                    otherGestureRecognizer is UIPanGestureRecognizer
+                else { return false }
                 return true
             }
         }
@@ -646,12 +819,16 @@ struct DrawerEdgePanBridge: UIViewControllerRepresentable {
             _ sender: UIPanGestureRecognizer
         ) {
             // ONE active track: only the recognizer that reached
-            // .began routes into the reveal. When it begins, the
-            // sibling is disabled, which fails it out of the same
-            // touch — and that .failed fires through this same
-            // handler. Without the guard, the loser's release
-            // callback would `onRelease(cancelled: true)` and snap a
-            // drawer the winner was still tracking.
+            // .began FIRST routes the reveal; the loser (if it ever
+            // sees a callback for the touch) is ignored by the
+            // guards. The sibling is NOT force-disabled here —
+            // disabling a recognizer mid-arbitration made it fail
+            // out from under the system's own dependency analysis
+            // (measured: the scroll pan that natively requires the
+            // stock edge pan's failure saw the edge pan fail and
+            // began first, stealing the touch from the band pan).
+            // The pair's territories are disjoint (bezel vs past
+            // the bezel), so a genuine race is not reachable.
             let isActive =
                 sender === activeRecognizer && isRecognizingFlag
             let view = sender.view
@@ -661,13 +838,6 @@ struct DrawerEdgePanBridge: UIViewControllerRepresentable {
                 guard !isRecognizingFlag else { break }
                 activeRecognizer = sender
                 isRecognizingFlag = true
-                // Claim the edge exclusively: whichever recognizer
-                // began first wins; the sibling is disabled (fail
-                // closed for this touch) and restored on finish().
-                let other =
-                    sender === self.recognizer
-                    ? nearEdgePan : self.recognizer
-                other.isEnabled = false
                 onBegan()
             case .changed:
                 guard isActive else { break }
@@ -687,25 +857,16 @@ struct DrawerEdgePanBridge: UIViewControllerRepresentable {
             }
         }
 
-        /// Which recognizer is routing the in-flight gesture (nil when
-        /// idle). Set at .began; cleared on finish.
-        private var activeRecognizer: UIPanGestureRecognizer?
-
         private func finish() {
             isRecognizingFlag = false
             activeRecognizer = nil
             recognizer.isEnabled = isEnabled
-            nearEdgePan.isEnabled = isEnabled
+            bandPan.isEnabled = isEnabled
         }
 
-        /// The pair never tracks one finger twice: two recognizers
-        /// feed one reveal, so simultaneous recognition would
-        /// double-write the drawer's offset. (Both shouldBegin in
-        /// overlapping territory; exclusivity is settled at the first
-        /// .began above, and this refusal covers the same-touch
-        /// overlap window before it.) Every OTHER pair keeps UIKit's
-        /// default: exclusive — the drawer's pans never run
-        /// simultaneously with the pages' scroll either.
+        /// The drawer's pans never run simultaneously with anything:
+        /// exclusivity is the default, and it is exactly what the
+        /// reveal needs — one writer.
         nonisolated func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith
