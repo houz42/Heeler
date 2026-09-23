@@ -867,3 +867,59 @@ extension AgentSurfaceReplacementTests {
         #expect(closed, "the terminal-handoff leave did not close the session")
     }
 }
+
+// MARK: - Device regression: armed churn survives a lagging stage read
+
+extension AgentSurfaceReplacementTests {
+    /// The stage tracking LAGS the SwiftUI disappear: at the surface-swap
+    /// leave's decision instant isOnStage() can already read false (device
+    /// trace 38a0f1a4 — the leave transition cancelled the armed fallback).
+    /// A preserving leave with an ARMED fallback is churn regardless of the
+    /// stage read: the pipeline must survive to let its grace open the PTY.
+    @MainActor
+    @Test(.timeLimit(.minutes(1)))
+    func armedFallbackSurvivesAPreservingLeaveWithALaggingStageRead() async throws {
+        let transport = ScriptedTransport()
+        let composer = AgentComposerStore(target: "w1:p1") { params in
+            try await transport.promptAgent(params)
+        }
+        let attach = AgentAttachStore(
+            target: "w1:p1",
+            paneTitle: "pane",
+            transportGeneration: 1,
+            isOnStage: { false },  // The stage read lags: false AT the leave.
+            runTerminal: { request, handler in
+                let session = try await transport.attachTerminal(request)
+                try await handler.runEndingSession(session)
+            },
+            stageImage: { _, _ in throw TransportError.cancelled },
+            stageFile: { _, _ in throw TransportError.cancelled },
+            composer: composer,
+            closePane: {})
+
+        // Arm the fallback, then the surface-swap's spurious onDisappear
+        // arrives while the stage read already says false.
+        attach.terminalViewDidAppear()
+        await attach.leave().value
+
+        // The armed pipeline was NOT torn down: the grace still opens the
+        // attach and goes live on the remote paint.
+        let opened = try await Self.eventually(
+            timeout: .seconds(6),
+            condition: { await transport.hasLiveAttachSession })
+        #expect(opened, "the armed fallback was cancelled by the lagging-stage leave")
+        _ = await transport.emitAttachOutput(Data("\u{1B}[2Jdevice".utf8))
+        let live = try await Self.eventually(
+            timeout: .seconds(5),
+            condition: { attach.terminalStatus == .live })
+        #expect(live, "the preserved pipeline never went live")
+
+        // A REAL departure still tears it down: the terminal handoff passes
+        // preserving=false.
+        attach.leaveForTerminalHandoff()
+        let stopped = try await Self.eventually(
+            timeout: .seconds(5),
+            condition: { attach.terminalStatus == .stopped })
+        #expect(stopped, "the handoff leave did not stop the preserved pipeline")
+    }
+}

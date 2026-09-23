@@ -693,6 +693,30 @@ final class AgentAttachStore {
             #if DEBUG
             terminal.restorationTrace.emitDiagnostic(
                 "attach_leave_skipped surface_churn lifecycle=\(lifecycleState) "
+                + "status=\(AttachTerminalStore.diagnosticStatusName(terminal.status)) "
+                + "fallback_armed=\(terminal.sizeFallbackTaskIsArmed)")
+            #endif
+            return lifecycleTask ?? Task {}
+        }
+        // The stage tracking LAGS the SwiftUI disappear: at the surface-swap
+        // leave's decision instant isOnStage() can already read false (device
+        // trace 38a0f1a4: attach_leave preserving=true with an ARMED fallback
+        // tore down — caller=leave_transition cancelled the grace, the very
+        // churn this guard exists for). A preserving leave with an armed
+        // fallback task is churn REGARDLESS of the isOnStage() read: the
+        // armed grace is the pipeline's own liveness signal — it WILL open a
+        // PTY within the window. The real departures stay covered: the
+        // terminal handoff and detail-close paths pass preserving=false, and
+        // a real departure's stop() (leave/replace/rejoin callers) still
+        // cancels any armed task through the same teardown that follows.
+        if preservingOnStageActivationRecovery,
+            lifecycleState == .active,
+            terminal.sizeFallbackTaskIsArmed
+        {
+            #if DEBUG
+            terminal.restorationTrace.emitDiagnostic(
+                "attach_leave_skipped armed_churn lifecycle=\(lifecycleState) "
+                + "on_stage=\(isOnStage()) "
                 + "status=\(AttachTerminalStore.diagnosticStatusName(terminal.status))")
             #endif
             return lifecycleTask ?? Task {}
