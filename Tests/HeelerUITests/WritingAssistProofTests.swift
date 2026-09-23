@@ -65,7 +65,7 @@ final class WritingAssistProofTests: XCTestCase {
         for _ in 0..<11 { field.typeText("\u{8}") }
         XCTAssertEqual(field.value as? String, "")
 
-        captureScreenshot(app, "writing-assist-placeholder-cycle")
+        captureScreenshot(app, "writing-assist-placeholder-cycle", lifetime: .keepAlways)
     }
 
     // MARK: - Suggestion accept: text + caret land together
@@ -94,18 +94,23 @@ final class WritingAssistProofTests: XCTestCase {
         XCTAssertFalse(
             applied.isEmpty,
             "an accepted suggestion must install its draft")
-        captureScreenshot(app, "writing-assist-suggestion-accept")
+        captureScreenshot(app, "writing-assist-suggestion-accept", lifetime: .keepAlways)
     }
 
     // MARK: - Draft restore across relaunch (lock/reconnect analog)
 
     func testDraftRestoreAcrossRelaunchKeepsExactlyOneCopyAndCaret() {
-        // Phase 1: type a draft — the PERSIST route keeps the draft
-        // store untouched across relaunches (the reconnect analog).
+        // Reset first: a plain-route launch clears the demo pane's
+        // persisted draft (its init contract), so a leftover draft
+        // from a previously-run test (the suggestion test's accept,
+        // also on this pane) can never bleed into this proof. Then
+        // the PERSIST route keeps the store untouched across
+        // relaunches (the reconnect analog).
+        let reset = launchComposer()
+        reset.terminate()
         let app = launchComposer(persistDraft: true)
         let field = composerField(app)
         field.typeTextWithFocusAssertion(on: app, "half typed draft")
-
         // Relaunch (terminate + relaunch): the ChatScreen remounts and
         // loads the persisted draft on appear — the reconnect analog.
         app.terminate()
@@ -126,7 +131,8 @@ final class WritingAssistProofTests: XCTestCase {
             messageLabels.allElementsBoundByIndex.count, 1)
 
         captureScreenshot(
-            relaunched, "writing-assist-draft-restored-after-relaunch")
+            relaunched, "writing-assist-draft-restored-after-relaunch",
+            lifetime: .keepAlways)
 
         // Phase 3: SEND clears through the same sync path — the next
         // relaunch opens empty (placeholder visible, no stale draft).
@@ -149,6 +155,6 @@ final class WritingAssistProofTests: XCTestCase {
             emptyValue, "",
             "a cleared composer must stay cleared across relaunch — "
                 + "exactly one copy of the draft existed and it was sent")
-        captureScreenshot(third, "writing-assist-empty-after-send-relaunch")
+        captureScreenshot(third, "writing-assist-empty-after-send-relaunch", lifetime: .keepAlways)
     }
 }
