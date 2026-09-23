@@ -217,12 +217,13 @@ final class ChatInputUITextView: UITextView {
         }
         textContainerInset = UIEdgeInsets()
         textContainer.lineFragmentPadding = 0
-        // The system keyboard with its language/globe + dismissal
+        // The DEFAULT OS keyboard with its language/globe + dismissal
         // controls as the device provides them (v3: never replace
-        // system keys). asciiCapable keeps literal typing for
-        // command-mode prefixes while the OS keyboard still carries
-        // its own dismissal control.
-        keyboardType = .asciiCapable
+        // system keys). Ordinary chat (assistance on) uses the
+        // standard multilingual keyboard; the literal/command mode
+        // pins asciiCapable (a freeform field cannot reliably disable
+        // corrections for inline code spans — the design doc's rule).
+        keyboardType = writingAssistance ? .default : .asciiCapable
         returnKeyType = .default
         // Hug measured content (sizeThatFits) instead of fighting the
         // proposal; scrolling switches off/on per the 5-line cap.

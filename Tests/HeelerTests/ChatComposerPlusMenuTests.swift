@@ -35,7 +35,10 @@ private final class Recorder<Value>: @unchecked Sendable {
 
 private func makeDependencies(
     levelDefaults: UserDefaults,
-    tags: Recorder<TagFilter>? = nil
+    tags: Recorder<TagFilter>? = nil,
+    deliverCommand: (@Sendable (
+        _ catalogID: String, _ name: String, _ arguments: [String]
+    ) async throws -> Void)? = nil
 ) -> ComposerRouterStore.Dependencies {
     ComposerRouterStore.Dependencies(
         hostID: UUID(),
@@ -50,10 +53,9 @@ private func makeDependencies(
         tagFilter: { tags?.append($0) },
         workspaces: { ["iOS App"] },
         statuses: { ["blocked", "working", "done", "idle"] },
-        agents: { ["docs-review", "accessibility"] })
+        agents: { ["docs-review", "accessibility"] },
+        deliverCommand: deliverCommand)
 }
-
-@MainActor
 private func freshDefaults() -> UserDefaults {
     let name = "ChatComposerPlusMenuTests.\(UUID().uuidString)"
     return UserDefaults(suiteName: name) ?? .standard
@@ -89,8 +91,9 @@ struct ChatComposerPlusMenuModeTests {
 struct ChatComposerCommandSelectionTests {
     /// A chosen agent command is a catalog ID + arguments; its
     /// delivery text is assembled ONCE from the resolved intent —
-    /// the same wire form a typed `/name args` would take, never
-    /// re-guessed from prose.
+    /// the same wire form a typed `/name args` would take. (The
+    /// TYPED path still delivers this form; a + menu selection
+    /// dispatches structurally — see the chooser suite.)
     @Test func deliveryTextMatchesTheTypedWireForm() {
         #expect(
             ComposerCommandSelection(
@@ -173,6 +176,71 @@ struct ChatComposerChooserTests {
         #expect(outcome == .rejected)
         #expect(store.activeChooser == .slash)
         #expect(store.routingError?.contains("Usage") == true)
+    }
+
+    /// An AGENT command selection dispatches STRUCTURALLY through the
+    /// deliverCommand seam (the command.invoke contract): the catalog
+    /// ID and arguments go out as an opaque invocation — never as
+    /// slash text re-parsed by a passthrough (review round 1's
+    /// blocker: the old path "succeeded" while nothing invoked the
+    /// command).
+    @MainActor
+    @Test func agentCommandSelectionDispatchesThroughTheSeam() async {
+        let invocations = Recorder<(id: String, name: String, args: [String])>()
+        let store = ComposerRouterStore(
+            dependencies: makeDependencies(
+                levelDefaults: freshDefaults(),
+                deliverCommand: { id, name, args in
+                    invocations.append((id, name, args))
+                }))
+        store.openChooser(for: .slash)
+        let outcome = await store.runCommandSelection(
+            ComposerCommandSelection(
+                catalogID: "omp:compact", name: "compact",
+                arguments: "soft --keep-recent"))
+        #expect(outcome == .handled)
+        #expect(store.activeChooser == nil)
+        #expect(invocations.all.count == 1)
+        #expect(invocations.all[0].id == "omp:compact")
+        #expect(invocations.all[0].name == "compact")
+        // Whitespace-separated arguments arrive as an array.
+        #expect(invocations.all[0].args == ["soft", "--keep-recent"])
+    }
+
+    /// No command lane (nil seam — no broker chat / capability
+    /// closed): an agent-command selection REJECTS honestly with a
+    /// reason. It must never fall back to delivering slash text as a
+    /// prompt (the silent-no-delivery bug).
+    @MainActor
+    @Test func agentCommandSelectionWithoutSeamRejectsHonestly() async {
+        let store = ComposerRouterStore(
+            dependencies: makeDependencies(levelDefaults: freshDefaults()))
+        store.openChooser(for: .slash)
+        let outcome = await store.runCommandSelection(
+            ComposerCommandSelection(
+                catalogID: "omp:compact", name: "compact", arguments: ""))
+        #expect(outcome == .rejected)
+        #expect(store.activeChooser == .slash)
+        #expect(store.routingError?.contains("cannot run commands") == true)
+    }
+
+    /// A seam delivery failure surfaces the reason and keeps the
+    /// chooser open.
+    @MainActor
+    @Test func seamFailureKeepsChooserOpenWithError() async {
+        struct Boom: LocalizedError {
+            var errorDescription: String? { "The agent refused the command." }
+        }
+        let store = ComposerRouterStore(
+            dependencies: makeDependencies(
+                levelDefaults: freshDefaults(),
+                deliverCommand: { _, _, _ in throw Boom() }))
+        store.openChooser(for: .slash)
+        let outcome = await store.runCommandSelection(
+            ComposerCommandSelection(
+                catalogID: "omp:compact", name: "compact", arguments: ""))
+        #expect(outcome == .rejected)
+        #expect(store.routingError == "The agent refused the command.")
     }
 
     /// A mention selection resolves + delivers like a typed mention;

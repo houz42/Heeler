@@ -1,0 +1,62 @@
+[
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "BA7D68CB-D0F1-491A-851A-E6230E790FA3",
+        "deviceName" : "iPhone 17",
+        "exportedFileName" : "847B1221-681D-48AB-8E34-A2E973D4C0C6.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "composer-attachment-inside-capsule_0_440A831A-887D-46CB-96AB-A2CB5E51EC45.png",
+        "timestamp" : 1790147943.746
+      }
+    ],
+    "testIdentifier" : "ComposerProofTests/testAttachmentTileAppearsInsideExtendedCapsule()",
+    "testIdentifierURL" : "test://com.apple.xcode/Heeler/HeelerUITests/ComposerProofTests/testAttachmentTileAppearsInsideExtendedCapsule"
+  },
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "BA7D68CB-D0F1-491A-851A-E6230E790FA3",
+        "deviceName" : "iPhone 17",
+        "exportedFileName" : "DEA92C39-6E86-4144-B12D-220E7344C373.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "composer-resting-compact-row_0_80ACA2EC-79E6-43E6-A7D1-42C97DAF5049.png",
+        "timestamp" : 1790147951.62
+      }
+    ],
+    "testIdentifier" : "ComposerProofTests/testEmptyComposerIsOneCompactRow()",
+    "testIdentifierURL" : "test://com.apple.xcode/Heeler/HeelerUITests/ComposerProofTests/testEmptyComposerIsOneCompactRow"
+  },
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "BA7D68CB-D0F1-491A-851A-E6230E790FA3",
+        "deviceName" : "iPhone 17",
+        "exportedFileName" : "29C26DD6-5AE2-470F-BA1B-1383BACFE8F6.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "composer-multiline-grown_0_D8AB83C8-AD5B-4E69-885E-59785AC75A5A.png",
+        "timestamp" : 1790147965.806
+      }
+    ],
+    "testIdentifier" : "ComposerProofTests/testMultilineGrowsAndSendEnables()",
+    "testIdentifierURL" : "test://com.apple.xcode/Heeler/HeelerUITests/ComposerProofTests/testMultilineGrowsAndSendEnables"
+  },
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "BA7D68CB-D0F1-491A-851A-E6230E790FA3",
+        "deviceName" : "iPhone 17",
+        "exportedFileName" : "A076556E-748E-4955-A27F-10F5CD6663CA.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "composer-plus-menu-open_0_E891ECD6-0E29-4BA0-80CB-BE07162383A9.png",
+        "timestamp" : 1790147975.419
+      }
+    ],
+    "testIdentifier" : "ComposerProofTests/testPlusMenuHoldsPrefixModesAndAttachments()",
+    "testIdentifierURL" : "test://com.apple.xcode/Heeler/HeelerUITests/ComposerProofTests/testPlusMenuHoldsPrefixModesAndAttachments"
+  }
+]

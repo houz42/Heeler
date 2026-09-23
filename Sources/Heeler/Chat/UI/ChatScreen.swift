@@ -237,6 +237,12 @@ struct ChatScreen: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.appReadingTextSize) private var readingTextSize
 
+    /// The chat writing-assistance choice (v3): the ordinary chat
+    /// field follows it (default System); dedicated editors stay
+    /// literal. Observed so a Settings flip mid-session re-applies
+    /// the text traits on the next representable update pass.
+    @State private var writingAssistance = WritingAssistanceSettings.shared
+
     var body: some View {
         VStack(spacing: 0) {
             transcriptScrollView
@@ -1152,11 +1158,12 @@ struct ChatScreen: View {
                 // chat shows what was typed without re-focusing.
                 collapsed: isResting,
                 placeholder: "Message",
-                // v3 writing assistance: ordinary chat follows the
-                // system keyboard's own correction/prediction (the
-                // design doc's default); the per-draft "Literal
-                // input" override is a follow-up setting.
-                writingAssistance: true,
+                // v3 writing assistance: the ordinary chat field
+                // follows the persisted System/Off choice (default
+                // System — the OS keyboard's own correction and
+                // prediction). Dedicated command/path/shell editors
+                // are always literal and never read this.
+                writingAssistance: writingAssistance.isEnabled,
                 onEdit: { [self] newText, caret in
                     self.applyComposerEdit(newText, caret: caret)
                 },
@@ -1201,23 +1208,46 @@ struct ChatScreen: View {
     /// bounded. NO keyboard-dismiss chrome — the OS keyboard's own
     /// dismissal control is the only one (v3: never replace system
     /// keys).
+    ///
+    /// ATTACHMENT TILES (current design): the draft rail rides INSIDE
+    /// the upward-extended capsule — the capsule grows upward to hold
+    /// the tile row above the field, one capsule, no separate rail
+    /// bar. When attachments exist the + control MOVES to the END of
+    /// the capsule's tile row (only one + is ever visible).
     @ViewBuilder
     private var composerRow: some View {
         if let router {
             HStack(alignment: .bottom, spacing: 8) {
-                // The + button: circular, left of the capsule. Its
-                // menu holds the four prefix modes (v3) THEN the
-                // image/file actions. Capability-unavailable actions
-                // arrive disabled with a reason via the shared menu
-                /// policy.
-                plusMenu
-                // The capsule: field + inline Send on its right
-                /// edge. One rounded background over both so the Send
-                /// circle sits INSIDE the capsule (the Messages
-                /// layout).
-                HStack(alignment: .bottom, spacing: 2) {
-                    composerField
-                    sendButton
+                // No attachments: the + sits LEFT of the capsule (the
+                /// compact one-row state). With attachments held, the
+                /// + moves into the capsule's tile row (below) and
+                /// the leading slot stays empty — only one + exists.
+                if draftItems.isEmpty { plusMenu }
+                // The capsule: tiles (when held) + field + inline
+                /// Send. One rounded background over all of it so the
+                /// Send circle and tile row both sit INSIDE the
+                /// capsule (the current design's extended capsule).
+                VStack(alignment: .leading, spacing: 6) {
+                    if !draftItems.isEmpty {
+                        HStack(spacing: 8) {
+                            ChatDraftTileRail(
+                                items: draftItems,
+                                failedItemID: failedAttachmentItemID,
+                                removeItem: { id in removeDraftItem(id) },
+                                openPreview: { item in
+                                    previewedDraftItem = item
+                                },
+                                openCollection: {
+                                    showsDraftCollection = true
+                                })
+                            plusMenu
+                        }
+                        .padding(.leading, 8)
+                    }
+                    HStack(alignment: .bottom, spacing: 2) {
+                        composerField
+                        sendButton
+                    }
                 }
                 .padding(.leading, 12)
                 .padding(.trailing, 4)
@@ -1348,20 +1378,6 @@ struct ChatScreen: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.top, 6)
-                }
-                // The draft tile rail (§D): every draft item (images,
-                // files, quotes) as a small square tile, corner-x
-                // removes; +N (only on real overflow) opens the
-                // collection sheet. Preserved across blur.
-                if !draftItems.isEmpty {
-                    ChatDraftTileRail(
-                        items: draftItems,
-                        failedItemID: failedAttachmentItemID,
-                        removeItem: { id in removeDraftItem(id) },
-                        openPreview: { item in previewedDraftItem = item },
-                        openCollection: { showsDraftCollection = true })
                         .padding(.horizontal, 12)
                         .padding(.top, 6)
                 }

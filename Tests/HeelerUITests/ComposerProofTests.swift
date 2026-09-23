@@ -4,9 +4,12 @@ import XCTest
 
 /// v3 Messages-style composer proofs over the interactive demo chat
 /// (`.chatComposer`): the compact resting row (+ button, capsule,
-/// inline Send), multiline growth bounded, the attachment tile above
-/// the capsule, and the + menu exposing the four prefix modes then
-/// image/file. Assertions ride the accessibility tree; screenshots
+/// inline Send), multiline growth bounded, and the + menu exposing the
+/// four prefix modes then image/file. The attachment state rides the
+/// SEEDED route (`--demo-composer-attachment`): the persisted-draft
+/// restore (the real item-18 path) opens with the tile INSIDE the
+/// upward-extended capsule, the + moved to the tile row's end, and
+/// Send enabled. Assertions ride the accessibility tree; screenshots
 /// carry the visual proof (the green-accent Send, the capsule shape).
 @MainActor
 final class ComposerProofTests: XCTestCase {
@@ -145,42 +148,53 @@ final class ComposerProofTests: XCTestCase {
         app.staticTexts.firstMatch.tap()
     }
 
-    // MARK: - The attachment tile rides above the capsule
+    // MARK: - The attachment tile rides inside the extended capsule
 
-    func testAttachmentTileAppearsAboveCapsule() throws {
-        let app = launchComposer()
+    /// The attachment capture runs the SEEDED demo route
+    /// (`--demo-composer-attachment`): the persisted-draft restore
+    /// (the real item-18 path) opens with the image tile INSIDE the
+    /// upward-extended capsule, the + moved to the tile row's end,
+    /// and Send enabled — deterministic, no OS-picker driving.
+    func testAttachmentTileAppearsInsideExtendedCapsule() {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "--uitest", "--demo-screenshots", "--demo-chat-composer",
+            "--demo-composer-attachment",
+        ]
+        app.launch()
 
+        // The tile (the restored image item) renders inside the
+        // capsule, above the field.
+        let tile = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label CONTAINS %@", "Pending image attachment")
+        ).firstMatch
         XCTAssertTrue(
-            addButton(app).waitForExistence(timeout: UITestTimeouts.launch))
+            tile.waitForExistence(timeout: UITestTimeouts.launch),
+            "the restored attachment tile must appear inside the extended capsule")
 
-        // The demo staging store completes instantly with a fake Host
-        // path; the fileImporter's sheet is the OS picker. Instead of
-        // driving the OS document picker (host-dependent), attach via
-        // the demo's Add Image flow: the menu action presents the
-        // PhotosPicker, which on a fresh simulator offers the stock
-        // photo library. That is equally host-dependent — so this
-        // proof attaches through the PASTE path instead: put image
-        // bytes on the pasteboard, focus the field, and paste.
-        let menu = addButton(app)
-        menu.tap()
-        let addImage = app.buttons["Add Image"].firstMatch
-        XCTAssertTrue(addImage.waitForExistence(timeout: UITestTimeouts.standard))
-        addImage.tap()
-
-        // The PhotosPicker sheet must present (the + menu's image
-        // action is wired to the real picker).
+        // The restored prose draft sits in the field.
+        let field = composerField(app)
         XCTAssertTrue(
-            app.waitForSheet(timeout: UITestTimeouts.standard),
-            "the photo picker sheet must present from the + menu")
+            field.waitForExistence(timeout: UITestTimeouts.standard))
+        let value = field.value as? String ?? ""
+        XCTAssertTrue(
+            value.contains("Take a look at this screenshot"),
+            "the seeded draft's prose must restore into the field")
 
-        // Screenshot the picker-present state for the record, then
-        // dismiss (cancel) — the sheet itself is OS chrome.
-        captureScreenshot(app, "composer-plus-menu-photos-open", lifetime: .keepAlways)
-        app.sheets.firstMatch.swipeDown(velocity: .fast)
+        // Exactly ONE Add control remains on screen: with
+        // attachments held the + moved into the capsule's tile row;
+        // it did not duplicate.
+        XCTAssertEqual(
+            app.buttons.matching(
+                NSPredicate(format: "label == %@", "Add")).count, 1,
+            "only one + control must be visible with attachments held")
 
-        // The tile-above-capture proof runs on the paste path in the
-        // unit suite (ChatDraftTileRail's fits cap) — the UI proof
-        // here pins that the + menu's image action opens the real
-        // picker, not a dead button.
+        // Send enables with the held attachment (the shared
+        // predicate: items alone make the draft sendable).
+        XCTAssertTrue(
+            sendButton(app).isEnabled,
+            "Send must enable with a held attachment tile")
+
+        captureScreenshot(app, "composer-attachment-inside-capsule", lifetime: .keepAlways)
     }
 }

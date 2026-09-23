@@ -106,6 +106,19 @@ final class ComposerRouterStore {
         let workspaces: @MainActor () -> [String]
         let statuses: @MainActor () -> [String]
         let agents: @MainActor () -> [String]
+        /// Delivers one explicitly-selected agent (omp) command
+        /// STRUCTURALLY — the v3 command.invoke contract: the CATALOG
+        /// ID and its arguments go out as one opaque invocation, never
+        /// as slash text for another layer to re-parse. Nil = the
+        /// surface has no command-invocation lane (no broker chat /
+        /// the registration lacks the `commands` capability) — the
+        /// router then rejects a selected agent command honestly
+        /// instead of silently dropping it. Client-local commands
+        /// (/level, /follow) never take this seam; the router owns
+        /// them.
+        let deliverCommand: (@Sendable (
+            _ catalogID: String, _ name: String, _ arguments: [String]
+        ) async throws -> Void)?
         /// User-facing copy for a delivery/scratch-shell failure.
         let describeError: @Sendable (_ error: any Error) -> String
         let bashTimeout: Duration
@@ -131,6 +144,9 @@ final class ComposerRouterStore {
                 ["blocked", "working", "done", "idle"]
             },
             agents: @escaping @MainActor () -> [String] = { [] },
+            deliverCommand: (@Sendable (
+                _ catalogID: String, _ name: String, _ arguments: [String]
+            ) async throws -> Void)? = nil,
             describeError: @escaping @Sendable (_ error: any Error) -> String = {
                 ($0 as? LocalizedError)?.errorDescription ?? String(describing: $0)
             },
@@ -150,6 +166,7 @@ final class ComposerRouterStore {
             self.workspaces = workspaces
             self.statuses = statuses
             self.agents = agents
+            self.deliverCommand = deliverCommand
             self.describeError = describeError
             self.bashTimeout = bashTimeout
             self.bashPollInterval = bashPollInterval
@@ -257,18 +274,48 @@ final class ComposerRouterStore {
         dependencies.tagFilter(filter)
     }
 
-    /// Executes one + menu/chooser selection end-to-end (v3's
-    /// selection-resolves-to-intent rule). The caller built the
-    /// selection from a catalog ID; this runs it through the SAME
-    /// routing a typed draft would take — never a parallel path,
-    /// never re-parsing text. `.handled` clears the chooser;
+    /// Executes one + menu/chooser command selection (v3's
+    /// selection-resolves-to-intent rule). The selection is a catalog
+    /// ID + arguments; delivery NEVER re-serializes it to slash text:
+    /// a CLIENT-LOCAL command (/level, /follow) runs on the store's
+    /// own route (the router owns it), and an AGENT command goes
+    /// through the ``Dependencies/deliverCommand`` seam — one opaque
+    /// command.invoke for the agent to execute, never prompt text
+    /// another layer re-parses. `.handled` clears the chooser;
     /// `.rejected` keeps it open with `routingError` explaining.
     func runCommandSelection(
         _ selection: ComposerCommandSelection
     ) async -> ComposerSubmitOutcome {
-        let outcome = await submit(selection.deliveryText)
-        if outcome != .rejected { activeChooser = nil }
-        return outcome
+        // Client-local commands: the router owns them outright.
+        if selection.catalogID.hasPrefix("local:") {
+            let outcome = await routeSlash(
+                name: selection.name, args: selection.arguments)
+            if outcome != .rejected { activeChooser = nil }
+            return outcome
+        }
+        // Agent commands: the structured lane. A nil seam = this
+        // surface has no command-invocation capability — reject
+        // honestly, never silently drop, never fall back to
+        // delivering slash text as a prompt (the review's blocker:
+        // a passthrough "delivered" text the agent never runs as a
+        // command).
+        guard let deliverCommand = dependencies.deliverCommand else {
+            routingError =
+                "This agent cannot run commands from the menu."
+            return .rejected
+        }
+        let arguments = selection.arguments
+            .split(whereSeparator: \.isWhitespace)
+            .map(String.init)
+        do {
+            try await deliverCommand(
+                selection.catalogID, selection.name, arguments)
+            activeChooser = nil
+            return .handled
+        } catch {
+            routingError = dependencies.describeError(error)
+            return .rejected
+        }
     }
 
     /// Executes one + menu/chooser mention selection (structured
@@ -686,7 +733,10 @@ extension ComposerRouterStore {
         agent: ConsoleAgent,
         bashIO: ComposerBashIO,
         agentKind: String = "omp",
-        commandFileIO: AgentCommandFileIO? = nil
+        commandFileIO: AgentCommandFileIO? = nil,
+        deliverCommand: (@Sendable (
+            _ catalogID: String, _ name: String, _ arguments: [String]
+        ) async throws -> Void)? = nil
     ) -> Dependencies {
         let hostID = agent.hostID
         let paneID = agent.agent.paneID
@@ -733,6 +783,7 @@ extension ComposerRouterStore {
                     .filter { seen.insert($0).inserted }
             },
             agents: { console.agents.compactMap(Self.suggestionName) },
+            deliverCommand: deliverCommand,
             describeError: { AgentComposerStore.message(for: $0) })
     }
 

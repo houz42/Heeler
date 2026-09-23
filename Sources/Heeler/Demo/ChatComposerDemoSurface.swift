@@ -76,6 +76,46 @@
             .onAppear { buildDependencies() }
         }
 
+        /// The attachment-capture route's launch argument.
+        static let attachmentLaunchArgument = "--demo-composer-attachment"
+
+        /// True when the attachment capture route is active.
+        private static var wantsAttachmentSeed: Bool {
+            ProcessInfo.processInfo.arguments.contains(attachmentLaunchArgument)
+        }
+
+        init() {
+            // Seed in INIT, before ChatScreen's onAppear loads the
+            // persisted draft: the capture opens on the RESTORED
+            /// state (the real item-18 path), never a post-hoc write.
+            if Self.wantsAttachmentSeed {
+                ChatDraftPersistenceStore.shared.save(
+                    ChatPaneDraft(
+                        text: "Take a look at this screenshot —",
+                        caretLocation: 27,
+                        items: [
+                            ChatPaneDraft.Item(
+                                kind: .image,
+                                id: "demo-image-1",
+                                remotePath: "/home/demo/uploads/shot.png",
+                                name: nil,
+                                text: nil,
+                                author: nil)
+                        ]),
+                    paneID: "demo:composer")
+            } else {
+                // The plain capture route opens the RESTING row: a
+                // stale seed from a previous attachment capture must
+                // not bleed in (the draft suite persists across
+                // relaunches by design).
+                ChatDraftPersistenceStore.shared.clear(paneID: "demo:composer")
+            }
+            _model = StateObject(wrappedValue: ChatComposerDemoModel())
+            _levelStore = State(
+                initialValue: ChatDetailLevelStore(
+                    defaults: DemoScreenshotFixture.makeDefaults()))
+        }
+
         /// Wires the router + attachments once: the real command
         /// catalog over scripted seams (bash pane records but never
         /// connects; mention resolution over a fixed roster).
@@ -114,6 +154,15 @@
                     statuses: { ["blocked", "working", "done", "idle"] },
                     agents: {
                         ["docs-review", "accessibility", "reviewer"]
+                    },
+                    // The demo's command lane: a selection "invokes"
+                    // by landing the command + arguments in the live
+                    // transcript — visibly structured, never slash
+                    // text through the prompt path.
+                    deliverCommand: { [model] catalogID, name, arguments in
+                        try await model.deliver(
+                            "⚡ \(catalogID) (\(name))"
+                            + (arguments.isEmpty ? "" : " args: \(arguments.joined(separator: " "))"))
                     },
                     describeError: { "Demo: \($0.localizedDescription)" },
                     bashTimeout: .seconds(2),
