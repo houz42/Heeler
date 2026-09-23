@@ -66,6 +66,37 @@ export function readEnrollment(stateDir, pairingId) {
   }
 }
 
+/**
+ * List every surviving Enrollment record in the state dir. Read-only: no
+ * sweep, no creation. Records are ceremony artifacts that the startup sweep
+ * ages out a grace period after their ceremony expired, so this only ever
+ * enriches a device listing (fingerprint → enrolled-at, pairing id); the
+ * authoritative record of a paired device is its authorized_keys line.
+ *
+ * @returns {{pairingId: string, expiresAt: number, fingerprint: string, line: string}[]}
+ */
+export function listEnrollments(stateDir) {
+  const dir = join(stateDir, "enrolled");
+  let names;
+  try {
+    names = readdirSync(dir);
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      throw error;
+    }
+    return [];
+  }
+  const records = [];
+  for (const name of names) {
+    try {
+      records.push(JSON.parse(readFileSync(join(dir, name), "utf8")));
+    } catch {
+      // Malformed mid-write garbage: skip it, the sweep would remove it too.
+    }
+  }
+  return records;
+}
+
 function singleQuoted(path, what) {
   // The whole forced command lives inside authorized_keys double quotes and
   // is then parsed by the login shell; single-quoting the paths keeps both

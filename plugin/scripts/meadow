@@ -22,10 +22,14 @@
 set -eu
 
 subcommand="${1-}"
-if [ "$subcommand" != "pair" ] && [ "$subcommand" != "--help" ] && [ "$subcommand" != "-h" ] && [ -n "$subcommand" ]; then
-  echo "meadow: unknown subcommand '$subcommand' (try: meadow pair)" >&2
-  exit 2
-fi
+case "$subcommand" in
+  pair | devices) ;;
+  --help | -h | "") ;;
+  *)
+    echo "meadow: unknown subcommand '$subcommand' (try: meadow pair, meadow devices)" >&2
+    exit 2
+    ;;
+esac
 
 find_plugin_dir() {
   if [ -n "${MEADOW_PLUGIN_DIR:-}" ]; then
@@ -75,4 +79,7 @@ if [ -z "$NODE" ]; then
   exit 127
 fi
 
-exec "$NODE" "$PLUGIN_DIR/src/pair-cli.js" "$@"
+case "$subcommand" in
+  devices) exec "$NODE" "$PLUGIN_DIR/src/devices-cli.js" "$@" ;;
+  *) exec "$NODE" "$PLUGIN_DIR/src/pair-cli.js" "$@" ;;
+esac

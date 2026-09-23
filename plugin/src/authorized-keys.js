@@ -34,6 +34,31 @@ export function authorizedKeysPath(home) {
 }
 
 /**
+ * Read the current authorized_keys lines without taking the edit lock or
+ * creating anything. Renames from editAuthorizedKeys are atomic, so a plain
+ * read never observes a partial file; the trailing newline is dropped
+ * exactly like editAuthorizedKeys does.
+ *
+ * @returns {string[]} the lines, or [] when the file does not exist yet
+ */
+export function readAuthorizedKeysLines(home) {
+  let content;
+  try {
+    content = readFileSync(authorizedKeysPath(home), "utf8");
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      throw error;
+    }
+    return [];
+  }
+  const lines = content.split("\n");
+  if (lines.at(-1) === "") {
+    lines.pop();
+  }
+  return lines;
+}
+
+/**
  * Compose a restricted Bootstrap Key authorized_keys line.
  *
  * @param {object} options
