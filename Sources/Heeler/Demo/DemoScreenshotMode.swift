@@ -1474,7 +1474,7 @@
                             // proof) is following it.
                             sendCount += 1
                             Task {
-                                _ = try? await store?.send(
+                                _ = try? await store?.submit(
                                     "Sent message \(sendCount) from the user")
                             }
                         }
