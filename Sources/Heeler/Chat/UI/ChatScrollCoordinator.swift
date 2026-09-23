@@ -64,10 +64,24 @@ struct ChatViewportGeometry: Sendable, Equatable {
 @Observable
 final class ChatScrollCoordinator {
 
-    // MARK: Reported inputs
+    // MARK: Reading intent — user-owned state (the slow-reading fix)
 
+    /// The reader's INTENT, written ONLY by the user (their scrolls,
+    /// their jumps) and the initial mount — NEVER by layout, growth,
+    /// or visibility alone. `true` = following the live bottom edge;
+    /// `false` = reading history (LATCHED: pauses, layout changes and
+    /// content growth cannot flip it back; only the user can).
+    ///
+    /// The pre-intent bug: followsLatest was derived from the bottom
+    /// sentinel's VISIBILITY, so a short drag whose settle left the
+    /// sentinel visible flipped intent back to following and the next
+    /// growth yanked the reader off their position.
     private(set) var followsLatest = true
     private(set) var scrollIdle = true
+    /// Whether the CURRENT (or most recent) scroll activity is the
+    /// USER's own (tracking/decelerating) rather than a programmatic
+    /// decision's animation.
+    private var userIsScrolling = false
     private(set) var geometry: ChatViewportGeometry?
     private(set) var itemBounds: (first: String, last: String)?
 
@@ -92,39 +106,33 @@ final class ChatScrollCoordinator {
 
     // MARK: Input ports
 
-    /// The bottom sentinel's presence: true = the latest edge is on
-    /// screen (no command needed to hold it). false = either the
-    /// reader scrolled up (stop following) or content GREW while
-    /// following (keep following — the sentinel was pushed offscreen
-    /// by the new records, not by the reader).
+    /// The bottom sentinel's presence (VISIBILITY — a fact, never the
+    /// intent): true = the latest edge is on screen.
     private(set) var bottomEdgeVisible = true
-    /// Set when the last record id changed while the reader was
-    /// following latest (content growth at the edge): the sentinel's
-    /// NEXT departure keeps followsLatest (growth ≠ reading history).
-    private var edgeGrewWhileFollowing = false
-    /// Same flag for the viewport SHRINK path (the keyboard appearing
-    /// while at the edge).
-    private var viewportShrankWhileFollowing = false
-
+    /// The user's own scroll is the only path that resumes following:
+    /// set when the user's scroll (or their jump) brings the edge
+    /// back on screen.
+    private var userReturnedToEdge = false
 
     func bottomEdgeVisibleChanged(_ visible: Bool) {
         guard bottomEdgeVisible != visible else { return }
         bottomEdgeVisible = visible
         if visible {
-            followsLatest = true
-            edgeGrewWhileFollowing = false
-            viewportShrankWhileFollowing = false
-        } else if edgeGrewWhileFollowing || viewportShrankWhileFollowing {
-            // The sentinel left because content grew or the viewport
-            // shrank (the keyboard) while the reader was following —
-            // NOT a scroll up. Keep following; the hold re-reveals
-            // the edge.
-            edgeGrewWhileFollowing = false
-            viewportShrankWhileFollowing = false
+            // The edge is on screen. If the USER's own scroll (or
+            // their jump) put it there, they are following again —
+            // the only resume path. Programmatic settles and layout
+            // changes do NOT write intent.
+            if userIsScrolling || userReturnedToEdge {
+                followsLatest = true
+                userReturnedToEdge = false
+            }
         } else {
-            // The reader left the bottom edge by scrolling up: they
-            // are reading history now.
-            followsLatest = false
+            // The edge left the screen. If the USER's own scroll
+            // removed it, they are READING (latched): growth, layout
+            // and keyboard changes never resume following for them.
+            if userIsScrolling {
+                followsLatest = false
+            }
         }
         ChatViewportLog.shared.record(
             .anchor, visible ? "at latest edge" : "left latest edge")
@@ -139,7 +147,22 @@ final class ChatScrollCoordinator {
         let idle = !phase.isScrolling
         guard idle != scrollIdle else { return }
         scrollIdle = idle
+        if phase == .tracking {
+            // The user's OWN touch: their intent outranks every
+            // automatic command — a live decision is suspended (the
+            // user is moving the content; any pending automatic
+            // position would fight their drag), and their scroll is
+            // the only writer of intent from here.
+            userIsScrolling = true
+            if position != nil {
+                position = nil
+                pendingLandingTargetID = nil
+                ChatViewportLog.shared.record(
+                    .anchor, "user interaction — automatics suspended")
+            }
+        }
         if idle {
+            userIsScrolling = false
             settleIfSatisfied()
         }
     }
@@ -147,13 +170,6 @@ final class ChatScrollCoordinator {
     func geometryChanged(_ new: ChatViewportGeometry) {
         guard new != geometry else { return }
         let old = geometry
-        // A viewport SHRINK while following latest (the keyboard
-        // appearing) may push the bottom sentinel offscreen without
-        // the reader scrolling — the sentinel's next departure must
-        // not stop the following.
-        if followsLatest, let old, new.viewportHeight < old.viewportHeight {
-            viewportShrankWhileFollowing = true
-        }
         geometry = new
         ChatViewportLog.shared.record(
             .geometry,
@@ -169,14 +185,6 @@ final class ChatScrollCoordinator {
         guard itemBounds?.first != first || itemBounds?.last != last
         else { return }
         let hadItems = itemBounds != nil
-        // Growth at the edge: the LAST record id changed while the
-        // reader was following latest (a just-sent message, a stream
-        // tail) — capture it BEFORE the bounds update.
-        if followsLatest, let oldLast = itemBounds?.last,
-            oldLast != last, !last.isEmpty
-        {
-            edgeGrewWhileFollowing = true
-        }
         itemBounds = (first, last)
         ChatViewportLog.shared.record(.records, "first=\(first) last=\(last)")
         if !hadItems, geometry != nil, !didInitialAnchor {
@@ -314,8 +322,12 @@ final class ChatScrollCoordinator {
     /// screen, never blank.
     func userJumped(to id: String, anchor: UnitPoint) {
         issuePosition(ScrollPosition(id: id, anchor: anchor))
+        // The jump is the USER's explicit navigation: a bottom jump
+        // RESUMES following (their choice, the design's "resume only
+        // on explicit Latest"); any other jump latches READING.
         followsLatest = anchor == .bottom
         if anchor == .bottom {
+            userReturnedToEdge = true
             pendingLandingTargetID = id
             landingCorrections = 0
         }

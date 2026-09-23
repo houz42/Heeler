@@ -27,7 +27,11 @@ struct ChatScrollCoordinatorTests {
         // on the first geometry), then the geometry.
         coordinator.itemsChanged(first: first, last: last)
         if !following {
+            // Reading intent is the USER's: their scroll up (tracking)
+            // pushes the sentinel offscreen and latches reading.
+            coordinator.scrollPhaseChanged(.tracking)
             coordinator.bottomEdgeVisibleChanged(false)
+            coordinator.scrollPhaseChanged(.idle)
         }
         coordinator.geometryChanged(geometry)
         return (coordinator, geometry)
@@ -278,6 +282,114 @@ struct ChatScrollCoordinatorTests {
         coordinator.geometryChanged(ChatViewportGeometry(
             documentHeight: 700, viewportHeight: 700, contentTop: 700,
             rowsIntersectViewport: false))
+        #expect(coordinator.position == nil)
+    }
+
+    // MARK: Slow-reading intent separation (the design amendment)
+
+    @Test("a user scroll up LATCHES reading: content growth while paused issues NO command")
+    func readingLatchSurvivesGrowth() {
+        let (coordinator, _) = makeCoordinator(
+            document: 4000, viewport: 700, contentTop: 0, intersects: true)
+        // The user's slow drag up (tracking) — mid-read, they pause
+        // (stay in tracking), then content grows (a stream arrives).
+        coordinator.scrollPhaseChanged(.tracking)
+        coordinator.bottomEdgeVisibleChanged(false)
+        coordinator.itemsChanged(first: "row-a", last: "row-stream")
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 4500, viewportHeight: 700,
+            contentTop: 1500, rowsIntersectViewport: true))
+        // READING is latched: no follow-latest command fires — the
+        // reader's position is preserved (the slow-read instability
+        // was intent flipping back to following on visibility).
+        #expect(coordinator.position == nil)
+
+        // More growth while still idle-and-reading: STILL no command.
+        coordinator.itemsChanged(first: "row-a", last: "row-stream-2")
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 5000, viewportHeight: 700,
+            contentTop: 1500, rowsIntersectViewport: true))
+        #expect(coordinator.position == nil)
+
+        // The release (idle) does not flip intent either.
+        coordinator.scrollPhaseChanged(.idle)
+        coordinator.itemsChanged(first: "row-a", last: "row-stream-3")
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 5500, viewportHeight: 700,
+            contentTop: 1500, rowsIntersectViewport: true))
+        #expect(coordinator.position == nil)
+    }
+
+    @Test("a user's own scroll back to the edge RESUMES following")
+    func userScrollBackResumesFollowing() {
+        let (coordinator, _) = makeCoordinator(
+            document: 4000, viewport: 700, contentTop: 0, intersects: true)
+        // The user scrolls up (reading latched)...
+        coordinator.scrollPhaseChanged(.tracking)
+        coordinator.bottomEdgeVisibleChanged(false)
+        coordinator.scrollPhaseChanged(.idle)
+        // ...then scrolls back down: their own scroll puts the edge
+        // back on screen — following RESUMES (the only resume path).
+        coordinator.scrollPhaseChanged(.tracking)
+        coordinator.bottomEdgeVisibleChanged(true)
+        coordinator.scrollPhaseChanged(.idle)
+        // Growth now holds the bottom edge (following + edge lost).
+        coordinator.itemsChanged(first: "row-a", last: "row-new")
+        coordinator.bottomEdgeVisibleChanged(false)
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 4200, viewportHeight: 700,
+            contentTop: 0, rowsIntersectViewport: true))
+        #expect(
+            coordinator.position?.viewID(type: String.self) == "row-new")
+    }
+
+    @Test("a visibility flip alone NEVER writes intent (growth while idle at the edge follows)")
+    func visibilityAloneNeverFlipsIntent() {
+        let (coordinator, _) = makeCoordinator(
+            document: 4000, viewport: 700, contentTop: 0, intersects: true)
+        // The user nudges but stays at the edge; the settle leaves the
+        // sentinel VISIBLE; then growth pushes it offscreen while
+        // idle — intent was and stays FOLLOWING (at the edge, growth
+        // follows: the design's rule).
+        coordinator.scrollPhaseChanged(.tracking)
+        coordinator.scrollPhaseChanged(.idle)
+        coordinator.itemsChanged(first: "row-a", last: "row-new")
+        coordinator.bottomEdgeVisibleChanged(false)
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 4200, viewportHeight: 700,
+            contentTop: 0, rowsIntersectViewport: true))
+        #expect(
+            coordinator.position?.viewID(type: String.self) == "row-new")
+
+        // The SAME sequence while latched READING: the sentinel's
+        // return (a programmatic settle, not the user) does NOT
+        // resume following — growth still issues no command.
+        let (reading, _) = makeCoordinator(
+            document: 4000, viewport: 700, contentTop: 1000,
+            intersects: true, following: false)
+        reading.bottomEdgeVisibleChanged(true)
+        reading.itemsChanged(first: "row-a", last: "row-newer")
+        reading.geometryChanged(ChatViewportGeometry(
+            documentHeight: 4400, viewportHeight: 700,
+            contentTop: 1000, rowsIntersectViewport: true))
+        #expect(reading.position == nil)
+    }
+
+    @Test("user interaction SUSPENDS a live automatic command")
+    func userTouchSuspendsAutomatics() {
+        let (coordinator, _) = makeCoordinator(
+            document: 4000, viewport: 700, contentTop: 0, intersects: true)
+        // A live follow-latest hold is in flight...
+        coordinator.itemsChanged(first: "row-a", last: "row-new")
+        coordinator.bottomEdgeVisibleChanged(false)
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 4200, viewportHeight: 700,
+            contentTop: 0, rowsIntersectViewport: true))
+        #expect(coordinator.position != nil)
+        // ...the user's touch arrives: the automatic is SUSPENDED
+        // immediately (their intent outranks it; a pending position
+        // would fight their drag).
+        coordinator.scrollPhaseChanged(.tracking)
         #expect(coordinator.position == nil)
     }
 }

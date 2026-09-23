@@ -1811,7 +1811,12 @@
                         text: "The demo agent's reply lands here.")
                 }
             case "history.open":
-                lastSeq = 40 + committed.count
+                // The watermark is MONOTONIC: a refresh mid-stream
+                // (the page landing between two events) must not move
+                // the watermark BACKWARD past events the store has
+                // already consumed — a regressed watermark re-accepts
+                // old seqs (dupes) or gaps the next event (resync).
+                lastSeq = max(lastSeq, 40 + committed.count)
                 var items: [String] = []
                 for index in 0..<40 {
                     let role = index % 2 == 0 ? "user" : "assistant"
@@ -1825,8 +1830,9 @@
                     items.append(
                         #"{"kind":"message","id":"\#(record.id)","author":{"role":"\#(record.role)"},"createdAt":null,"blocks":[{"type":"text","text":"\#(record.text)"}]}"#)
                 }
+                let pageThrough = lastSeq
                 brokerSend(
-                    #"{"type":"response","id":"\#(id)","result":{"sessionId":"demo-session","generation":1,"revision":"rev-demo","throughSeq":\#(40 + committed.count),"items":[\#(items.joined(separator: ","))],"olderCursor":"demo-cursor"}}"#)
+                    #"{"type":"response","id":"\#(id)","result":{"sessionId":"demo-session","generation":1,"revision":"rev-demo","throughSeq":\#(pageThrough),"items":[\#(items.joined(separator: ","))],"olderCursor":"demo-cursor"}}"#)
             case "history.before":
                 brokerSend(
                     #"{"type":"response","id":"\#(id)","result":{"sessionId":"demo-session","generation":1,"revision":"rev-demo","throughSeq":0,"items":[{"kind":"message","id":"demo-old-1","author":{"role":"user"},"createdAt":null,"blocks":[{"type":"text","text":"Message -1 from the user"}]},{"kind":"message","id":"demo-old-2","author":{"role":"assistant"},"createdAt":null,"blocks":[{"type":"text","text":"Message -2 from the agent"}]}],"olderCursor":null}}"#)
