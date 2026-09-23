@@ -15,6 +15,30 @@ struct MeadowFirstConnectProvisioningTests {
 
     /// Scripts the whole remote surface the flow drives: provisioning
     /// commands, staging, snapshot, prompts, restarts.
+    /// Scripted broker probe for the flow's tests. `answers` replays in
+    /// call order (detect's probe, then provision's post-setup
+    /// re-probe): a host that comes UP when setup runs answers
+    /// [false, true].
+    private func scriptedProbe(answers: [Bool]) -> @Sendable (String, (any Transport)?) async -> Bool {
+        let box = ProbeAnswers(answers: answers)
+        return { _, _ in await box.next() }
+    }
+
+    /// Same answer every call.
+    private func scriptedProbe(up: Bool) -> @Sendable (String, (any Transport)?) async -> Bool {
+        scriptedProbe(answers: [up])
+    }
+
+    private final actor ProbeAnswers {
+        private var answers: [Bool]
+        init(answers: [Bool]) { self.answers = answers }
+        func next() -> Bool {
+            let first = answers.first ?? (answers.last ?? false)
+            if answers.count > 1 { answers.removeFirst() }
+            return first
+        }
+    }
+
     private final actor FlowTransport: Transport {
         private(set) var commands: [String] = []
         private(set) var prompts: [AgentPromptParams] = []
@@ -139,14 +163,21 @@ struct MeadowFirstConnectProvisioningTests {
         }
     }
 
-    /// A scripted package source: no bundle dependency.
-    private struct ScriptedPackageSource: MeadowPackageSource {
-        let package: MeadowPackage?
-        func package(for platform: RemoteHostPlatform?) async throws -> MeadowPackage? {
-            package
+    /// A connector whose transport IS an HeelerSSHTransport double the
+    /// broker-probe path accepts, with a scriptable up/down answer.
+    private final class ProbingConnector: TransportConnector {
+        let transport: FlowTransport
+        let brokerUp: Bool
+        init(transport: FlowTransport, brokerUp: Bool) {
+            self.transport = transport
+            self.brokerUp = brokerUp
+        }
+        func connect(settings: SSHTransportSettings) async throws -> any Transport {
+            transport
         }
     }
 
+    /// A scripted package source: no bundle dependency.
     // MARK: - Fixtures
 
     private func makeHost() throws -> Host {
@@ -155,70 +186,26 @@ struct MeadowFirstConnectProvisioningTests {
         return host
     }
 
-    private func makePackage() throws -> MeadowPackage {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("meadow-flow-\(UUID().uuidString).targz")
-        let bytes = Data("flow-package".utf8)
-        try bytes.write(to: url)
-        return MeadowPackage(
-            version: "0.1.0-dev.3",
-            sha256: SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined(),
-            prepared: PreparedFile(
-                fileURL: url, fileExtension: "targz", byteCount: Int64(bytes.count)))
-    }
 
     /// Scripts every command the detect+provision path issues, against a
     /// development layout (disposable roots).
+    /// Scripts the plugin-era detect+provision path: the socket
+    /// resolution command (issued by detect and again by provision) and
+    /// the plugin setup action.
     private func scriptProvisionPath(
         transport: FlowTransport
     ) async throws {
-        // The remote post-staging checksum verification must answer "ok".
-        let layout = BrokerProvisioningLayout.standard(
-            platform: .linux, homeDirectory: "/home/dev")
-        let packageBytes = Data("flow-package".utf8)
-        let sha = SHA256.hash(data: packageBytes).map { String(format: "%02x", $0) }.joined()
-        await transport.addScript(
-            try layout.remoteChecksumCommand(
-                path: "/remote/staging/file.targz", expectedSHA256: sha),
-            stdout: "ok")
-        // Platform probe.
-        await transport.addScript(
-            "printf '%s\\n%s\\n' \"$(uname)\" \"${HOME:-\"\"}\"",
-            stdout: "Linux\n/home/dev")
-        // Inspect answers: nothing installed, prerequisites satisfied.
-        // (`layout` declared at the top of this helper.)
+        // The resolution command runs TWICE (detect, then provision's
+        // post-setup re-resolve): queue both answers.
         await transport.queueScript(
-            layout.inspectCommand,
-            stdout: inspectAnswer(version: nil, service: "inactive"))
-        await transport.queueScript(layout.readAdapterShimCommand, stdout: "")
-        // Post-install refresh-inspect: installed, service active, shim
-        // present. QUEUED (not static) so the second run of the same
-        // command sees the post-install state while detect's run saw
-        // the pre-install one. Enable's own refresh inspect needs a
-        // THIRD answer (the queue replays in order).
-        await transport.queueScript(
-            layout.inspectCommand,
-            stdout: inspectAnswer(version: "0.1.0-dev.3", service: "active"))
-        await transport.queueScript(
-            layout.readAdapterShimCommand,
-            stdout: "// Managed by Heeler. Replaces the broker-adapter extension shim.")
-        await transport.queueScript(
-            layout.inspectCommand,
-            stdout: inspectAnswer(version: "0.1.0-dev.3", service: "active"))
-        await transport.queueScript(
-            layout.readAdapterShimCommand,
-            stdout: "// Managed by Heeler. Replaces the broker-adapter extension shim.")
-        // configureAdapter's refresh inspect (third re-run of the flow).
-        await transport.queueScript(
-            layout.inspectCommand,
-            stdout: inspectAnswer(version: "0.1.0-dev.3", service: "active"))
-        await transport.queueScript(
-            layout.readAdapterShimCommand,
-            stdout: "// Managed by Heeler. Replaces the broker-adapter extension shim.")
-        // Socket resolution.
-        await transport.addScript(
             "printf '%s' \"${XDG_DATA_HOME:-$HOME/.local/share}/meadow/broker.sock\"",
             stdout: "/home/dev/.local/share/meadow/broker.sock")
+        await transport.queueScript(
+            "printf '%s' \"${XDG_DATA_HOME:-$HOME/.local/share}/meadow/broker.sock\"",
+            stdout: "/home/dev/.local/share/meadow/broker.sock")
+        await transport.addScript(
+            "herdr plugin action invoke heeler.setup",
+            stdout: "M Meadow broker  up")
     }
 
     private func inspectAnswer(version: String?, service: String) -> String {
@@ -255,62 +242,7 @@ struct MeadowFirstConnectProvisioningTests {
         let host = try makeHost()
         let store = MeadowFirstConnectProvisioningStore(
             host: host,
-            connector: ConnectingConnector(transport: transport),
-            knownHosts: InMemoryKnownHostsStore(),
-            credentials: HostCredentialsProvider(
-                deviceKeys: DeviceKeyStore(secrets: InMemorySecretStore()),
-                secrets: InMemorySecretStore()),
-            preferredAddresses: PreferredAddressStore(
-                defaults: try #require(UserDefaults(suiteName: "mfc-\(UUID().uuidString)")),
-                hostID: host.id))
-        try await scriptProvisionPath(transport: transport)
-
-        await store.detect()
-
-        #expect(store.phase == .offering)
-        #expect(store.provisioning != nil)
-        // Detect is read-only: no mutations ran.
-        let commands = await transport.commands
-        #expect(!commands.contains { $0.contains("mkdir -p") })
-        #expect(!commands.contains { $0.contains("tar -xzf") })
-    }
-
-    @Test func detectOnFullyProvisionedHostSkipsOffer() async throws {
-        let transport = FlowTransport()
-        var host = try makeHost()
-        host.brokerChatSocketPath = "/home/dev/.local/share/meadow/broker.sock"
-        let store = MeadowFirstConnectProvisioningStore(
-            host: host,
-            connector: ConnectingConnector(transport: transport),
-            knownHosts: InMemoryKnownHostsStore(),
-            credentials: HostCredentialsProvider(
-                deviceKeys: DeviceKeyStore(secrets: InMemorySecretStore()),
-                secrets: InMemorySecretStore()),
-            preferredAddresses: PreferredAddressStore(
-                defaults: try #require(UserDefaults(suiteName: "mfc-\(UUID().uuidString)")),
-                hostID: host.id))
-        let layout = BrokerProvisioningLayout.standard(
-            platform: .linux, homeDirectory: "/home/dev")
-        await transport.addScript(
-            "printf '%s\\n%s\\n' \"$(uname)\" \"${HOME:-\"\"}\"",
-            stdout: "Linux\n/home/dev")
-        await transport.addScript(
-            layout.inspectCommand,
-            stdout: inspectAnswer(version: "0.1.0-dev.3", service: "active"))
-        await transport.addScript(
-            layout.readAdapterShimCommand,
-            stdout: "// Managed by Heeler. Replaces the broker-adapter extension shim.")
-
-        await store.detect()
-
-        #expect(store.phase == .done)
-    }
-
-    @Test func provisionInstallsEnablesShimsAndLandsOnRestartDecision() async throws {
-        let transport = FlowTransport()
-        let host = try makeHost()
-        let store = MeadowFirstConnectProvisioningStore(
-            host: host,
+            catalog: nil,
             connector: ConnectingConnector(transport: transport),
             knownHosts: InMemoryKnownHostsStore(),
             credentials: HostCredentialsProvider(
@@ -319,7 +251,59 @@ struct MeadowFirstConnectProvisioningTests {
             preferredAddresses: PreferredAddressStore(
                 defaults: try #require(UserDefaults(suiteName: "mfc-\(UUID().uuidString)")),
                 hostID: host.id),
-            packageSource: ScriptedPackageSource(package: try makePackage()))
+            brokerProbe: scriptedProbe(up: false))
+        try await scriptProvisionPath(transport: transport)
+
+        await store.detect()
+
+        #expect(store.phase == .offering)
+        // Detect is read-only: no setup action ran, no records written.
+        let commands = await transport.commands
+        #expect(!commands.contains { $0.contains("heeler.setup") })
+    }
+
+    @Test func detectWithLiveBrokerWritesRecordAndSkipsOffer() async throws {
+        // Plugin-era: a broker answering at the standard path (probe via
+        // an SSH transport double) writes the record and lands on .done.
+        let transport = FlowTransport()
+        let host = try makeHost()
+        let store = MeadowFirstConnectProvisioningStore(
+            host: host,
+            catalog: nil,
+            connector: ProbingConnector(transport: transport, brokerUp: true),
+            knownHosts: InMemoryKnownHostsStore(),
+            credentials: HostCredentialsProvider(
+                deviceKeys: DeviceKeyStore(secrets: InMemorySecretStore()),
+                secrets: InMemorySecretStore()),
+            preferredAddresses: PreferredAddressStore(
+                defaults: try #require(UserDefaults(suiteName: "mfc-\(UUID().uuidString)")),
+                hostID: host.id),
+            brokerProbe: scriptedProbe(answers: [true]))
+        await transport.queueScript(
+            "printf '%s' \"${XDG_DATA_HOME:-$HOME/.local/share}/meadow/broker.sock\"",
+            stdout: "/home/dev/.local/share/meadow/broker.sock")
+
+        await store.detect()
+
+        #expect(store.phase == .done)
+        #expect(store.resolvedSocketPath == "/home/dev/.local/share/meadow/broker.sock")
+    }
+
+    @Test func provisionInstallsEnablesShimsAndLandsOnRestartDecision() async throws {
+        let transport = FlowTransport()
+        let host = try makeHost()
+        let store = MeadowFirstConnectProvisioningStore(
+            host: host,
+            catalog: nil,
+            connector: ConnectingConnector(transport: transport),
+            knownHosts: InMemoryKnownHostsStore(),
+            credentials: HostCredentialsProvider(
+                deviceKeys: DeviceKeyStore(secrets: InMemorySecretStore()),
+                secrets: InMemorySecretStore()),
+            preferredAddresses: PreferredAddressStore(
+                defaults: try #require(UserDefaults(suiteName: "mfc-\(UUID().uuidString)")),
+                hostID: host.id),
+            brokerProbe: scriptedProbe(answers: [false, true]))
         try await scriptProvisionPath(transport: transport)
         await transport.setSnapshotAgents([
             agentInfo(
@@ -341,12 +325,11 @@ struct MeadowFirstConnectProvisioningTests {
         #expect(agents.first?.resumeSessionID == "01a0c4ef-6a8b-7169-86cf-265306ac7319")
         #expect(agents.dropFirst().first?.resumeSessionID == nil)
         #expect(store.resolvedSocketPath == "/home/dev/.local/share/meadow/broker.sock")
-        // The provisioning sequence ran: staging, checksum, extract,
-        // promote, unit write, enable, shim write.
+        // The plugin's setup action ran — the ONE coherent bring-up
+        // surface. No app-side install commands exist in the flow.
         let commands = await transport.commands
-        #expect(commands.contains { $0.contains("tar -xzf") })
-        #expect(commands.contains { $0.contains("systemctl --user enable --now") })
-        #expect(commands.contains { $0.contains("extensions/meadow-chat.ts") })
+        #expect(commands.contains { $0.contains("herdr plugin action invoke heeler.setup") })
+        #expect(!commands.contains { $0.contains("tar -xzf") })
     }
 
     @Test func skipRestartsKeepsBrokerAndCompletesWithoutRestarting() async throws {
@@ -354,6 +337,7 @@ struct MeadowFirstConnectProvisioningTests {
         let host = try makeHost()
         let store = MeadowFirstConnectProvisioningStore(
             host: host,
+            catalog: nil,
             connector: ConnectingConnector(transport: transport),
             knownHosts: InMemoryKnownHostsStore(),
             credentials: HostCredentialsProvider(
@@ -362,7 +346,7 @@ struct MeadowFirstConnectProvisioningTests {
             preferredAddresses: PreferredAddressStore(
                 defaults: try #require(UserDefaults(suiteName: "mfc-\(UUID().uuidString)")),
                 hostID: host.id),
-            packageSource: ScriptedPackageSource(package: try makePackage()))
+            brokerProbe: scriptedProbe(answers: [false, true]))
         try await scriptProvisionPath(transport: transport)
         await transport.setSnapshotAgents([agentInfo(paneID: "w1:pA", sessionFile: nil)])
 
@@ -383,6 +367,7 @@ struct MeadowFirstConnectProvisioningTests {
         let host = try makeHost()
         let store = MeadowFirstConnectProvisioningStore(
             host: host,
+            catalog: nil,
             connector: ConnectingConnector(transport: transport),
             knownHosts: InMemoryKnownHostsStore(),
             credentials: HostCredentialsProvider(
@@ -391,7 +376,7 @@ struct MeadowFirstConnectProvisioningTests {
             preferredAddresses: PreferredAddressStore(
                 defaults: try #require(UserDefaults(suiteName: "mfc-\(UUID().uuidString)")),
                 hostID: host.id),
-            packageSource: ScriptedPackageSource(package: try makePackage()))
+            brokerProbe: scriptedProbe(answers: [false, true]))
         try await scriptProvisionPath(transport: transport)
         await transport.setSnapshotAgents([
             agentInfo(
@@ -422,6 +407,7 @@ struct MeadowFirstConnectProvisioningTests {
         let host = try makeHost()
         let store = MeadowFirstConnectProvisioningStore(
             host: host,
+            catalog: nil,
             connector: ConnectingConnector(transport: transport),
             knownHosts: InMemoryKnownHostsStore(),
             credentials: HostCredentialsProvider(
@@ -430,10 +416,15 @@ struct MeadowFirstConnectProvisioningTests {
             preferredAddresses: PreferredAddressStore(
                 defaults: try #require(UserDefaults(suiteName: "mfc-\(UUID().uuidString)")),
                 hostID: host.id),
-            // No package for the platform: the flow must fail honestly
-            // before any remote mutation.
-            packageSource: ScriptedPackageSource(package: nil))
-        try await scriptProvisionPath(transport: transport)
+            brokerProbe: scriptedProbe(up: false))
+        // The plugin's setup action FAILS (nonzero exit): the flow must
+        // surface the honest failure and write nothing.
+        await transport.queueScript(
+            "printf '%s' \"${XDG_DATA_HOME:-$HOME/.local/share}/meadow/broker.sock\"",
+            stdout: "/home/dev/.local/share/meadow/broker.sock")
+        await transport.addScript(
+            "herdr plugin action invoke heeler.setup",
+            stdout: "plugin missing", exit: 1)
 
         await store.detect()
         await store.provision()
@@ -442,9 +433,7 @@ struct MeadowFirstConnectProvisioningTests {
             Issue.record("expected failed, got \(store.phase)")
             return
         }
-        #expect(message.contains("no broker package"))
-        let commands = await transport.commands
-        #expect(!commands.contains { $0.contains("tar -xzf") })
+        #expect(message.contains("heeler.setup exited 1"))
     }
 
     // MARK: - Helpers

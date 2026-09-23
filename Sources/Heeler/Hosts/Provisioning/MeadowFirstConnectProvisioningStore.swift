@@ -54,9 +54,6 @@ final class MeadowFirstConnectProvisioningStore {
     }
 
     private(set) var phase: Phase = .idle
-    /// The provisioning store for the confirmed Host, non-nil once a
-    /// session connection succeeded.
-    private(set) var provisioning: BrokerProvisioningStore?
     /// The resolved Meadow socket path written into the Host record.
     private(set) var resolvedSocketPath: String?
     /// The pending first-connect fingerprint, for the flow's trust alert.
@@ -70,10 +67,15 @@ final class MeadowFirstConnectProvisioningStore {
     @ObservationIgnored private let credentials: HostCredentialsProvider
     @ObservationIgnored private let preferredAddresses: PreferredAddressStore
     @ObservationIgnored private let fingerprintTimeout: Duration
-    @ObservationIgnored private let packageSource: MeadowPackageSource
     @ObservationIgnored private var transport: (any Transport)?
     @ObservationIgnored private var fingerprintDecision: CheckedContinuation<Bool, Never>?
     @ObservationIgnored private var fingerprintTimeoutTask: Task<Void, Never>?
+    /// The wire-level "does the broker answer at this path" probe.
+    /// Production opens a real broker channel (HeelerSSHTransport,
+    /// direct-streamlocal); tests inject a scripted answer because test
+    /// doubles cannot open streamlocal channels.
+    @ObservationIgnored private let brokerProbe:
+        @Sendable (_ socketPath: String, _ transport: (any Transport)?) async -> Bool
 
     init(
         host: Host,
@@ -83,7 +85,9 @@ final class MeadowFirstConnectProvisioningStore {
         credentials: HostCredentialsProvider = HostCredentialsProvider(),
         preferredAddresses: PreferredAddressStore,
         fingerprintTimeout: Duration = .seconds(60),
-        packageSource: MeadowPackageSource = BundledMeadowPackageSource()
+        brokerProbe: @escaping @Sendable (
+            _ socketPath: String, _ transport: (any Transport)?
+        ) async -> Bool = MeadowFirstConnectProvisioningStore.sshBrokerProbe
     ) {
         self.host = host
         self.catalog = catalog
@@ -92,7 +96,19 @@ final class MeadowFirstConnectProvisioningStore {
         self.credentials = credentials
         self.preferredAddresses = preferredAddresses
         self.fingerprintTimeout = fingerprintTimeout
-        self.packageSource = packageSource
+        self.brokerProbe = brokerProbe
+    }
+
+    /// The production probe: a real broker channel open on the SSH
+    /// transport — the same streamlocal discipline the chat lane uses.
+    static let sshBrokerProbe: @Sendable (String, (any Transport)?) async -> Bool = { socketPath, transport in
+        guard let ssh = transport as? HeelerSSHTransport else { return false }
+        do {
+            _ = try await ssh.openBrokerChannel(socketPath: socketPath)
+            return true
+        } catch {
+            return false
+        }
     }
 
     // MARK: - Detect
@@ -109,17 +125,19 @@ final class MeadowFirstConnectProvisioningStore {
         do {
             let opened = try await connect()
             transport = opened
-            let store = BrokerProvisioningStore(transport: opened)
-            provisioning = store
-            await store.inspect()
-            if let error = store.lastError {
-                throw BrokerProvisioningError.commandFailed(detail: error)
+            // Plugin-era detect: resolve the standard path host-side and
+            // probe it with a REAL broker hello. A broker answering at
+            // the standard path means the plugin already owns a live one
+            // — the only question left is whether the Host record points
+            // at it yet (the auto-configure or this flow writes it).
+            guard let resolved = try await resolveHostSocketPath() else {
+                phase = .failed(
+                    message: "Could not resolve the Meadow socket path on the Host.")
+                return
             }
-            // Already fully provisioned AND the Host record already
-            // points at the broker: nothing to offer.
-            if case .fullyProvisioned = store.state.status,
-                host.hasBrokerChat
-            {
+            resolvedSocketPath = resolved
+            if await brokerAnswers() {
+                try writeHostRecord(socketPath: resolved)
                 phase = .done
                 return
             }
@@ -134,32 +152,39 @@ final class MeadowFirstConnectProvisioningStore {
     // MARK: - Provision (user confirmed "Set up")
 
     /// Runs the bring-up after the user's explicit "Set up chat broker on
-    /// this Host?" confirmation: install + enable + shim + Host-record
-    /// update, then lands on the restart decision with the agent list.
+    /// this Host?" confirmation. Re-targeted to the consolidation: the
+    /// heeler PLUGIN owns the broker (single instance, standard path,
+    /// `heeler.setup` action), so this step INVOKE'S THE PLUGIN'S SETUP
+    /// SURFACE over the SSH exec seam — never an app-side package
+    /// install (superseded). Then: re-probe the standard socket, write
+    /// the Host record, land on the restart decision with the agent list.
     func provision() async {
-        guard phase == .offering, let store = provisioning else { return }
+        guard phase == .offering, let transport else { return }
         phase = .provisioning
         do {
-            guard let package = try await packageSource.package(for: store.state.platform) else {
+            // 1. The plugin's one coherent setup surface: installs the
+            //    runtime, starts the shared broker, installs adapter
+            //    shims. herdr is on PATH through the exec wrapper's
+            //    install prefixes; the plugin action blocks to
+            //    completion and its exit code carries the verdict.
+            let setup = try await transport.runProvisioningCommand(
+                "herdr plugin action invoke heeler.setup")
+            guard setup.exitStatus == 0 else {
                 throw BrokerProvisioningError.commandFailed(
-                    detail: "This build carries no broker package for the Host's platform.")
+                    detail: "heeler.setup exited \(setup.exitStatus): \(setup.trimmedText)")
             }
-            try await store.install(
-                package: package.prepared,
-                version: package.version,
-                sha256: package.sha256)
-            try await store.enable()
-            try await store.configureAdapter(askWrapperOptIn: true)
-            // Resolve the canonical socket path ON THE HOST (XDG honored)
-            // and publish it to the Host record so the chat lane connects
-            // with no manual edit.
+            // 2. Re-probe: the standard path must answer a REAL hello.
             guard let resolved = try await resolveHostSocketPath() else {
                 throw BrokerProvisioningError.commandFailed(
                     detail: "Could not resolve the Meadow socket path on the Host.")
             }
             resolvedSocketPath = resolved
-            // Publish to the Host record: the chat lane connects with no
-            // manual edit (spec item 3).
+            guard try await brokerAnswers() else {
+                throw BrokerProvisioningError.commandFailed(
+                    detail: "The broker did not come up at \(resolved).")
+            }
+            // 3. Publish to the Host record: the chat lane connects with
+            //    no manual edit.
             try writeHostRecord(socketPath: resolved)
             let agents = try await restartableAgents()
             phase = .restartDecision(agents: agents)
@@ -168,6 +193,14 @@ final class MeadowFirstConnectProvisioningStore {
         } catch {
             phase = .failed(message: String(describing: error))
         }
+    }
+
+    /// Wire-level probe: a real broker hello at the resolved path through
+    /// the flow's SSH transport (direct-streamlocal, the same channel the
+    /// chat lane uses).
+    private func brokerAnswers() async -> Bool {
+        guard let resolved = resolvedSocketPath else { return false }
+        return await brokerProbe(resolved, transport)
     }
 
     // MARK: - Restart decision (user's data-safety line)
@@ -208,7 +241,6 @@ final class MeadowFirstConnectProvisioningStore {
             try? await transport.close()
         }
         transport = nil
-        provisioning = nil
         phase = .idle
     }
 

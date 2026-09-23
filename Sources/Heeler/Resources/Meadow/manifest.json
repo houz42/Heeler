@@ -1,7 +1,0 @@
-{
-  "version": "0.1.0-dev.3",
-  "artifacts": {
-    "heeler-chat-broker-0.1.0-dev.3-darwin-arm64.tar.gz": "6b1fac55eee81e368f9282a5614f76facff091fc224a3d1f8d96325eb0ca0302",
-    "heeler-chat-broker-0.1.0-dev.3-linux-x64.tar.gz": "1738c0d0737ff72014a9b9ac900a9d53f1beeaf58e8386864e1cb9cbb1d8b259"
-  }
-}

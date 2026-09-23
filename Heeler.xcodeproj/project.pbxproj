@@ -103,7 +103,6 @@
 		29BCAD9E51F92125461CC37F /* LicenseNoticeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0882D4EC9985979DA989F01B /* LicenseNoticeTests.swift */; };
 		2A119314217FD1996FF84C23 /* NavigationWideProofTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD0FCC05C2657F501B328B6E /* NavigationWideProofTests.swift */; };
 		2AED694C267FF268033ED8D4 /* UITestApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B54B697D21E7897F37553CA /* UITestApp.swift */; };
-		2CB56D335C11191F87D7F56D /* heeler-chat-broker-0.1.0-dev.3-darwin-arm64.tar.gz in Resources */ = {isa = PBXBuildFile; fileRef = 3B81DAA00F082CB68A7DF416 /* heeler-chat-broker-0.1.0-dev.3-darwin-arm64.tar.gz */; };
 		2CCF49CE1A3D34AEC4D53469 /* LiveInAnotherWindowPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE495B3E9477AF03F551A350 /* LiveInAnotherWindowPresentation.swift */; };
 		2D6D9AA3C46BE9D5C61C2386 /* AgentRowLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAE2FC36626CBCBF497706C4 /* AgentRowLayout.swift */; };
 		2D7A4526AD24DAC4133B25BC /* JSONValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60A3266F97C243598703DB0A /* JSONValue.swift */; };
@@ -186,7 +185,6 @@
 		52B40DAF8240654AB98243E7 /* AgentSceneDirectoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAE64E99236F74704520FFC1 /* AgentSceneDirectoryTests.swift */; };
 		534BF3BDA1003DBABCF8BEA9 /* MacrosKeyboardPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9975E1BA347A9ECCBE29D06E /* MacrosKeyboardPane.swift */; };
 		541F71DBCA922E84DCA98D5E /* AgentNotificationRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6F3B82DFAD293C0EE344804 /* AgentNotificationRouting.swift */; };
-		54B8158319D26650D6E328F1 /* MeadowPackageSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4F8ECB692DF2195405A9AFE /* MeadowPackageSource.swift */; };
 		54D3A4F4FBF8F3F6C154BACE /* AppActivityCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0B72AE2059C59D8A59C9B2A /* AppActivityCoordinator.swift */; };
 		55210E7047CED500CDB359FB /* SpecialSectionsProofTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ECF95A3E821E72646D31816 /* SpecialSectionsProofTests.swift */; };
 		552FED71FD5EF6AB627AE752 /* Screenshots.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B5EA5042ADF749351495BF6 /* Screenshots.swift */; };
@@ -292,10 +290,10 @@
 		847FCB04EA7913ACB390C978 /* ComposerStagingStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 239FD696B72E804AE3D85D72 /* ComposerStagingStoreTests.swift */; };
 		84B56C16C6227F12CFBF2B1D /* InMemorySecretStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51B4AAB6885E0EB9D8C4A131 /* InMemorySecretStore.swift */; };
 		84C252AF6731EA693B93494A /* GitBranchName.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D6996CA1550E32EE6AC3669 /* GitBranchName.swift */; };
-		84E3CA2DC9B05FA8060CD443 /* checksums.json in Resources */ = {isa = PBXBuildFile; fileRef = 55E0D87C40A46CC54E3A5E3A /* checksums.json */; };
 		8639BE997E0C8356AA43573B /* HomeCommandTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A278A1017B291546679391DE /* HomeCommandTests.swift */; };
 		8668C3C60FB9539A7DD1A4EC /* Base64URL.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32413805C1AA874DBEE37547 /* Base64URL.swift */; };
 		86EA13918F2EE2103B2DEFB3 /* AgentLiveActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6A9489C21BDCFA7616782BF /* AgentLiveActivityWidget.swift */; };
+		870F7961D394927145EE2558 /* MeadowBrokerPathAutoConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = F067074709E4D059621CB2B6 /* MeadowBrokerPathAutoConfiguration.swift */; };
 		8893F7C54FA49133EF850EB2 /* SidebarLayoutVectorFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88DA44F3EA811A40E96E06F2 /* SidebarLayoutVectorFile.swift */; };
 		88C55182255106627222F533 /* HostKeyFingerprint.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4EA32065B4A00D219B301CF /* HostKeyFingerprint.swift */; };
 		89025181DAE4085B5749F829 /* AppRootDrawerResizeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C24D77FF8A4617DAC25AC8AA /* AppRootDrawerResizeTests.swift */; };
@@ -354,7 +352,6 @@
 		A41D798FC3640FB9AB6959C8 /* ChatComposerRouterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC1284CD14F74A0CD63AEE89 /* ChatComposerRouterTests.swift */; };
 		A441F10EA493B5274F82AC9C /* AgentRowRendererTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65694F7E35A3A8B1148AC4B2 /* AgentRowRendererTests.swift */; };
 		A4693B8221D4D110809D1175 /* SnippetsKeyboardPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51EE6515A20AFA09762788C5 /* SnippetsKeyboardPane.swift */; };
-		A498365017788FC68814BF1F /* heeler-chat-broker-0.1.0-dev.3-linux-x64.tar.gz in Resources */ = {isa = PBXBuildFile; fileRef = 1F3F8548895EF03383769DB8 /* heeler-chat-broker-0.1.0-dev.3-linux-x64.tar.gz */; };
 		A53E6BD53A72B1733CAFE699 /* HostRetryPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F48E9AF0870D90DF0829852 /* HostRetryPolicyTests.swift */; };
 		A555F2DD86EC81E37D3A9323 /* NotificationEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = F61A04DBA56C56925B594FF1 /* NotificationEnvelope.swift */; };
 		A65D5B9E1A885A8287AD762C /* SolvingOrbRendererTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F979754410821940D0C4DEC /* SolvingOrbRendererTests.swift */; };
@@ -372,7 +369,6 @@
 		AFA3583DF83EFBAFEEE91E28 /* TerminalAgentSwitcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA59306306EAEAA6DA78E337 /* TerminalAgentSwitcherTests.swift */; };
 		B07A9A6794D3FC9C7878DCC3 /* ChatCodeHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A919DFA1EA567B59F865D738 /* ChatCodeHighlighter.swift */; };
 		B1AB54CA26E52887BC383B3C /* AgentListFieldsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAE86260EA6111621498F139 /* AgentListFieldsSettingsView.swift */; };
-		B1BBD38612C15BBC568C0A86 /* Meadow in Resources */ = {isa = PBXBuildFile; fileRef = 360615392B0429394876E040 /* Meadow */; };
 		B253EC25B4FA08551D5E6B4B /* WeakNetworkProxy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F44E8A7E5D2D96096928B69C /* WeakNetworkProxy.swift */; };
 		B2C0FB87155FFE531C2C6265 /* AgentNotificationRouterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F1676B4E6BAB1C28E5596A7 /* AgentNotificationRouterTests.swift */; };
 		B308A85B836999D93492364C /* TerminalWindowResizeTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5369CA7EA3124D9C5734F700 /* TerminalWindowResizeTracker.swift */; };
@@ -474,7 +470,6 @@
 		DB28307A5B8386139CA7EDEE /* TerminalKeyboardInset.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CF0F9F0EDF8757DC1D275D2 /* TerminalKeyboardInset.swift */; };
 		DB3815F790623647C0050290 /* PairingScanStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45DB60007029322902FD1AFF /* PairingScanStore.swift */; };
 		DB973FFFAD75EE7D1F0A6C66 /* ConsoleSplitPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 794BADD20F0A9DF42D4916C0 /* ConsoleSplitPresentation.swift */; };
-		DC40B106916CC249AF9B09A4 /* manifest.json in Resources */ = {isa = PBXBuildFile; fileRef = 1311A04A4DD324B7220DC47A /* manifest.json */; };
 		DC580B52C0F6509F92BB289C /* PinnedAgentsStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 768235F2FBD7790800281BC3 /* PinnedAgentsStoreTests.swift */; };
 		DCF17C97836787E5481B5673 /* TerminalBackspaceButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DA84C4B51C260DD5CE80ECE /* TerminalBackspaceButton.swift */; };
 		DD43CBF62887E3EEB8612993 /* TrustAlert.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000200D0A636B3BC673193AA /* TrustAlert.swift */; };
@@ -641,7 +636,6 @@
 		126DE4AA09228412D12EE4E6 /* LiveInAnotherWindowPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveInAnotherWindowPresentationTests.swift; sourceTree = "<group>"; };
 		127B3408820910FA8FDE69EB /* ChatInputFieldSizingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatInputFieldSizingTests.swift; sourceTree = "<group>"; };
 		12CB6AC68294D97226EBF857 /* AppAppearanceSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppAppearanceSettingsTests.swift; sourceTree = "<group>"; };
-		1311A04A4DD324B7220DC47A /* manifest.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = manifest.json; sourceTree = "<group>"; };
 		13300392C48361465F32D1C9 /* ConsoleSheetPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsoleSheetPresentation.swift; sourceTree = "<group>"; };
 		13F076778BEA3359D447E78D /* SettingsViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsViewTests.swift; sourceTree = "<group>"; };
 		151586845D0A1EE54968B536 /* PreflightReportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreflightReportTests.swift; sourceTree = "<group>"; };
@@ -668,7 +662,6 @@
 		1E621BD788361A3761DB1374 /* MacroKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacroKeyStore.swift; sourceTree = "<group>"; };
 		1E9D993852C5C7BFE8515A46 /* HostOnboardingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostOnboardingStore.swift; sourceTree = "<group>"; };
 		1F0763484EE05424146492C1 /* PairingCeremonyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingCeremonyTests.swift; sourceTree = "<group>"; };
-		1F3F8548895EF03383769DB8 /* heeler-chat-broker-0.1.0-dev.3-linux-x64.tar.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; path = "heeler-chat-broker-0.1.0-dev.3-linux-x64.tar.gz"; sourceTree = "<group>"; };
 		20F8AC685DA90F638BF187DA /* SkillSuggestionTrigger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillSuggestionTrigger.swift; sourceTree = "<group>"; };
 		21B19CA0EB3B37BB6C50BA4B /* HeelerWidgets.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = HeelerWidgets.entitlements; sourceTree = "<group>"; };
 		233075006FC2C8907BBFF40F /* GitBranchNameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitBranchNameTests.swift; sourceTree = "<group>"; };
@@ -703,7 +696,6 @@
 		347FEC4CE7038F88E13B7299 /* LinkDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkDetector.swift; sourceTree = "<group>"; };
 		34FD8E94E4F243AE6B4D532C /* BrokerProvisioningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrokerProvisioningTests.swift; sourceTree = "<group>"; };
 		350E9BC30923D39BA3180FF6 /* AgentSceneDirectory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSceneDirectory.swift; sourceTree = "<group>"; };
-		360615392B0429394876E040 /* Meadow */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Meadow; path = Sources/Heeler/Resources/Meadow; sourceTree = SOURCE_ROOT; };
 		362EF66CE6DA07688C3E5F63 /* AgentComposerStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentComposerStoreTests.swift; sourceTree = "<group>"; };
 		36399A0C9BF94F38A79C8447 /* LongPressChordOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LongPressChordOverlay.swift; sourceTree = "<group>"; };
 		365757614D9876F58A48CEDA /* NotificationConfigFileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationConfigFileTests.swift; sourceTree = "<group>"; };
@@ -716,7 +708,6 @@
 		39AD641EA732307D72698216 /* EventsSessionSubscriptionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventsSessionSubscriptionsTests.swift; sourceTree = "<group>"; };
 		3A62B60BB8431BE061FAA21B /* AgentActivityLinkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentActivityLinkTests.swift; sourceTree = "<group>"; };
 		3A84F06EC2D4448E5DF72D76 /* TerminalTitleGlyphsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalTitleGlyphsTests.swift; sourceTree = "<group>"; };
-		3B81DAA00F082CB68A7DF416 /* heeler-chat-broker-0.1.0-dev.3-darwin-arm64.tar.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; path = "heeler-chat-broker-0.1.0-dev.3-darwin-arm64.tar.gz"; sourceTree = "<group>"; };
 		3CB3A0C20671F436B322D0F3 /* SkillFrontmatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillFrontmatter.swift; sourceTree = "<group>"; };
 		3CF9270BA606ECE85B143AA4 /* AgentChatWire.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentChatWire.swift; sourceTree = "<group>"; };
 		3D59A41B6D776AFD3F2B4D41 /* ComposerRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerRouter.swift; sourceTree = "<group>"; };
@@ -773,7 +764,6 @@
 		5369CA7EA3124D9C5734F700 /* TerminalWindowResizeTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalWindowResizeTracker.swift; sourceTree = "<group>"; };
 		5416AE7B7A89E2987620E65E /* NotificationDisclosureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationDisclosureView.swift; sourceTree = "<group>"; };
 		55D2BCB4E4038F510852F71C /* SecretStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretStore.swift; sourceTree = "<group>"; };
-		55E0D87C40A46CC54E3A5E3A /* checksums.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = checksums.json; sourceTree = "<group>"; };
 		5681D3B605C9C7BED8B5167B /* ChatOpenersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatOpenersTests.swift; sourceTree = "<group>"; };
 		576F527FA622AC3CACD7F51E /* HeaderLayoutSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeaderLayoutSettingsTests.swift; sourceTree = "<group>"; };
 		578B695DF80C644E2D62060C /* TerminalTouchScroll.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalTouchScroll.swift; sourceTree = "<group>"; };
@@ -939,7 +929,6 @@
 		A2FDB99BA76C2379B0590B3B /* HostTelemetryPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostTelemetryPresentationTests.swift; sourceTree = "<group>"; };
 		A30FA0CFA49274EB428AD3E0 /* HerdrWireTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HerdrWireTests.swift; sourceTree = "<group>"; };
 		A4B83DAB243F0D4C697FA3B8 /* LiveActivityControlling.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivityControlling.swift; sourceTree = "<group>"; };
-		A4F8ECB692DF2195405A9AFE /* MeadowPackageSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeadowPackageSource.swift; sourceTree = "<group>"; };
 		A579E1DA3F59AFBC3ECAD69C /* SSHChannelAdmissionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHChannelAdmissionTests.swift; sourceTree = "<group>"; };
 		A5C6340A9A91119C998F64C3 /* SkillFrontmatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillFrontmatterTests.swift; sourceTree = "<group>"; };
 		A6CCF1357D1D132740FF3043 /* AgentChatDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentChatDomain.swift; sourceTree = "<group>"; };
@@ -1079,6 +1068,7 @@
 		EE138FD87DC08D4F8124F4D7 /* AgentKindGlyphs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentKindGlyphs.swift; sourceTree = "<group>"; };
 		EEB7627C47322439338006A7 /* HostTerminalOwnership.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostTerminalOwnership.swift; sourceTree = "<group>"; };
 		EEB863EF2AD319A412DB564A /* notification-payload-v1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "notification-payload-v1.json"; sourceTree = "<group>"; };
+		F067074709E4D059621CB2B6 /* MeadowBrokerPathAutoConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeadowBrokerPathAutoConfiguration.swift; sourceTree = "<group>"; };
 		F07A0F64626D74A8EC9A1FE2 /* AttachTerminalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachTerminalStore.swift; sourceTree = "<group>"; };
 		F0D5F47AF6EF0F3C7F789894 /* RemoteDirectoryBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDirectoryBrowser.swift; sourceTree = "<group>"; };
 		F1E48CC85026679811EF1A18 /* HostAliasTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostAliasTests.swift; sourceTree = "<group>"; };
@@ -1620,17 +1610,6 @@
 			path = Console;
 			sourceTree = "<group>";
 		};
-		6105A8B52BBF3CAA30F0E20C /* Meadow */ = {
-			isa = PBXGroup;
-			children = (
-				55E0D87C40A46CC54E3A5E3A /* checksums.json */,
-				3B81DAA00F082CB68A7DF416 /* heeler-chat-broker-0.1.0-dev.3-darwin-arm64.tar.gz */,
-				1F3F8548895EF03383769DB8 /* heeler-chat-broker-0.1.0-dev.3-linux-x64.tar.gz */,
-				1311A04A4DD324B7220DC47A /* manifest.json */,
-			);
-			path = Meadow;
-			sourceTree = "<group>";
-		};
 		615BBEAAA95BF5A909D55F8B /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -1760,10 +1739,8 @@
 		9DC050CE93D146F1A1D9676B /* Resources */ = {
 			isa = PBXGroup;
 			children = (
-				360615392B0429394876E040 /* Meadow */,
 				F4926339DC2CC7D0D6B58069 /* Notices */,
 				8993721F91CDBE79CE1A76F1 /* Fonts */,
-				6105A8B52BBF3CAA30F0E20C /* Meadow */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -1936,9 +1913,9 @@
 				00FBC1402DCECC0CB2723B47 /* BrokerProvisioningSessionStore.swift */,
 				DB9B3983EA57B0C09765A77A /* BrokerProvisioningStore.swift */,
 				3E5C9FC11D8E06225F0E847F /* BrokerProvisioningView.swift */,
+				F067074709E4D059621CB2B6 /* MeadowBrokerPathAutoConfiguration.swift */,
 				18259F11C5C0D6C74D2C0CED /* MeadowFirstConnectFlowView.swift */,
 				B65139B9417FF8CD6325A903 /* MeadowFirstConnectProvisioningStore.swift */,
-				A4F8ECB692DF2195405A9AFE /* MeadowPackageSource.swift */,
 			);
 			path = Provisioning;
 			sourceTree = "<group>";
@@ -2230,13 +2207,8 @@
 				80E28FB88E27A5A8FA516BAA /* IBMPlexMono-Regular.ttf in Resources */,
 				4E5147154F498E9F9F6806E6 /* JetBrainsMono-Bold.ttf in Resources */,
 				4136535F331E7D2987F54559 /* JetBrainsMono-Regular.ttf in Resources */,
-				B1BBD38612C15BBC568C0A86 /* Meadow in Resources */,
 				0B67978E4183023EF40B256B /* Notices in Resources */,
 				CAEA10BC9AF3498E5FD73478 /* PrivacyInfo.xcprivacy in Resources */,
-				84E3CA2DC9B05FA8060CD443 /* checksums.json in Resources */,
-				2CB56D335C11191F87D7F56D /* heeler-chat-broker-0.1.0-dev.3-darwin-arm64.tar.gz in Resources */,
-				A498365017788FC68814BF1F /* heeler-chat-broker-0.1.0-dev.3-linux-x64.tar.gz in Resources */,
-				DC40B106916CC249AF9B09A4 /* manifest.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2438,9 +2410,9 @@
 				2919B56BA0DACB65CA4DC910 /* MacroKeyStore.swift in Sources */,
 				534BF3BDA1003DBABCF8BEA9 /* MacrosKeyboardPane.swift in Sources */,
 				CA35EFA0510D21AA8F2305F1 /* MarkdownViewerView.swift in Sources */,
+				870F7961D394927145EE2558 /* MeadowBrokerPathAutoConfiguration.swift in Sources */,
 				A88DCA62C2F80DADDB362C77 /* MeadowFirstConnectFlowView.swift in Sources */,
 				1D5489033A62F3539E5FA405 /* MeadowFirstConnectProvisioningStore.swift in Sources */,
-				54B8158319D26650D6E328F1 /* MeadowPackageSource.swift in Sources */,
 				DA5142568B326156F88E557D /* MessageJumpControl.swift in Sources */,
 				359A3FA92C332BEC1DA1982C /* NotificationConfigFile.swift in Sources */,
 				DF88C6F619C253A98F0EC3F6 /* NotificationDisclosureView.swift in Sources */,

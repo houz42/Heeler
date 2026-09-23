@@ -9,6 +9,10 @@ struct AgentDetailView: View {
     private let terminal: TerminalSettings
     private let inputMode: AgentInputModeSettings
     private let hosts: [Host]
+    /// The live Host catalog (ConsoleView wiring): the connection-time
+    /// broker-path auto-configure and the first-connect flow write the
+    /// Host record through it. Previews/tests may omit it.
+    private let hostCatalog: HostStore?
     private let activity: AppActivityCoordinator
     private let keyboardHandoff: TerminalKeyboardHandoff
     private let keyboardInset: TerminalKeyboardInset
@@ -62,6 +66,7 @@ struct AgentDetailView: View {
         terminal: TerminalSettings,
         inputMode: AgentInputModeSettings,
         hosts: [Host],
+        hostCatalog: HostStore? = nil,
         activity: AppActivityCoordinator,
         keyboardHandoff: TerminalKeyboardHandoff,
         keyboardInset: TerminalKeyboardInset,
@@ -77,6 +82,7 @@ struct AgentDetailView: View {
         self.terminal = terminal
         self.inputMode = inputMode
         self.hosts = hosts
+        self.hostCatalog = hostCatalog
         self.activity = activity
         self.keyboardHandoff = keyboardHandoff
         self.keyboardInset = keyboardInset
@@ -325,6 +331,26 @@ struct AgentDetailView: View {
     private func buildChatIfPossible() async {
         guard agent.agent.agentSession?.kind == AgentSessionRefKind.path
         else { return }
+
+        // Connection-time auto-configure: a Host with NO recorded broker
+        // path gets the standard Meadow path resolved host-side,
+        // hello-probed, and written — so the plugin-owned broker (the
+        // consolidation runs it at the standard path) lights up chat
+        // with zero manual edit. One probe per Host per session.
+        if brokerChat == nil, console.host(for: agent.hostID)?.hasBrokerChat != true,
+            let hostCatalog, !hostCatalog.hosts.isEmpty,
+            let hostOnRecord = hostCatalog.hosts.first(where: { $0.id == agent.hostID }),
+            !hostOnRecord.hasBrokerChat
+        {
+            let autoConfigure = MeadowBrokerPathAutoConfiguration(
+                console: console, catalog: hostCatalog)
+            await autoConfigure.autoConfigure(hostID: agent.hostID)
+            if let updated = hostCatalog.hosts.first(where: { $0.id == agent.hostID }),
+                updated.hasBrokerChat
+            {
+                console.setHosts(hostCatalog.hosts)
+            }
+        }
 
         // Broker backend: only when this Host configured a broker socket
         // path. One store per agent identity; started here so surface
