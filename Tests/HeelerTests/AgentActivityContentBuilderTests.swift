@@ -18,7 +18,7 @@ struct AgentActivityContentBuilderTests {
             agent: Agent(terminalID: "terminal", kind: "claude", title: "task", status: .working,
                          workspaceID: "workspace", tabID: "tab", paneID: "w1:p1", cwd: "/work/heeler",
                          revision: 1, tokens: ["branch": "**literal**"]),
-            workspaceLabel: "Heeler", repositoryCheckout: nil)
+            workspaceLabel: "Meadow", repositoryCheckout: nil)
         let layout = AgentRowLayout(rows: [
             [.init(.workspace, bold: true), .init(.custom("branch"), fg: HexColor("#abc"))],
             [.init(.host, dim: true)], [.init(.directory)],
@@ -27,7 +27,7 @@ struct AgentActivityContentBuilderTests {
             agents: [row], hostName: "Studio Mac", key: key, layout: layout))
         let details = try opened(content)
         #expect(details.agents.first?.rows == [
-            [.init(text: "Heeler", bold: true), .init(text: " · "), .init(text: "**literal**", fg: "#abc")],
+            [.init(text: "Meadow", bold: true), .init(text: " · "), .init(text: "**literal**", fg: "#abc")],
             [.init(text: "Studio Mac", dim: true)], [.init(text: "/work/heeler")],
         ])
         let wire = String(decoding: try JSONEncoder().encode(content), as: UTF8.self)
@@ -36,13 +36,13 @@ struct AgentActivityContentBuilderTests {
 
     @Test func oversizedConfiguredRowsFallBackToIdentityBeforeDroppingAgents() throws {
         var desired = try #require(AgentActivityContentBuilder.desire(
-            from: [agent("w1:p1", .working, workspace: "Heeler")], hostName: "mbp"))
+            from: [agent("w1:p1", .working, workspace: "Meadow")], hostName: "mbp"))
         desired.agents[0].rows = [[.init(text: String(repeating: "界", count: 3000))]]
         let state = try #require(AgentActivityContentBuilder.content(for: desired, key: key))
         let details = try opened(state)
         #expect(details.agents.count == 1)
         #expect(details.agents[0].rows == nil)
-        #expect(details.agents[0].workspace == "Heeler")
+        #expect(details.agents[0].workspace == "Meadow")
         #expect(try #require(state.envelope).ct.count <= AgentActivityContentBuilder.maxCiphertextBytes)
     }
 

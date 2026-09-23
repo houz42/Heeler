@@ -66,5 +66,5 @@ enum NotificationPrivacyCopy {
     /// Shown under the Live Activity toggle when the system-wide permission
     /// is off. Mirrors the Agent Notifications denied-state wording.
     static let liveActivityDisabledHint =
-        "Live Activities are turned off for Heeler. Enable them in Settings to show this Host on the Lock Screen."
+        "Live Activities are turned off for Meadow. Enable them in Settings to show this Host on the Lock Screen."
 }

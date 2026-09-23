@@ -66,7 +66,7 @@ struct AgentListFieldsPreviewTests {
         #expect(agent.hostName == "Studio Mac")
         #expect(agent.agent.kind == "claude")
         #expect(agent.agent.status == .idle)
-        #expect(agent.workspaceLabel == "heeler")
+        #expect(agent.workspaceLabel == "meadow")
         #expect(agent.agent.displayName == "claude")
         #expect(agent.agent.terminalTitle == "fix sidebar sync")
         #expect(agent.agent.terminalTitleStripped == "fix sidebar sync")
@@ -94,7 +94,7 @@ struct AgentListFieldsPreviewTests {
             .workspace, .tab, .pane, .agent, .terminalTitle, .terminalTitleStripped, .custom("branch"),
         ])
         #expect(rendered.map { $0.map(\.text).joined() }
-            == ["heeler · 1 · claude · claude · fix sidebar sync · fix sidebar sync · feat/sidebar"])
+            == ["meadow · 1 · claude · claude · fix sidebar sync · fix sidebar sync · feat/sidebar"])
         let workspace = try #require(rendered.flatMap { $0 }.first { $0.token == .workspace })
         #expect(workspace.fg == color && workspace.bold == true && workspace.dim == true)
         #expect(presentation.headline == rendered.first?.map(\.text).joined())

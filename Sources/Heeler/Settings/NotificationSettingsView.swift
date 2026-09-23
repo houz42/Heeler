@@ -93,8 +93,8 @@ struct NotificationSettingsView: View {
             }
         case .denied:
             VStack(alignment: .leading, spacing: 6) {
-                Text("Notifications are turned off for Heeler.")
-                Button("Open Heeler Settings") {
+                Text("Notifications are turned off for Meadow.")
+                Button("Open Meadow Settings") {
                     if let url = URL(string: UIApplication.openSettingsURLString) {
                         openURL(url)
                     }

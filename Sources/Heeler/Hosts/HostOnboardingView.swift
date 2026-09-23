@@ -16,6 +16,15 @@ struct HostOnboardingView: View {
     /// The address the live Console session is dialed through right now,
     /// nil while disconnected. Supplied by the Console's single-source map.
     let connectedAddress: String?
+    /// The Host's active route as the Console derives it (the same
+    /// PreferredAddressStore the list card renders). nil keeps the
+    /// store's own view (previews, lists without a Console). When the
+    /// LIST switches the route out-of-band, this input changes and the
+    /// open detail reconciles — both pages read one source of truth.
+    let activeRouteInput: String?
+    /// The unified route-switch action (persist + redial), shared with
+    /// the Hosts list's rows — see the init doc for the contract.
+    let switchRoute: (@MainActor @Sendable (String) async -> Void)?
     @State private var store: HostOnboardingStore
     @State private var isEditing = false
     @State private var isConfirmingHostKeyReplacement = false
@@ -33,6 +42,20 @@ struct HostOnboardingView: View {
         /// map (`ConsoleStore.hostConnectedAddresses`) supplies it: at most
         /// one candidate can ever carry the in-use mark.
         connectedAddress: String? = nil,
+        /// The Console-derived active route (single source of truth with
+        /// the Hosts list); nil keeps the store's own read.
+        activeRouteInput: String? = nil,
+        /// The process-wide observable active-route store: the detail's
+        /// taps broadcast through it so the Hosts list's marks re-render.
+        activeRouteStore: HostActiveRouteStore? = nil,
+        /// The SAME route-switch action the Hosts list's rows run
+        /// (persist through the shared store + redial via the Console).
+        /// A route tap on this page runs exactly that, so both entry
+        /// points (root Hosts page, Console Hosts sheet) and both
+        /// surfaces behave identically. nil keeps the page's own
+        /// fallback (store persist + `retryConnection`, or persist-only
+        /// where no Console exists: previews, demo compositions).
+        switchRoute: (@MainActor @Sendable (String) async -> Void)? = nil,
         /// Pre-built store override for demo screenshots; nil builds the
         /// production store keyed to this Host.
         store: HostOnboardingStore? = nil
@@ -43,10 +66,13 @@ struct HostOnboardingView: View {
         self.isManualReconnectInFlight = isManualReconnectInFlight
         self.retryConnection = retryConnection
         self.connectedAddress = connectedAddress
+        self.activeRouteInput = activeRouteInput
+        self.switchRoute = switchRoute
         _store = State(
             initialValue: store ?? HostOnboardingStore(
                 host: host,
-                preferredAddresses: PreferredAddressStore(hostID: host.id)))
+                preferredAddresses: PreferredAddressStore(hostID: host.id),
+                activeRouteBroadcaster: activeRouteStore))
     }
 
     var body: some View {
@@ -59,13 +85,19 @@ struct HostOnboardingView: View {
                     value: store.host.authMethod == .deviceKey ? "Device Key" : "Password")
             }
 
-            // Every way this Host can be reached — one line per address:
-            // status icon, the address, and an inline Use control on the
-            // reachable rows while a pick is pending. No separate pick
-            // card: picking happens on the rows themselves.
+            // Every way this Host can be reached — one TAPPABLE row per
+            // route (user directive: tap a route to use it). Tapping
+            // makes that route the Host's active route — the path the
+            // next dial leads with, persisted per Host. A live session
+            // keeps its dialed route marked (bolt); the active route
+            // carries the checkmark. No separate pick card: switching
+            // happens on the rows themselves.
             Section {
+                if store.host.usesJumpHost {
+                    jumpHopRow
+                }
                 ForEach(store.orderedCandidates, id: \.self) { address in
-                    candidateRow(address)
+                    routeRow(address)
                 }
                 if store.pendingAddressChoice != nil {
                     Text(
@@ -75,9 +107,9 @@ struct HostOnboardingView: View {
                         .foregroundStyle(.secondary)
                 }
             } header: {
-                Text("Addresses")
+                Text("Routes")
             } footer: {
-                Text(addressSectionFooter)
+                Text(routeSectionFooter)
             }
 
             if retryConnection != nil {
@@ -213,6 +245,18 @@ struct HostOnboardingView: View {
                 await store.runChecks()
             }
         }
+        .onChange(of: activeRouteInput) { _, _ in
+            // The list (or any other surface) switched this Host's
+            // active route out-of-band; re-read the shared store so this
+            // page's checkmark agrees with the list's mark.
+            store.syncPreferredRoute()
+        }
+        .onChange(of: connectionStatus) { _, _ in
+            // A status tick from the Console can accompany an
+            // out-of-band route switch (the list's tap reconnects); the
+            // persisted pick is cheap to re-read, so reconcile here too.
+            store.syncPreferredRoute()
+        }
     }
 
     /// Presentation tracks the pending candidate; dismissal is decided by
@@ -242,66 +286,140 @@ struct HostOnboardingView: View {
         return "default"
     }
 
-    /// One line per address: status icon, the address (with an inline,
-    /// subtle Preferred mark), and a Use button on every reachable row
-    /// that is not the live connection — picking is not a one-shot state,
-    /// the user can switch paths anytime a probe proved them reachable.
-    /// The connected row shows the bolt instead; unreachable rows show no
-    /// control (using them cannot succeed until they answer again).
-    private func candidateRow(_ address: String) -> some View {
+    /// One TAPPABLE row per route (user directive): the route's name
+    /// (`routeLabels`, address as fallback), its exact address:port, a
+    /// probe state icon, and the ACTIVE mark — a checkmark on the route
+    /// the next dial leads with, a bolt on the route a live session is
+    /// dialed through right now. Tapping ANY row makes it the active
+    /// route, any time — instant, reversible, no confirmation; the
+    /// switch takes effect on the next connect (a live session is never
+    /// torn down by a tap). Reuses the card rows' quiet-dot + green
+    /// accent language.
+    private func routeRow(_ address: String) -> some View {
         let state = store.candidateStates[address] ?? .unknown
-        let isPreferred = store.orderedCandidates.first == address
+        let isActive = store.preferredRoute == address
         let isInUse = connectedAddress == address
-        let isReachable =
-            state == .reachable
-            || store.pendingAddressChoice?.contains(address) ?? false
-        let pickable = isReachable && !isInUse
-        return HStack(spacing: 10) {
-            if isInUse {
-                Image(systemName: "bolt.fill")
-                    .foregroundStyle(.green)
-            } else {
-                switch state {
-                case .unknown:
-                    Image(systemName: "questionmark.circle")
+        let routeName = store.host.routeName(for: address)
+        return Button {
+            tapRoute(address)
+        } label: {
+            HStack(spacing: 10) {
+                // The leading icon: probe state while unknown/checking,
+                // the in-use bolt on the live route, else the state glyph.
+                if isInUse {
+                    Image(systemName: "bolt.fill")
+                        .foregroundStyle(Color.accentColor)
+                        .accessibilityHidden(true)
+                } else {
+                    switch state {
+                    case .unknown:
+                        Image(systemName: "circle.dashed")
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                    case .probing:
+                        ProgressView()
+                            .controlSize(.small)
+                    case .reachable:
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .accessibilityHidden(true)
+                    case .unreachable:
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.red)
+                            .accessibilityHidden(true)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(routeName)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.primary)
+                    Text("\(address):\(String(store.host.port))")
+                        .font(.caption)
+                        .monospaced()
                         .foregroundStyle(.secondary)
-                case .probing:
-                    ProgressView()
-                        .controlSize(.small)
-                case .reachable:
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                case .unreachable:
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.red)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer()
+                if isActive {
+                    Image(systemName: "checkmark")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
                 }
             }
-            Text(address)
-            if isPreferred, !isInUse {
-                Text("Preferred")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(
+            "Route \(routeName), \(address):\(String(store.host.port)), "
+                + (isInUse
+                    ? (isActive
+                        ? "currently in use and the active route"
+                        : "currently in use")
+                    : (isActive
+                        ? "active route"
+                        : "alternate route"))
+                + ". Double tap to switch to this route.")
+        .accessibilityHint(
+            "Sets this route as the dial path for the next connection to "
+                + store.host.displayAliasName)
+        .accessibilityIdentifier("host-detail-route-\(address)")
+    }
+
+    /// ONE route-row tap, the SAME action the Hosts list's rows run
+    /// (review round 2: every entry point must behave identically —
+    /// persist through the shared store, then redial via the Console).
+    /// When the presenting list supplies `switchRoute` (both production
+    /// entry points do), the tap runs exactly that closure — the very
+    /// same code a list-card tap executes. With a pick pending (several
+    /// paths just answered), the tap IS the pick and the onboarding
+    /// connect plays that role. Without either (previews, demo), the
+    /// fallback persists and redials through this page's own
+    /// retryConnection, or persists only where no Console exists.
+    private func tapRoute(_ address: String) {
+        if store.pendingAddressChoice?.contains(address) == true {
+            Task { await store.chooseAddress(address) }
+        } else if let switchRoute {
+            Task { @MainActor in
+                await switchRoute(address)
             }
-            Spacer()
-            if pickable {
-                Button("Use") {
-                    Task { await store.chooseAddress(address) }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+        } else {
+            store.setActiveRoute(address)
+            Task { @MainActor in
+                await retryConnection?()
             }
         }
     }
 
-    private var addressSectionFooter: String {
-        if store.pendingAddressChoice != nil {
-            return "Several paths answered — pick the one to connect through."
+    /// The jump hop all routes share, when the Host is reached through a
+    /// Jump Host: informational (the hop is a Host-level setting, edited
+    /// on the form — no per-route meaning), shown as a quiet non-tappable
+    /// row so the route list stays the honest picture of the dial path:
+    /// jump → route address.
+    private var jumpHopRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.triangle.branch")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("via Jump Host")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
+                Text(
+                    "\(store.host.jumpAddress):\(String(store.host.jumpPort)) · "
+                        + store.host.resolvedJumpUsername)
+                    .font(.caption)
+                    .monospaced()
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
         }
-        if store.host.candidateAddresses.count > 1 {
-            return "Addresses are dialed in order until one answers. "
-                + "A pick made here becomes the preferred path."
-        }
-        return ""
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "All routes dial through jump host \(store.host.jumpAddress):"
+                + String(store.host.jumpPort))
     }
 
     private func retry() {
@@ -309,6 +427,17 @@ struct HostOnboardingView: View {
         Task { @MainActor in
             await retryConnection()
         }
+    }
+
+    private var routeSectionFooter: String {
+        if store.pendingAddressChoice != nil {
+            return "Several paths answered — pick the one to connect through."
+        }
+        if store.host.candidateAddresses.count > 1 {
+            return "Tap a route to switch to it — the connection redials "
+                + "through it now."
+        }
+        return ""
     }
 
     private var connectionPresentation: HostOnboardingConnectionPresentation {

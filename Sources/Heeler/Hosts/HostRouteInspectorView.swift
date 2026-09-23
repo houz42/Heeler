@@ -328,7 +328,7 @@ struct HostRouteInspectorView: View {
     private var connectionStateText: Text {
         switch route.usage {
         case .inUse:
-            return Text("Connected").foregroundStyle(.green)
+            return Text("Connected").foregroundStyle(Color.accentColor)
         case .alternate:
             switch ownedStore.checkState {
             case .unchecked:
@@ -336,7 +336,7 @@ struct HostRouteInspectorView: View {
             case .checking:
                 return Text("Checking…").foregroundStyle(.secondary)
             case .reachable:
-                return Text("Reachable").foregroundStyle(.green)
+                return Text("Reachable").foregroundStyle(Color.accentColor)
             case .unreachable:
                 return Text("Unreachable").foregroundStyle(.red)
             }

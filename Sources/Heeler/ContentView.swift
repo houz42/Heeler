@@ -54,7 +54,9 @@ struct ContentView: View {
         // this window's Console.
         AppRootView(
             agents: ConsoleView(
-                hosts: app.hostStore, console: app.console, terminal: app.terminal,
+                hosts: app.hostStore, console: app.console,
+                activeRouteStore: app.activeRouteStore,
+                terminal: app.terminal,
                 inputMode: app.inputMode,
                 appearance: app.appearance,
                 pushRegistration: app.pushRegistration,
@@ -63,14 +65,27 @@ struct ContentView: View {
                 notificationRouter: notificationRouter,
                 bannerStore: app.bannerStore,
                 liveActivities: app.liveActivities,
-                activity: app.activity
-            ),
+                activity: app.activity),
             hosts: HostListView(
                 store: app.hostStore,
                 connectionStatuses: app.console.hostStatuses,
                 standingFailures: app.console.hostStandingFailures,
                 latencies: app.console.hostLatencies,
                 connectedAddresses: app.console.hostConnectedAddresses,
+                activeRouteStore: app.activeRouteStore,
+                switchRoute: { hostID, address in
+                    // One action: persist through the shared observable
+                    // store (marks re-render everywhere), then drive the
+                    // Console's own connect lifecycle — the status chip,
+                    // the connecting animation, and any failure all
+                    // surface through the same single-source map.
+                    app.activeRouteStore.setActiveRoute(
+                        address, hostID: hostID,
+                        candidates: app.hostStore.hosts
+                            .first(where: { $0.id == hostID })?
+                            .candidateAddresses ?? [address])
+                    await app.console.retryHost(hostID)
+                },
                 discovery: SessionDiscoveryStore(
                     listSessions: { hostID in
                         try await app.console.listSessions(on: hostID)

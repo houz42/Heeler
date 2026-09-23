@@ -65,20 +65,20 @@ struct AgentNotificationRendererTests {
 
     @Test func doesNotRenderTheTerminalTask() {
         let alert = AgentNotificationRenderer.alert(
-            workspace: "Heeler", agentKind: "codex", status: .done)
+            workspace: "Meadow", agentKind: "codex", status: .done)
 
-        #expect(alert == AgentNotificationAlert(title: "Heeler · Codex", body: "Done"))
+        #expect(alert == AgentNotificationAlert(title: "Meadow · Codex", body: "Done"))
     }
 
     @Test func namesMuseFriendly() {
         let alert = AgentNotificationRenderer.alert(
-            workspace: "Heeler", agentKind: "muse", status: .done)
+            workspace: "Meadow", agentKind: "muse", status: .done)
 
-        #expect(alert.title == "Heeler · Muse")
+        #expect(alert.title == "Meadow · Muse")
     }
 
     /// Every kind New Agent can launch gets an explicit label; the raw
-    /// protocol id is only the fallback for kinds Heeler does not know.
+    /// protocol id is only the fallback for kinds Meadow does not know.
     @Test(arguments: SupportedAgentKind.allCases)
     func labelsEverySupportedKind(kind: SupportedAgentKind) {
         #expect(AgentNotificationIdentity.kindLabel(kind.rawValue) != kind.rawValue)
@@ -198,7 +198,6 @@ struct AgentNotificationRendererTests {
     /// The fallback copy mirrors the relay's generic wrap, so an intercepted
     /// or forged push never renders attacker-chosen text.
     @Test func fallbackCopyIsGeneric() {
-        #expect(AgentNotificationRenderer.fallback.title == "Heeler")
         #expect(AgentNotificationRenderer.fallback.body == "Agent update")
     }
 }

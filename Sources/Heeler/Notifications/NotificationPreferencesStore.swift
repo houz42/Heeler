@@ -210,9 +210,9 @@ final class NotificationPreferencesStore {
     static func message(for error: any Error) -> String {
         switch error {
         case NotificationRegistrationError.pluginNotInstalled:
-            "Install the Heeler plugin on this Host, then check again."
+            "Install the Meadow plugin on this Host, then check again."
         case NotificationRegistrationError.pluginProbeFailed:
-            "Could not check the Heeler plugin on this Host. "
+            "Could not check the Meadow plugin on this Host. "
                 + "Check the connection and try again."
         case NotificationRegistrationError.readFailed:
             "Could not read notification settings from this Host. "

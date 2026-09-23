@@ -41,6 +41,50 @@ enum ChatDraftItem: Identifiable, Equatable {
     }
 }
 
+
+extension ChatDraftItem {
+    /// Item 18 persistence: the Codable form. Preview image BYTES are
+    /// deliberately dropped (never persisted) — a restored image tile
+    /// shows its remote-path glyph and reloads nothing fake.
+    init(_ saved: ChatPaneDraft.Item) {
+        switch saved.kind {
+        case .image:
+            self = .image(
+                id: saved.id,
+                remotePath: saved.remotePath ?? "",
+                previewData: nil)
+        case .file:
+            self = .file(
+                id: saved.id,
+                name: saved.name ?? "File",
+                remotePath: saved.remotePath ?? "")
+        case .quote:
+            self = .quote(
+                id: saved.id,
+                text: saved.text ?? "",
+                author: saved.author ?? "Heeler")
+        }
+    }
+
+    /// The Codable form of this draft item.
+    var paneDraftItem: ChatPaneDraft.Item {
+        switch self {
+        case .image(let id, let remotePath, _):
+            return ChatPaneDraft.Item(
+                kind: .image, id: id, remotePath: remotePath,
+                name: nil, text: nil, author: nil)
+        case .file(let id, let name, let remotePath):
+            return ChatPaneDraft.Item(
+                kind: .file, id: id, remotePath: remotePath,
+                name: name, text: nil, author: nil)
+        case .quote(let id, let text, let author):
+            return ChatPaneDraft.Item(
+                kind: .quote, id: id, remotePath: nil,
+                name: nil, text: text, author: author)
+        }
+    }
+}
+
 /// Pure Send composition for the draft items + prose: every item rides
 /// EXACTLY ONCE and the prose is preserved VERBATIM (attachment paths
 /// never live in the prose — they are removed at tile-creation time,
@@ -50,9 +94,15 @@ enum ChatDraftComposer {
     static func messageText(items: [ChatDraftItem], draft: String) -> String {
         var parts: [String] = []
         // Quotes lead (the blockquoted context ahead of the reply —
-        // the reading order), then the prose, then the @-references
-        // (the user's contract: BOTH files and images reference as
-        // @path — never a bare path).
+        // the reading order), then the prose, then the FILE
+        // @-references (the user's contract: files reference as
+        // @path — never a bare path). IMAGES NEVER APPEAR IN THE
+        // PROSE (review round 6, finding 3): an image rides the
+        // structured prompt.send images array as real content
+        // blocks — appending its staged path here too sent the model
+        // BOTH the bytes and a literal '@…jpg' text line, the
+        // '@path leaking as prose' bug. The staged path is a HOST
+        // filesystem path, meaningless to the agent either way.
         for item in items {
             if case .quote(_, let text, _) = item {
                 parts.append(ChatQuote.draft(for: text))
@@ -62,8 +112,10 @@ enum ChatDraftComposer {
         if !trimmed.isEmpty { parts.append(trimmed) }
         for item in items {
             switch item {
-            case .image(_, let path, _), .file(_, _, let path):
+            case .file(_, _, let path):
                 parts.append("@\(path)")
+            case .image:
+                continue  // structured images array, never prose
             case .quote:
                 continue  // already led
             }
@@ -84,6 +136,24 @@ extension ChatDraftComposer {
             return false
         }
     }
+
+    /// Whether one composed submission is a valid prompt (review
+    /// round 7, the image-only regression): NONEMPTY text OR valid
+    /// image content. An image-only draft composes EMPTY text (the
+    /// images ride the structured array, never prose) — it is still
+    /// a real prompt and MUST send; the old nonempty-text guard made
+    /// it silently do nothing. Only genuinely-empty submissions (no
+    /// text AND no attachments) are refused — never with fabricated
+    /// filler text.
+    static func isSendable(text: String, items: [ChatDraftItem]) -> Bool {
+        // Review finding 5 (send-never-waits round): EVERY held item
+        // kind makes the draft sendable — images (inline content),
+        // files ('@path' prose), AND quotes (blockquoted prose). A
+        // quote-only or file-only draft has valid content; Send must
+        // not stay gray.
+        if !items.isEmpty { return true }
+        return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 }
 
 /// One square draft tile: content (thumbnail or type glyph) with a
@@ -91,10 +161,18 @@ extension ChatDraftComposer {
 struct ChatDraftTile<Content: View>: View {
     let content: Content
     let remove: (() -> Void)?
+    /// Review round 4, finding 1: the attachment failed the send — the
+    /// tile is MARKED with an error ring so the error copy's ordinal
+    /// maps to a visible tile.
+    var failed: Bool = false
 
-    init(@ViewBuilder content: () -> Content, remove: (() -> Void)? = nil) {
+    init(
+        @ViewBuilder content: () -> Content, remove: (() -> Void)? = nil,
+        failed: Bool = false
+    ) {
         self.content = content()
         self.remove = remove
+        self.failed = failed
     }
 
     var body: some View {
@@ -103,7 +181,11 @@ struct ChatDraftTile<Content: View>: View {
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(Color.secondary.opacity(0.3), lineWidth: 0.5))
+                    .strokeBorder(
+                        failed
+                            ? Color.red.opacity(0.85)
+                            : Color.secondary.opacity(0.3),
+                        lineWidth: failed ? 1.5 : 0.5))
             .overlay(alignment: .topTrailing) {
                 if let remove {
                     // Fully INSIDE the tile's corner (the old +6/-6
@@ -151,6 +233,10 @@ struct ChatDraftTileOverflow: View {
 /// overflow (count > fits) and takes the last fitting slot.
 struct ChatDraftTileRail: View {
     var items: [ChatDraftItem]
+    /// Review round 4, finding 1: the tile whose attachment failed the
+    /// send — MARKED with an error ring so the ordinal in the error
+    /// copy maps to a visible tile.
+    var failedItemID: String? = nil
     var removeItem: (String) -> Void
     var openPreview: (ChatDraftItem) -> Void
     var openCollection: () -> Void
@@ -208,9 +294,13 @@ struct ChatDraftTileRail: View {
                         }
                     }
                 },
-                remove: { removeItem(item.id) })
+                remove: { removeItem(item.id) },
+                failed: item.id == failedItemID)
                 .onTapGesture { openPreview(item) }
-                .accessibilityLabel(item.accessibilityLabel)
+                .accessibilityLabel(
+                    item.id == failedItemID
+                        ? "\(item.accessibilityLabel), failed to send"
+                        : item.accessibilityLabel)
         case .file(_, let name, _):
             ChatDraftTile(
                 content: {
@@ -238,9 +328,13 @@ struct ChatDraftTileRail: View {
                             .foregroundStyle(.secondary)
                     }
                 },
-                remove: { removeItem(item.id) })
+                remove: { removeItem(item.id) },
+                failed: item.id == failedItemID)
                 .onTapGesture { openPreview(item) }
-                .accessibilityLabel(item.accessibilityLabel)
+                .accessibilityLabel(
+                    item.id == failedItemID
+                        ? "\(item.accessibilityLabel), failed to send"
+                        : item.accessibilityLabel)
         }
     }
 }

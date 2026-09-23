@@ -3,7 +3,7 @@
   "version": "0.4.0",
   "private": true,
   "license": "Apache-2.0",
-  "description": "herdr plugin that renders a Pairing Code QR for Heeler device onboarding",
+  "description": "herdr plugin that renders a Pairing Code QR for Meadow device onboarding",
   "type": "module",
   "engines": {
     "node": ">=20"

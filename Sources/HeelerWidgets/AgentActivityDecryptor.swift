@@ -188,7 +188,7 @@ enum AgentActivityDecryptor {
 }
 
 enum AgentActivityCopy {
-    static let genericAppName = "Heeler"
+    static let genericAppName = "Meadow"
     // Governs the Dynamic Island expanded rows (headline + rowLimit - 1);
     // the lock screen sizes itself via `lockScreenAgents` instead.
     static let rowLimit = 3

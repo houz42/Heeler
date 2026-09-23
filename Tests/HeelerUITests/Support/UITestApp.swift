@@ -34,17 +34,30 @@ enum UITestApp {
         /// card dialed through its primary address, Build Server's card
         /// honestly not-connected).
         case hostList
-        /// The Host detail page mid address-probe.
+        /// The Hosts list wired to the real demo Console: live statuses,
+        /// shared active-route store, route tap = persist + reconnect
+        /// (the unified state-sync + switch-lifecycle proofs).
+        case hostListConsole
         case hostDetailProbing
         /// The Host detail page stopped on the pick between two addresses.
         case hostDetailPick
         /// Console + Settings sheet presented on launch.
         case settings
+        /// The chat surface with a pending multi-select ask (v2 accent
+        /// proofs: Confirm + selected-option chip in both appearances).
+        case chatPendingAsk
+        /// The chat surface with special sections in the transcript (v2
+        /// special-sections proofs: chip / L0 hide / expansion).
+        case chatSpecialSections
+
+
 
         var launchArguments: [String] {
             switch self {
             case .console: return ["--demo-screenshots"]
             case .hostList: return ["--demo-screenshots", "--demo-host-list"]
+            case .hostListConsole:
+                return ["--demo-screenshots", "--demo-host-list-console"]
             case .hostForm: return ["--demo-screenshots", "--demo-host-form"]
             case .hostDetailProbing:
                 return ["--demo-screenshots", "--demo-host-detail-probing"]
@@ -52,6 +65,10 @@ enum UITestApp {
                 return ["--demo-screenshots", "--demo-host-detail-pick"]
             case .settings:
                 return ["--demo-screenshots", "--demo-screenshots-settings"]
+            case .chatPendingAsk:
+                return ["--demo-screenshots", "--demo-chat-pending-ask"]
+            case .chatSpecialSections:
+                return ["--demo-screenshots", "--demo-chat-special-sections"]
             }
         }
     }

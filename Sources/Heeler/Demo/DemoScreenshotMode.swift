@@ -32,16 +32,34 @@
             /// The Hosts list page: host cards with named routes (the
             /// card-tap and route-inspector demo route).
             case hostList
+            /// The Hosts list page wired to the REAL demo Console: live
+            /// connection statuses, the shared active-route store, and a
+            /// route tap that persists + reconnects — the unified
+            /// state-sync and route-switch-lifecycle proof surface.
+            case hostListConsole
             /// The Host detail page with its candidate list mid-probe.
             case hostDetailProbing
             /// The Host detail page stopped on the pick between two
             /// reachable addresses.
             case hostDetailPick
+            /// The chat surface with a pending multi-select ask — the
+            /// accent-bearing pending-card capture surface (Confirm
+            /// button + selected-option chip). v2 accent proofs.
+            case chatPendingAsk
+            /// The chat surface with special sections in the transcript
+            /// (a `<system-notice>` and an `<irc>` block) — the
+            /// v2 special-sections capture surface. The initial detail
+            /// level rides `--demo-detail-level=<n>`.
+            case chatSpecialSections
+
 
             static func fromArguments() -> Route {
                 let arguments = ProcessInfo.processInfo.arguments
-                if arguments.contains(hostDetailProbingLaunchArgument) { return .hostDetailProbing }
+                if arguments.contains(chatSpecialSectionsLaunchArgument) { return .chatSpecialSections }
+                if arguments.contains(hostListConsoleLaunchArgument) { return .hostListConsole }
+                if arguments.contains(chatPendingAskLaunchArgument) { return .chatPendingAsk }
                 if arguments.contains(hostListLaunchArgument) { return .hostList }
+                if arguments.contains(hostDetailProbingLaunchArgument) { return .hostDetailProbing }
                 if arguments.contains(hostFormLaunchArgument) { return .hostForm }
                 return .none
             }
@@ -49,7 +67,10 @@
 
         static let hostFormLaunchArgument = "--demo-host-form"
         static let hostListLaunchArgument = "--demo-host-list"
+        static let hostListConsoleLaunchArgument = "--demo-host-list-console"
         static let hostDetailProbingLaunchArgument = "--demo-host-detail-probing"
+        static let chatPendingAskLaunchArgument = "--demo-chat-pending-ask"
+        static let chatSpecialSectionsLaunchArgument = "--demo-chat-special-sections"
         static let hostDetailPickLaunchArgument = "--demo-host-detail-pick"
 
         /// The multi-path demo Host: the same machine over LAN and VPN.
@@ -79,6 +100,11 @@
         @State private var appearance: AppAppearanceSettings
         @State private var inputMode: AgentInputModeSettings
         @State private var pushRegistration: PushRegistrationStore
+        /// The demo's active-route store: the same observable instance
+        /// the list and (navigated) detail share, so marks cannot
+        /// disagree in captures. Standard defaults — persistence across
+        /// relaunch is part of what the proofs show.
+        @State private var activeRoutes = HostActiveRouteStore()
         @State private var notificationPreferences: NotificationPreferencesStore
         @State private var relaySettings: NotificationRelaySettings
         @State private var notificationRouter: AgentNotificationRouter
@@ -138,11 +164,167 @@
                                 "studio.demo.invalid",
                         ])
                 }
+            case .hostListConsole:
+                hostListConsoleSurface
             case .hostDetailProbing:
                 multipathDetail(midProbe: true)
             case .hostDetailPick:
                 multipathDetail(midProbe: false)
+            case .chatPendingAsk:
+                chatPendingAskSurface
+            case .chatSpecialSections:
+                chatSpecialSectionsSurface
             }
+        }
+
+        /// The Hosts list wired to the REAL demo Console (the unified
+        /// route-state proof surface): live statuses/failures/latencies
+        /// from `console`, the shared observable active-route store, and
+        /// a route tap that persists through the store then reconnects
+        /// through the Console — so the list's marks, the connecting
+        /// animation, and the failed dot are all the production
+        /// lifecycle. Studio Mac + Build Server connect (profiles);
+        /// Offline Server and Field Laptop fail (no profile), giving a
+        /// deterministic tap → connecting → failed dot lifecycle.
+        private var hostListConsoleSurface: some View {
+            NavigationStack {
+                HostListView(
+                    store: hosts,
+                    connectionStatuses: console.hostStatuses,
+                    standingFailures: console.hostStandingFailures,
+                    latencies: console.hostLatencies,
+                    connectedAddresses: console.hostConnectedAddresses,
+                    activeRouteStore: activeRoutes,
+                    manualReconnectInFlightHostIDs: [],
+                    retryConnection: { _ in },
+                    switchRoute: { hostID, address in
+                        let candidates =
+                            hosts.hosts.first(where: { $0.id == hostID })?
+                            .candidateAddresses ?? []
+                        activeRoutes.setActiveRoute(
+                            address, hostID: hostID, candidates: candidates)
+                        await console.retryHost(hostID)
+                    })
+            }
+            .task {
+                console.setHosts(hosts.hosts)
+                await console.resume()
+            }
+            .onDisappear {
+                console.setHosts([])
+            }
+        }
+
+        /// The pending-ask capture surface: ChatScreen with a blocked
+        /// agent, one assistant article (the accent author line), and
+        /// a multi-select pending interaction — the v2 accent
+        /// proofs tap an option and capture Confirm + the selected
+        /// chip in BOTH appearances. The composer's deliver/onAsk
+        /// callbacks are wired so the surface is interactive (a tap
+        /// really selects; Confirm really fires) without any backend.
+        private var chatPendingAskSurface: some View {
+            ChatScreen(
+                paneID: "demo:pending",
+                agentName: "ios-polish",
+                state: .blocked,
+                content: ChatContent(
+                    messages: [
+                        ChatMessage(
+                            id: UUID(),
+                            role: .assistant,
+                            blocks: [
+                                .text(
+                                    """
+                                    I found two candidate fixes for the \
+                                    attach retry path. I need your call on \
+                                    which risks to take before I continue.
+                                    """)
+                            ])
+                    ],
+                    pending: [
+                        PendingInteraction(
+                            id: "demo-ask",
+                            question: "",
+                            options: [],
+                            questions: [
+                                PendingAskQuestion(
+                                    id: "q0",
+                                    text: "Which checks should run before the retry lands?",
+                                    multi: true,
+                                    options: [
+                                        PendingAskQuestion.Option(
+                                            id: "o0", label: "Unit suite"),
+                                        PendingAskQuestion.Option(
+                                            id: "o1", label: "UI smoke"),
+                                        PendingAskQuestion.Option(
+                                            id: "o2", label: "Device build"),
+                                    ])
+                            ])
+                    ]),
+                initialLevel: .l0,
+                changeLevel: { _, _ in },
+                deliver: { _ in },
+                authorLabel: "Meadow · omp",
+                onAskAnswer: { _, _ in },
+                onAskCancel: { _ in })
+        }
+
+        /// The special-sections capture surface: ChatScreen with a
+        /// realistic transcript carrying BOTH tags (a harness-injected
+        /// `<system-notice>` mid-turn and an `<irc>` peer message
+        /// near the end), so the capture suite pins the chip render,
+        /// the L0 hide, and the tap-through expansion without a
+        /// backend. The initial detail level rides
+        /// `--demo-detail-level=<n>` (default L1 — the chip level).
+        private var chatSpecialSectionsSurface: some View {
+            ChatScreen(
+                paneID: "demo:special-sections",
+                agentName: "checkout",
+                state: .idle,
+                content: ChatContent(
+                    messages: [
+                        ChatMessage(role: .user, blocks: [
+                            .text("Ship the checkout fix — run the **targeted** tests first."),
+                        ]),
+                        ChatMessage(role: .assistant, blocks: [
+                            .text(
+                                """
+                                I extracted the retry logic into `PaymentCoordinator` \
+                                so the cart survives a failed attempt.
+
+                                <system-notice>Skill "shell-qa" is now active for this \
+                                session. Commands run through the dev-box shell QA \
+                                profile.
+                                Exit code semantics: step logs record their own \
+                                status.</system-notice>
+
+                                While validating the fix, a peer weighed in:
+
+                                <irc><Main> The retry fix looks good from my side — \
+                                go ahead and ship it when tests pass.</irc>
+
+                                All 18 targeted tests pass. Ready to commit when \
+                                you are.
+                                """),
+                        ]),
+                    ]),
+                initialLevel: Self.demoDetailLevel,
+                changeLevel: { _, _ in },
+                deliver: { _ in },
+                authorLabel: "Meadow · omp")
+        }
+
+        /// The `--demo-detail-level=<n>` argument's value (0–3);
+        /// defaults to L1 so an unspecified run still shows chips.
+        private static var demoDetailLevel: DetailLevel {
+            for argument in ProcessInfo.processInfo.arguments {
+                guard argument.hasPrefix("--demo-detail-level="),
+                    let raw = Int(argument.dropFirst("--demo-detail-level=".count)),
+                    let level = DetailLevel(rawValue: raw)
+                else { continue }
+                return level
+            }
+            return .l1
         }
 
         private var consoleRoot: some View {
@@ -338,7 +520,28 @@
                 address: "offline.demo.invalid",
                 username: "developer",
                 sessionName: "main"),
+            // A multi-route machine with no demo profile: every dial
+            // fails, so a route-switch tap shows the full lifecycle —
+            // connecting animation, then the honest failed dot — through
+            // the real Console pipeline (the route-switch proofs).
+            Host(
+                id: fieldHostID,
+                name: "Field Laptop",
+                address: "field.lan.demo.invalid",
+                username: "field",
+                sessionName: "main",
+                additionalAddresses: ["field.vpn.demo.invalid"],
+                routeLabels: [
+                    "field.lan.demo.invalid": "Home LAN",
+                    "field.vpn.demo.invalid": "VPN tunnel",
+                ]),
         ]
+
+        static let fieldHostID = UUID(
+            uuid: (
+                0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44,
+                0x84, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44
+            ))
 
         static let offlineHostID = UUID(
             uuid: (
@@ -354,7 +557,7 @@
                             paneID: "mobile:p1", status: .working,
                             workspaceID: "mobile", kind: "codex",
                             name: "ios-polish", title: "Polish the Attach experience",
-                            cwd: "/workspace/heeler",
+                            cwd: "/workspace/meadow",
                             transcriptPath: chatTranscriptPath),
                         agent(
                             paneID: "docs:p2", status: .idle,
@@ -365,12 +568,12 @@
                             paneID: "mobile:p4", status: .done,
                             workspaceID: "mobile", kind: "gemini",
                             name: "accessibility", title: "Audit VoiceOver labels",
-                            cwd: "/workspace/heeler",
+                            cwd: "/workspace/meadow",
                             transcriptPath: chatTranscriptPath),
                     ],
                     workspaces: [
                         workspace(
-                            id: "mobile", label: "iOS App", repo: "heeler",
+                            id: "mobile", label: "iOS App", repo: "meadow",
                             isLinkedWorktree: true),
                         workspace(id: "docs", label: "Product Docs", repo: "docs-site"),
                     ]),
@@ -520,6 +723,12 @@
                     subscriptions: subscriptions,
                     connect: {
                         guard let profile = profiles[host.id] else {
+                            // A short, deterministic dial window so the
+                            // route-switch proof can capture the
+                            // connecting state before the honest failure
+                            // lands (a real unreachable dial takes
+                            // seconds; the fixture bounds it).
+                            try? await Task.sleep(for: .milliseconds(6_000))
                             throw TransportError.sshUnreachable(
                                 detail: "No demo profile for Host.")
                         }

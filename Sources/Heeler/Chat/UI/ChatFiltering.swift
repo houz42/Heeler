@@ -65,6 +65,36 @@ internal struct PendingInteraction: Sendable, Equatable, Identifiable {
     }
 }
 
+/// One resolved ask, rendered as a quiet block in the transcript flow:
+/// 'You answered: <labels>' when this device's acknowledged answer
+/// won, the honest outcome note otherwise (answered in terminal /
+/// remotely / cancelled / expired). Conversation history, not
+/// chrome — visible at every detail level. PLACEMENT: the block
+/// anchors to its QUESTION'S OWN TURN — the message that POSED the
+/// ask. The ask is an ask CARD (a tool call whose ARGUMENTS carry
+/// the question text — never a plain text message in real
+/// transcripts), so the anchor matches both text blocks and
+/// toolCall argument string-leaves, and the block renders right
+/// after that message, BEFORE the agent's reply that follows it
+/// (the correct order: question → answer → reply), at every
+/// detail level. Arrival time is never used. An ask whose anchor
+/// never matches (legacy records with no question text, or the
+/// asking message outside the visible page) parks after the
+/// transcript's rows, before any pending card.
+internal struct ResolvedAsk: Sendable, Equatable, Identifiable {
+    let id: String
+    let body: String
+    /// The answered question's own text — the anchor: the block
+    /// renders after the message containing this text.
+    var questionText: String?
+
+    init(id: String, body: String, questionText: String? = nil) {
+        self.id = id
+        self.body = body
+        self.questionText = questionText
+    }
+}
+
 /// One renderable row of the chat surface, in display order.
 ///
 /// Rows are block-scoped: a message's ordered blocks become one row per
@@ -93,24 +123,59 @@ internal enum ChatRow: Sendable, Equatable, Identifiable {
     /// A result whose tool call is outside the visible message window
     /// (window-boundary orphan), so it has no row to pair into — L2+.
     case orphanResult(ToolResult)
+    /// A system/structural notice (item 19): visible at EVERY level —
+    /// never dropped; the view styles the quiet/warning/error wash off
+    /// `level`.
+    case notice(messageID: UUID, blockIndex: Int, text: String, level: String)
+    /// A `<system-notice>`/`<irc>` section extracted from a text
+    /// block (see `ChatSpecialSectionParser`) — chrome, not
+    /// conversation: L0 hides it entirely; L1+ renders the collapsed
+    /// summary chip (tap expands the full body; at L3 it starts
+    /// expanded). Sits exactly where the tag sat in the source text,
+    /// so it never dominates the reading flow.
+    case specialSection(ChatSpecialSection)
     /// A blocked-agent pending question — visible at every level; it is the
     /// live frontier of the conversation, not chrome.
     case pending(PendingInteraction)
+    /// A resolved ask's quiet record ('You answered: …' / the honest
+    /// outcome note) — visible at every level; it is conversation
+    /// history, not chrome.
+    case resolvedAsk(ResolvedAsk)
 
     var id: String {
         switch self {
         case .text(let messageID, let blockIndex, _, _),
              .thinking(let messageID, let blockIndex, _),
              .toolCall(let messageID, let blockIndex, _, _),
-             .image(let messageID, let blockIndex, _):
+             .image(let messageID, let blockIndex, _),
+             .notice(let messageID, let blockIndex, _, _):
             return "\(messageID.uuidString)#\(blockIndex)"
+        case .specialSection(let section):
+            return "section#\(section.id)"
         case .orphanResult(let result):
             return "result#\(result.toolCallId)"
         case .pending(let interaction):
             return "pending#\(interaction.id)"
+        case .resolvedAsk(let ask):
+            return "resolved#\(ask.id)"
+        }
+    }
+
+    /// The originating ChatMessage's UUID (re-review finding 1: the
+ /// retry seam carries the failed echo's UUID — this is where the
+    /// notice row exposes it). nil for pending rows.
+    var messageID: UUID? {
+        switch self {
+        case .text(let id, _, _, _), .thinking(let id, _, _),
+             .toolCall(let id, _, _, _), .image(let id, _, _),
+             .notice(let id, _, _, _):
+            return id
+        case .orphanResult, .pending, .specialSection, .resolvedAsk:
+            return nil
         }
     }
 }
+
 
 /// One chat bubble: a run of consecutive visible `.text` rows that all
 /// belong to a single user/assistant message. Bubbles are the message-
@@ -197,16 +262,23 @@ internal enum ChatFiltering {
         toolResults: [ToolResult],
         level: DetailLevel
     ) -> [ChatRow] {
-        visibleRows(messages: messages, toolResults: toolResults, pending: [], level: level)
+        visibleRows(
+            messages: messages, toolResults: toolResults, pending: [],
+            resolvedAsks: [], level: level)
     }
 
     /// Full form, including the blocked-agent affordance rows. Pending
     /// interactions render at every level, after all transcript rows — they
     /// are the conversation's live edge, not chrome to be filtered.
+    /// Resolved asks render at every level too — they are conversation
+    /// history: after the transcript's rows, before any pending card
+    /// (deterministic placement; see ResolvedAsk for why the client
+    /// never interleaves by receipt time).
     static func visibleRows(
         messages: [ChatMessage],
         toolResults: [ToolResult],
         pending: [PendingInteraction],
+        resolvedAsks: [ResolvedAsk] = [],
         level: DetailLevel
     ) -> [ChatRow] {
         // Pair results by the opaque id. First record wins if a call somehow
@@ -225,19 +297,35 @@ internal enum ChatFiltering {
             }
         }
 
+        // The resolved asks split by anchor: those whose question text
+        // appears in a visible message render right AFTER that message
+        // (question → answer → the agent's reply that follows it);
+        // those with no match park at the transcript's end, before
+        // the pending cards (legacy/unknown questions — never
+        // interleaved into a turn they don't belong to).
+        var unanchoredAsks = resolvedAsks
+
         var rows: [ChatRow] = []
         for message in messages {
             switch message.role {
             case .user:
                 // User turns are conversation, not chrome: their text is
-                // visible at every level. Non-text blocks in a user message
-                // (not produced by the parser) are dropped.
+                // visible at every level. Notice blocks ride user
+                // messages too — a failed send's honest failure copy
+                // (review gap 2) must render on the echo bubble, so the
+                // user branch passes them (never drops).
                 for (index, block) in message.blocks.enumerated() {
                     switch block {
                     case .text(let text):
-                        rows.append(.text(messageID: message.id, blockIndex: index, role: .user, text: text))
+                        appendSegmentedText(
+                            messageID: message.id, blockIndex: index,
+                            role: .user, text: text, level: level, into: &rows)
                     case .image(let image):
                         rows.append(.image(messageID: message.id, blockIndex: index, image: image))
+                    case .notice(let text, let noticeLevel):
+                        rows.append(.notice(
+                            messageID: message.id, blockIndex: index,
+                            text: text, level: noticeLevel))
                     default:
                         break
                     }
@@ -247,7 +335,9 @@ internal enum ChatFiltering {
                 for (index, block) in message.blocks.enumerated() {
                     switch block {
                     case .text(let text):
-                        rows.append(.text(messageID: message.id, blockIndex: index, role: .assistant, text: text))
+                        appendSegmentedText(
+                            messageID: message.id, blockIndex: index,
+                            role: .assistant, text: text, level: level, into: &rows)
                     case .thinking(let text) where level >= .l3:
                         rows.append(.thinking(messageID: message.id, blockIndex: index, text: text))
                     case .toolCall(let call) where level >= Self.visibilityLevel(for: call):
@@ -259,6 +349,10 @@ internal enum ChatFiltering {
                         rows.append(.toolCall(messageID: message.id, blockIndex: index, call: call, result: result))
                     case .image(let image):
                         rows.append(.image(messageID: message.id, blockIndex: index, image: image))
+                    case .notice(let text, let noticeLevel):
+                        rows.append(.notice(
+                            messageID: message.id, blockIndex: index,
+                            text: text, level: noticeLevel))
                     case .thinking, .toolCall:
                         break  // below its level
                     }
@@ -268,16 +362,79 @@ internal enum ChatFiltering {
                 // Record-carried results. bashExecution is user-driven shell
                 // output — conversation, all levels. toolResult records are
                 // tool output — chrome, L2+ with the other tool results.
+                // Notices (item 19) ride bashExecution-role messages and
+                // are conversation at every level — never dropped.
                 let visible = message.role == .bashExecution || level >= .l2
                 if visible {
                     for (index, block) in message.blocks.enumerated() {
-                        if case .text(let text) = block {
-                            rows.append(.text(messageID: message.id, blockIndex: index, role: message.role, text: text))
+                        switch block {
+                        case .text(let text):
+                            appendSegmentedText(
+                                messageID: message.id, blockIndex: index,
+                                role: message.role, text: text,
+                                level: level, into: &rows)
+                        case .notice(let text, let noticeLevel):
+                            rows.append(.notice(
+                                messageID: message.id, blockIndex: index,
+                                text: text, level: noticeLevel))
+                        default:
+                            break
                         }
                     }
                 }
             }
+
+            // ANCHOR: after this message, render every ask anchored
+            // to it. The ask is an ask CARD — a tool call whose
+            // ARGUMENTS carry the question text (the ask tool's
+            // parameters), not a plain text message; the anchor
+            // therefore matches BOTH text blocks and toolCall
+            // arguments (JSON), and lands the block at the message
+            // that POSED the question — before the reply that
+            // follows. Level-independent: even when the tool-call
+            // rows themselves are hidden (L0), the message's
+            // position in the flow is still the ask's position, and
+            // a message whose only content was the ask still anchors
+            // (an empty match text only skips, never parks early).
+            if !unanchoredAsks.isEmpty {
+                let matchText = message.blocks
+                    .compactMap { block -> String? in
+                        switch block {
+                        case .text(let text):
+                            return text
+                        case .toolCall(let call):
+                            // The ask tool's arguments carry the
+                            // question text as a plain STRING value —
+                            // extract string leaves recursively so
+                            // JSON escaping never breaks the match.
+                            return Self.stringLeaves(of: call.arguments)
+                                .joined(separator: "\n")
+                        default:
+                            return nil
+                        }
+                    }
+                    .joined(separator: "\n")
+                if !matchText.isEmpty {
+                    var remaining: [ResolvedAsk] = []
+                    for ask in unanchoredAsks {
+                        if let anchor = ask.questionText,
+                            !anchor.isEmpty,
+                            matchText.contains(anchor)
+                        {
+                            rows.append(.resolvedAsk(ask))
+                        } else {
+                            remaining.append(ask)
+                        }
+                    }
+                    unanchoredAsks = remaining
+                }
+            }
         }
+        // Asks whose anchor never matched (unknown/legacy question
+        // text, or the question's message is outside the visible
+        // page): park after the transcript's rows, before the
+        // pending cards — deterministic.
+        rows.append(contentsOf: unanchoredAsks.map(ChatRow.resolvedAsk))
 
         // Window-boundary orphans: results whose call is not among the
         // visible messages, after the transcript so they never interleave
@@ -295,6 +452,54 @@ internal enum ChatFiltering {
         return rows
     }
 
+    /// One text block through the special-section extractor
+    /// (`ChatSpecialSectionParser`): the residual prose segments
+    /// become `.text` rows and each extracted `<system-notice>`/`<irc>`
+    /// section becomes a `.specialSection` row at its source position
+    /// — the tags never reach the markdown path. Level gating: the
+    /// prose is conversation (every level); the sections are chrome
+    /// (L0 drops them ENTIRELY — a hidden section's prose keeps
+    /// rendering with the tag occurrences removed, never as raw tag
+    /// text). Segment ids stay stable across level switches: prose
+    /// keeps the block's own `messageID#blockIndex` id when the block
+    /// did not split, and the (rare) split residuals carry synthetic
+    /// piece indices `1000 + segment` — above every real block index
+    /// a message can hold, below the sections' `section#` prefix.
+    /// Prose that renders to nothing (whitespace the tags left
+    /// behind) drops, so a tag-only block at L0 yields zero rows.
+    private static func appendSegmentedText(
+        messageID: UUID, blockIndex: Int, role: ChatRole,
+        text: String, level: DetailLevel, into rows: inout [ChatRow]
+    ) {
+        let baseID = "\(messageID.uuidString)#\(blockIndex)"
+        let extraction = ChatSpecialSectionParser.extract(
+            from: text, baseID: baseID)
+        guard !extraction.sections.isEmpty else {
+            // Fast path: no tags, one ordinary text row (byte-for-byte
+            // the row the unsegmented code emitted before).
+            if !text.isEmpty {
+                rows.append(.text(
+                    messageID: messageID, blockIndex: blockIndex,
+                    role: role, text: text))
+            }
+            return
+        }
+        for (piece, segment) in extraction.segments.enumerated() {
+            let trimmed = segment.text.trimmingCharacters(
+                in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                rows.append(.text(
+                    messageID: messageID,
+                    blockIndex: piece == 0
+                        ? blockIndex : 1000 + piece,
+                    role: role, text: segment.text))
+            }
+            if let section = segment.followingSection, level >= .l1 {
+                rows.append(.specialSection(section))
+            }
+        }
+    }
+
     /// The detail level at which a tool call becomes visible. Ordinary tools
     /// are L1 (names) as before; `todo` checklists and `task` (subagent
     /// spawn) blocks are agent self-management — folded into the existing
@@ -305,6 +510,24 @@ internal enum ChatFiltering {
     ///     checklist, which is what L2 is for.
     ///   - `task` rides L3 "Thinking": subagent activity is agent
     ///     internals, same shelf as the agent's own thinking.
+    /// Every string value reachable in a JSON tree (object keys
+    /// excluded, string leaves only — recursion into arrays and
+    /// nested objects). The resolved-ask anchor matches the ask
+    /// tool's arguments against these leaves, so JSON quoting never
+    /// breaks the question-text match.
+    static func stringLeaves(of value: JSONValue) -> [String] {
+        switch value {
+        case .string(let string):
+            return [string]
+        case .array(let items):
+            return items.flatMap { stringLeaves(of: $0) }
+        case .object(let fields):
+            return fields.values.flatMap { stringLeaves(of: $0) }
+        case .null, .bool, .number:
+            return []
+        }
+    }
+
     /// Level nesting is preserved: L3 ⊇ L2 ⊇ L1 ⊇ L0.
     static func visibilityLevel(for call: ToolCall) -> DetailLevel {
         visibilityLevel(toolName: call.name)

@@ -105,9 +105,12 @@ struct AgentListSection: Equatable, Identifiable, Sendable {
     /// Matching members only — group counts reflect filtered matches.
     var count: Int { agents.count }
 
-    /// `host · session · workspace` for the group header's quiet line.
-    var parentLine: String {
-        path.dropLast().joined(separator: " · ")
+    /// The header's full context path (v2 layout directive): every
+    /// identity component of the group's location joined with the
+    /// location separator — for the workspace grouping exactly
+    /// `host · session · workspace`.
+    var contextLine: String {
+        path.joined(separator: " · ")
     }
 }
 

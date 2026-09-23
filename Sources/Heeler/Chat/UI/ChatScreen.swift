@@ -9,19 +9,23 @@ import SwiftUI
 // `ChatFiltering` decides, rows render.
 
 /// The data one chat pane renders: the messages and results the windowing
-/// layer holds, plus the blocked-agent pending interactions (if any).
+/// layer holds, the blocked-agent pending interactions (if any), and the
+/// resolved asks rendered as quiet transcript blocks.
 internal struct ChatContent: Sendable, Equatable {
     var messages: [ChatMessage]
     var toolResults: [ToolResult]
     var pending: [PendingInteraction]
+    var resolvedAsks: [ResolvedAsk] = []
 
     init(
         messages: [ChatMessage] = [], toolResults: [ToolResult] = [],
-        pending: [PendingInteraction] = []
+        pending: [PendingInteraction] = [],
+        resolvedAsks: [ResolvedAsk] = []
     ) {
         self.messages = messages
         self.toolResults = toolResults
         self.pending = pending
+        self.resolvedAsks = resolvedAsks
     }
 }
 
@@ -33,7 +37,13 @@ internal struct ChatContent: Sendable, Equatable {
 /// LazyVStack anchors the visible row instead of jumping.
 struct ChatScreen: View {
     /// Pane identifier (one window = one agent); keys the level persistence.
+    /// Pane ids are HOST-LOCAL: two hosts can each have a pane "w1:p1".
     let paneID: String
+    /// The pane's Host — draft persistence is keyed by the HOST-QUALIFIED
+    /// identity (hostID + paneID); a bare pane id would collide across
+    /// hosts (the review's cross-host draft bleed). Level persistence
+    /// stays keyed by the pane id alone (its own store contract).
+    var hostID: Host.ID? = nil
     let agentName: String
     let state: ChatAgentState
     let content: ChatContent
@@ -54,11 +64,19 @@ struct ChatScreen: View {
     /// Delivers plain text to the agent (`agent.prompt` equivalent). Called
     /// only when the router returns `.passthrough`.
     var deliver: ((String) async throws -> Void)? = nil
+    /// Review gap 2: retries a failed outgoing echo (tap on the failed
+    /// bubble's error row). Nil keeps failed echoes visible but inert.
+    /// Re-review finding 1: retries by the ECHO UUID (the failed
+    /// row's messageID), never by message text.
+    var retrySend: ((UUID) async throws -> Void)? = nil
+    /// Review gap 7: the structured deliver — text + real image
+    /// content. Nil degrades to the text-only deliver.
+    var deliverStructured: ((_ text: String, _ images: [AgentChatOutgoingImage]) async throws -> Void)? = nil
     /// True when the pending (ask) rows must render as an honest
     /// unsupported state — the broker backend has no verified answering
     /// API in v1. False keeps the JSONL backend's interactive rows.
     var pendingUnsupported: Bool = false
-    /// The assistant article's author line, e.g. "Heeler · omp" —
+    /// The assistant article's author line, e.g. "Meadow · omp" —
     /// resolved from the real runtime identity by the surface owner.
     var authorLabel: String = ""
     /// The chat input's attachment bundle (the + button/paste flow).
@@ -68,6 +86,7 @@ struct ChatScreen: View {
     @State private var level: DetailLevel
     init(
         paneID: String,
+        hostID: Host.ID? = nil,
         agentName: String,
         state: ChatAgentState,
         content: ChatContent,
@@ -79,6 +98,14 @@ struct ChatScreen: View {
         stripAccessory: AnyView? = nil,
         router: ComposerRouterStore? = nil,
         deliver: ((String) async throws -> Void)? = nil,
+        /// Review gap 7 (delivery): the structured deliver — the text
+        /// AND its images reach the broker as one prompt.send. Nil
+        /// degrades to the text-only deliver.
+        deliverStructured: ((_ text: String, _ images: [AgentChatOutgoingImage]) async throws -> Void)? = nil,
+        /// Review gap 2: retries a failed outgoing echo (the tap on
+        /// the failed bubble's error row). Nil keeps failed echoes
+        /// visible but inert.
+        retrySend: ((UUID) async throws -> Void)? = nil,
         pendingUnsupported: Bool = false,
         authorLabel: String = "",
         attachments: ChatAttachments? = nil,
@@ -88,16 +115,19 @@ struct ChatScreen: View {
         fetch: RemoteFileFetcher? = nil
     ) {
         self.paneID = paneID
+        self.hostID = hostID
         self.agentName = agentName
         self.state = state
         self.content = content
         self.changeLevel = changeLevel
+        self.retrySend = retrySend
+        self.deliverStructured = deliverStructured
+        self.deliver = deliver
         self.hasOlder = hasOlder
         self.isLoadingOlder = isLoadingOlder
         self.loadOlder = loadOlder
         self.stripAccessory = stripAccessory
         self.router = router
-        self.deliver = deliver
         self.pendingUnsupported = pendingUnsupported
         self.authorLabel = authorLabel
         self.attachments = attachments
@@ -106,6 +136,16 @@ struct ChatScreen: View {
         self.imageFetcher = imageFetcher
         self.fetch = fetch
         self._level = State(initialValue: initialLevel)
+    }
+
+    /// The HOST-QUALIFIED draft identity (item 18 + review): pane ids
+    /// are host-local, so a bare pane id would let two hosts' panes
+    /// named "w1:p1" share one draft (text + attachment paths). The
+    /// draft store keys on this; level persistence keeps its own
+    /// pane-keyed store contract.
+    private var draftKey: String {
+        guard let hostID else { return paneID }
+        return "\(hostID.uuidString)#\(paneID)"
     }
 
     /// The pane's link-open router (Phase 4 openers): every detected
@@ -119,7 +159,14 @@ struct ChatScreen: View {
     /// sentinel row is on screen. Plain state so the trigger is a pure
     /// transition the tests can drive.
     @State private var pagingGate = ChatPagingGate()
+    /// The measured keyboard overlap (item 5): the composer pins to
+    /// this height instead of SwiftUI's two-stage keyboard avoidance.
+    @State private var keyboardInset = ChatKeyboardInset()
     @State private var topSentinelVisible = false
+
+    /// Item 18: per-pane draft persistence (load on appear, save per
+    /// edit, clear on successful send).
+    private let draftStore = ChatDraftPersistenceStore.shared
     /// The bottom sentinel's visibility drives the jump control's
     /// newest-end button.
     @State private var bottomSentinelVisible = false
@@ -149,9 +196,18 @@ struct ChatScreen: View {
                     .modifier(ReadingTextSizeModifier(
                         size: readingTextSize?.readingSize))
                 }
-                // A transcript that parsed to zero rows (metadata-only session
-                // file, or a resumed session writing elsewhere) must not render
-                // as a blank screen.
+                // Chat convention: open on the LATEST message. The
+                // anchor applies to the INITIAL offset only — NOT to
+                // alignment or size changes. A transcript shorter than
+                // the viewport then renders from the TOP (content
+                // where the reader starts; no blank page above it),
+                // while long transcripts still open at the bottom and
+                // prepended older pages keep the visible row anchored
+                // (no jump).
+                .defaultScrollAnchor(.bottom, for: .initialOffset)
+                // A transcript that parsed to zero rows (metadata-only
+                // session file, or a resumed session writing elsewhere)
+                // must not render as a blank screen.
                 .overlay {
                     if rows.isEmpty {
                         ContentUnavailableView(
@@ -161,9 +217,6 @@ struct ChatScreen: View {
                                 "This transcript has no conversation records. The agent may be writing to a different session file."))
                     }
                 }
-                // Chat convention: open on the LATEST message; prepended
-                // older pages keep the visible row anchored (no jump).
-                .defaultScrollAnchor(.bottom)
                 .onChange(of: pagingInputs) { _, _ in
                     firePagingIfNeeded()
                 }
@@ -199,30 +252,40 @@ struct ChatScreen: View {
                     .padding(.trailing, 8)
                 }
             }
-            // A transcript that parsed to zero rows (metadata-only session
-            // file, or a resumed session writing elsewhere) must not render
-            // as a blank screen.
-            .overlay {
-                if rows.isEmpty {
-                    ContentUnavailableView(
-                        "No Messages Yet",
-                        systemImage: "text.bubble",
-                        description: Text(
-                            "This transcript has no conversation records. The agent may be writing to a different session file."))
-                }
+            // The composer is a LAYOUT SIBLING (not a safe-area inset):
+            // stock SwiftUI keyboard avoidance follows the two-stage
+            // UIKit notifications an accessory-bearing responder
+            // publishes, so the composer parked at the accessory-less
+            // frame between the stages and the transcript showed
+            // through the strip (the intermittent device gap). The
+            // ChatKeyboardInset measures the FINAL frame (coalesced)
+            // and the whole surface pads by exactly that — the
+            // composer's bottom IS the keyboard stack's top under
+            // every state.
+            // Read-only transcripts (no router/deliver) keep the
+            // composer absent; the keyboard inset stays zero because
+            // nothing becomes first responder.
+            if router != nil, deliver != nil {
+                inputFrame
             }
-            // Chat convention: open on the LATEST message; prepended
-            // older pages keep the visible row anchored (no jump).
-            .defaultScrollAnchor(.bottom)
-            .onChange(of: pagingInputs) { _, _ in
-                firePagingIfNeeded()
-            }
-            .modifier(
-                ChatOpenersSurface(
-                    router: openRouter,
-                    fetch: fetch ?? { _ in throw CocoaError(.fileNoSuchFile) }))
         }
-        .safeAreaInset(edge: .bottom) { inputFrame }
+        .padding(.bottom, keyboardInset.height)
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+        .chatKeyboardInsetWindow(keyboardInset)
+        // Item 18: the identity's draft loads on appear and on any
+        // identity change (host or pane — keyed by draftKey), and
+        // every draft/item/caret change persists immediately.
+        .onAppear { loadPersistedDraft() }
+        .onChange(of: draftKey, initial: false) { _, _ in
+            loadPersistedDraft()
+        }
+        .onChange(of: draft) { _, _ in persistDraft() }
+        .onChange(of: draftItems) { _, _ in persistDraft() }
+        // A caret move WITHOUT typing must persist too (the review's
+        // case: move-caret → leave → reopen lands the caret where it
+        // was, not at the last typed position).
+        .onChange(of: draftCaret) { _, _ in persistDraft() }
+
         // The +N collection sheet: every draft item, removable there.
         .sheet(isPresented: $showsDraftCollection) {
             ChatDraftCollectionSheet(
@@ -336,6 +399,7 @@ struct ChatScreen: View {
             messages: content.messages,
             toolResults: content.toolResults,
             pending: content.pending,
+            resolvedAsks: content.resolvedAsks,
             level: level
         )
     }
@@ -390,7 +454,7 @@ struct ChatScreen: View {
                         quote: {
                             quoteAffordance(
                                 bubble.text,
-                                author: bubble.role == .user ? "You" : "Heeler")
+                                author: bubble.role == .user ? "You" : "Meadow")
                             dismissActions()
                         },
                         helpful: { toggleHelpful(bubble.id); dismissActions() })
@@ -408,7 +472,27 @@ struct ChatScreen: View {
                     image: image, fetch: imageFetcher ?? fetch, side: 56)
                 { viewingImage = image }
             } else {
-                LinkifiedChatRow(row: row, router: openRouter)
+                LinkifiedChatRow(
+                    row: row, router: openRouter,
+                    onRetry: retrySend.map { retry in
+                        { Task { @MainActor in
+                            guard case .notice = row
+                            else { return }
+                            // Re-review round 3, finding 1: the
+                            // projection renders the echo's message
+                            // id as the ORIGINAL outgoing UUID (no
+                            // derivation) — this IS store.echo.id.
+                            // The store routes by the echo's own
+                            // state (failed → duplicate-safe retry;
+                            // ambiguous → explicit may-duplicate
+                            // resend).
+                            try? await retry(row.messageID ?? UUID())
+                        } }
+                    },
+                    // Special sections: L3 starts their chips
+                    // expanded (highest detail = full content);
+                    // lower levels keep the collapsed summary.
+                    detailLevel: level)
             }
         case .imageGallery(_, let images):
             // One message's images as a single small-square gallery:
@@ -639,7 +723,7 @@ struct ChatScreen: View {
     /// Quote adds a REMOVABLE draft item (the tile rail shows it with
     /// its author); the user's draft text is never replaced. Send
     /// composes each held quote as a block-quoted prefix.
-    private func quoteAffordance(_ text: String, author: String = "Heeler") {
+    private func quoteAffordance(_ text: String, author: String = "Meadow") {
         let id = "quote-" + String(text.hashValue)
         guard !draftItems.contains(where: { $0.id == id }) else {
             inputFocused = true
@@ -699,20 +783,33 @@ struct ChatScreen: View {
         pendingImagePreviewData = data
         attachmentErrorMessage = nil
         attachments.draftStore.clearUploadFailure()
+        // The paste path has the LOCAL bytes in hand at this instant —
+        // the tile with its real thumbnail shows IMMEDIATELY (v2
+        // device note); the upload runs in the background and its
+        // completed remotePath updates the tracked item (no second
+        // tile, no gating on the upload).
+        let itemID = UUID().uuidString
+        pendingDraftItemID = itemID
+        draftItems.append(.image(
+            id: itemID, remotePath: "", previewData: data))
         let canBegin = attachments.staging.begin(
-            .photo(DataImageSelection(data: data)))
+            .photo(DataImageSelection(data: data)), insertPathIntoComposer: false)
         if canBegin == nil {
             attachments.draftStore.recordUploadFailure(
                 "An attachment is already uploading. Try again once it finishes.")
             pendingImagePreviewData = nil
             isPasteImageAttachment = false
+            // The staged tile comes back out — no upload will land for it.
+            pendingDraftItemID = nil
+            draftItems.removeAll { $0.id == itemID }
         }
     }
 
-    /// The staging store's state machine, surfaced: completed
-    /// paste-image uploads hold for the Send flow (path removed from
-    /// the draft — the tile is the visible attachment); failures land
-    /// in the error row.
+    /// The staging store's state machine, surfaced: completed uploads
+    /// hold as ONE draft item (the tile is the visible attachment; the
+    /// path never touches the prose — the staging store is begun with
+    /// insertPathIntoComposer:false, so nothing needs stripping here);
+    /// failures land in the error row.
     private func syncAttachmentUploadState(_ newState: ComposerStagingStore.State?) {
         guard let attachments else { return }
         switch newState {
@@ -722,30 +819,26 @@ struct ChatScreen: View {
             attachments.draftStore.recordUploadFailure(failure.message)
         case .completed(let outcome):
             attachments.draftStore.clearUploadFailure()
-            if isPasteImageAttachment {
-                // Paste image: the path the staging store inserted into
-                // the draft mirror comes OUT of the draft (the tile is
-                // the visible attachment) and lands as ONE draft item.
-                draft = attachments.draftStore.draft
-                if let range = draft.range(of: outcome.path) {
-                    draft.removeSubrange(range)
+            if let itemID = pendingDraftItemID {
+                // The tile has been visible since the pick/paste (v2
+                // device note): the upload's completed remotePath
+                // UPDATES the tracked item — no second tile ever
+                // appears. Covers both paste (preview bytes in hand
+                // instantly) and picker (thumbnail fills from the
+                // local read) paths.
+                pendingDraftItemID = nil
+                switch outcome.medium {
+                case .image:
+                    updateDraftItem(id: itemID, remotePath: outcome.path)
+                    pendingImagePreviewData = nil
+                case .file:
+                    let name = pendingFileURL?.lastPathComponent ?? "File"
+                    updateDraftItemFile(id: itemID, name: name, remotePath: outcome.path)
+                    pendingFileURL = nil
                 }
-                draftItems.append(.image(
-                    id: UUID().uuidString,
-                    remotePath: outcome.path,
-                    previewData: pendingImagePreviewData))
-                pendingImagePreviewData = nil
-                isPasteImageAttachment = false
             } else {
-                // Picker completion: exactly one draft item; the
-                // staging store's inserted path comes OUT of the prose
-                // AT INSERT TIME (the tile is the visible attachment),
-                // so the prose stays ONLY the user's own text — never
-                // stripped again at Send.
-                draft = attachments.draftStore.draft
-                if let range = draft.range(of: outcome.path) {
-                    draft.removeSubrange(range)
-                }
+                // No tracked in-flight tile (a store-driven completion
+                // outside the pick/paste path): append as before.
                 switch outcome.medium {
                 case .image:
                     draftItems.append(.image(
@@ -761,17 +854,23 @@ struct ChatScreen: View {
                     pendingFileURL = nil
                 }
             }
+            isPasteImageAttachment = false
         case nil:
             break
         }
     }
 
-    /// Send needs draft text or a held pending image: a pasted image
-    /// with no message text still sends (the path reference IS the
-    /// message).
+    /// Send is enabled the moment there is text OR a picked image
+    /// (user directive, v2): an image still uploading sends INLINE
+    /// base64 (the picked bytes are in hand) — Send NEVER waits on
+    /// the background blob upload. The upload only exists for history
+    /// dedup and lands whenever it lands.
     private var canSend: Bool {
-        if !draftItems.isEmpty { return true }
-        return !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        // Review round 3, finding 1: ONE sendability predicate, shared
+        // with the submit guard — ChatDraftComposer.isSendable (nonempty
+        // text OR any held item: image, file, or quote). The button and
+        // the guard can never drift apart again.
+        ChatDraftComposer.isSendable(text: composedMessageText(), items: draftItems)
     }
 
     /// Puts the bubble's plain text on the pasteboard.
@@ -828,6 +927,15 @@ struct ChatScreen: View {
     @State private var isSelectingFile = false
     /// The pending image's preview bytes (the tile's thumbnail).
     @State private var pendingImagePreviewData: Data?
+    /// The in-flight picked item's DRAFT TILE id (v2 device note): the
+    /// tile shows immediately on pick; the completed upload's
+    /// remotePath updates THIS item (no second tile ever appears).
+    @State private var pendingDraftItemID: String?
+    /// The picked PhotosPickerItem per in-flight tile id: a Send that
+    /// races the LOCAL byte read awaits the item's data through here
+    /// (never the upload — the local read is what the inline send
+    /// needs; the blob upload stays a background dedup optimization).
+    @State private var pendingPickerItems: [String: PhotosPickerItem] = [:]
     /// True while the current upload began from the PASTE path (its
     /// completed upload holds in draftStore.pendingImage with the path
     /// removed from the draft); false = picker path (path stays in the
@@ -836,11 +944,15 @@ struct ChatScreen: View {
     /// A picker firing before the bundle exists: honest error, no silent
     /// no-op.
     @State private var attachmentErrorMessage: String?
+    /// Round 4, finding 1: the tile whose attachment failed the send —
+    /// MARKED in the rail (red ring) so the error copy's ordinal maps
+    /// to a visible tile. CLEARS when that tile is removed or a retry
+    /// succeeds (finding 3).
+    @State private var failedAttachmentItemID: String?
     /// The file picker's last selection (name for the rail tile).
     @State private var pendingFileURL: URL?
     /// The photo picker's item data (the tile's preview thumbnail).
     @State private var pendingPickerImageData: Data?
-
     /// The composer's text field (the growing/collapsing input), split
     /// out to keep each view expression within the type-checker's
     /// budget. The closures are plain methods so the call expression
@@ -853,9 +965,10 @@ struct ChatScreen: View {
                 // Composer collapse (conversation redesign): empty OR
                 // unfocused = single row; focused with text grows to
                 // the 3-line cap. The draft survives blur untouched.
-                collapsed: draft.isEmpty || !inputFocused,
                 placeholder: "Message — / # @ ! for commands",
-                onEdit: { [self] newText, _ in self.applyComposerEdit(newText) },
+                onEdit: { [self] newText, caret in
+                    self.applyComposerEdit(newText, caret: caret)
+                },
                 onReturnKey: { [self] in self.composerReturnKey(router) },
                 onPaste: { [self] in self.handlePaste() },
                 pendingAccept: $pendingAccept,
@@ -864,8 +977,15 @@ struct ChatScreen: View {
         }
     }
 
-    private func applyComposerEdit(_ newText: String) {
+    /// The draft's live caret (UTF-16), tracked so a persisted draft can
+    /// restore it (item 18). The representable reports it with every
+    /// edit; the suggestion-accept path lands its own caret through
+    /// pendingAccept, and the next edit tracks the settled result.
+    @State private var draftCaret = 0
+
+    private func applyComposerEdit(_ newText: String, caret: Int = 0) {
         draft = newText
+        draftCaret = caret
     }
 
     /// Return with the suggestion menu open accepts the highlighted
@@ -889,18 +1009,25 @@ struct ChatScreen: View {
     private var composerRow: some View {
         if let router {
         HStack(spacing: 8) {
-            Button {
-                // Collapse to the resting row: keyboard down, focus
-                // off — the draft and the frame PERSIST.
-                inputFocused = false
-            } label: {
-                Image(systemName: "chevron.down")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
+            if keyboardInset.height > 0 {
+                // Keyboard-dismiss chevron (v2 device note): ONLY when
+                // the keyboard is actually up — a dead dismiss control
+                // on the collapsed resting row (keyboard down) is
+                // misleading chrome. Tapping focuses the field instead
+                // via the field's own tap.
+                Button {
+                    // Collapse to the resting row: keyboard down, focus
+                    // off — the draft and the frame PERSIST.
+                    inputFocused = false
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("Collapse input")
             }
-            .accessibilityLabel("Collapse input")
             if router != nil && deliver != nil {
                 Menu {
                     AgentActionMenuContent(
@@ -929,8 +1056,20 @@ struct ChatScreen: View {
             .accessibilityLabel("Send")
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        // Compact resting state (v2 device note): empty/unfocused draft
+        // AND keyboard down — the composer shrinks to the tightest row
+        // so the transcript keeps maximum content area. Keyboard up
+        // keeps the full working padding.
+        .padding(.vertical, isResting ? 4 : 8)
         }
+    }
+
+    /// The composer's most compact state: an empty (or unfocused) draft
+    /// with the keyboard down. Focused typing keeps the working frame;
+    /// a non-empty draft with the keyboard down keeps the middle
+    /// padding so a held draft never looks squeezed.
+    private var isResting: Bool {
+        !inputFocused && keyboardInset.height == 0 && draft.isEmpty
     }
 
     /// The input frame: a bottom bar with the draft field. The router owns
@@ -987,15 +1126,17 @@ struct ChatScreen: View {
                 if !draftItems.isEmpty {
                     ChatDraftTileRail(
                         items: draftItems,
+                        failedItemID: failedAttachmentItemID,
                         removeItem: { id in removeDraftItem(id) },
                         openPreview: { item in previewedDraftItem = item },
                         openCollection: { showsDraftCollection = true })
                         .padding(.horizontal, 12)
                         .padding(.top, 6)
                 }
+                // The row carries its own horizontal+vertical padding;
+                // the frame adds NO second vertical band (the resting
+                // state is the row's tight padding alone).
                 composerRow
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
             }
             .background(.bar)
             .overlay(alignment: .top) { Divider() }
@@ -1017,12 +1158,28 @@ struct ChatScreen: View {
                 isPasteImageAttachment = false
                 attachmentErrorMessage = nil
                 attachments.draftStore.clearUploadFailure()
-                // The tile's preview: the picked item's own bytes.
+                // The tile shows IMMEDIATELY (v2 device note): the draft
+                // item is appended in the SAME frame as the picker's
+                // dismissal with a photo glyph; the local thumbnail
+                // bytes fill the tile as soon as the async read lands
+                // (a local PHAsset read, never gated on the upload —
+                // the staging upload runs in the background and the
+                // completed remotePath UPDATES this tracked item).
+                let itemID = UUID().uuidString
+                pendingDraftItemID = itemID
+                pendingPickerItems[itemID] = item
+                draftItems.append(.image(
+                    id: itemID, remotePath: "", previewData: nil))
                 Task { @MainActor in
-                    pendingPickerImageData =
-                        try? await item.loadTransferable(type: Data.self) ?? nil
+                    let data = try? await item.loadTransferable(type: Data.self) ?? nil
+                    if let data {
+                        updateDraftItemImage(id: itemID, previewData: data)
+                    }
+                    pendingPickerItems[itemID] = nil
                 }
-                attachments.staging.begin(.photo(PhotosPickerImageSelection(item: item)))
+                attachments.staging.begin(
+                    .photo(PhotosPickerImageSelection(item: item)),
+                    insertPathIntoComposer: false)
             }
             .photosPicker(
                 isPresented: $isSelectingPhoto,
@@ -1042,7 +1199,7 @@ struct ChatScreen: View {
                 attachmentErrorMessage = nil
                 attachments.draftStore.clearUploadFailure()
                 pendingFileURL = url
-                attachments.staging.begin(.file(url))
+                attachments.staging.begin(.file(url), insertPathIntoComposer: false)
             }
             .onChange(of: attachments?.staging.state) { _, newState in
                 syncAttachmentUploadState(newState)
@@ -1063,18 +1220,123 @@ struct ChatScreen: View {
         ChatDraftComposer.messageText(items: draftItems, draft: draft)
     }
 
+    /// A successful Send clears the composer AND its persisted draft
+    /// (item 18: the next message starts clean; a cleared composer stays
+    /// cleared across surfaces).
     private func clearDraftAfterSend() {
         draft = ""
         draftItems = []
+        draftStore.clear(paneID: draftKey)
+        // Round 4, finding 3: a successful send resolved every
+        // attachment — the tile mark and its error clear with the draft.
+        failedAttachmentItemID = nil
+        attachmentErrorMessage = nil
+    }
+
+    /// The pane's persisted draft (item 18): loaded on appear (and on
+    /// identity change) so a half-typed message survives leaving and
+    /// returning to the chat. A MISSING entry installs the EMPTY
+    /// state — the review's case: switching identities in the same
+    /// view must not leave the previous identity's text/items/caret on
+    /// screen. The caret rides the draft via a one-shot placement so
+    /// the restore never fights an in-progress selection.
+    private func loadPersistedDraft() {
+        guard let saved = draftStore.draft(paneID: draftKey) else {
+            // No draft for THIS identity: empty composer, no stale
+            // caret request from the previous identity.
+            draft = ""
+            draftItems = []
+            draftCaret = 0
+            return
+        }
+        draft = saved.text
+        // Defensive: never restore an in-flight (empty-path) image
+        // item — its upload belonged to a previous surface and will
+        // never complete here.
+        draftItems = saved.items.map(ChatDraftItem.init).filter { item in
+            if case .image(_, let path, _) = item {
+                return !path.isEmpty
+            }
+            return true
+        }
+        draftCaret = saved.caretLocation
+        caretRequest = ChatCaretRequest(location: saved.caretLocation)
+    }
+
+    /// Persists the live draft per edit (item 18). An EMPTY draft clears
+    /// the entry — cheap enough to run on every keystroke (the encode is
+    /// a small Codable; image preview BYTES never persist by design).
+    private func persistDraft() {
+        // In-flight image tiles (empty remotePath, upload not landed)
+        // never persist: their upload is a LIVE operation tied to this
+        // surface — a restored empty-path tile would block Send
+        // forever (nothing will ever complete it). Completed items
+        // persist normally.
+        let persistable = draftItems.filter { item in
+            if case .image(_, let path, _) = item {
+                return !path.isEmpty
+            }
+            return true
+        }
+        draftStore.save(
+            ChatPaneDraft(
+                text: draft,
+                caretLocation: draftCaret,
+                items: persistable.map(\.paneDraftItem)),
+            paneID: draftKey)
+    }
+
+
+    /// Fills a tracked in-flight tile's local thumbnail (v2 device
+    /// note): the local picker bytes decode in the background and the
+    /// tile's glyph becomes the real preview — never a second tile.
+    private func updateDraftItemImage(id: String, previewData: Data) {
+        for index in draftItems.indices where draftItems[index].id == id {
+            if case .image(let existingID, let path, _) = draftItems[index] {
+                draftItems[index] = .image(
+                    id: existingID, remotePath: path, previewData: previewData)
+            }
+        }
+    }
+
+    /// Completes a tracked in-flight tile with its uploaded remotePath.
+    private func updateDraftItem(id: String, remotePath: String) {
+        for index in draftItems.indices where draftItems[index].id == id {
+            if case .image(let existingID, _, let preview) = draftItems[index] {
+                draftItems[index] = .image(
+                    id: existingID, remotePath: remotePath, previewData: preview)
+            }
+        }
+    }
+
+    /// Completes a tracked in-flight tile as a file chip (the file
+    /// picker's pick flow shares the tracked-tile mechanism).
+    private func updateDraftItemFile(id: String, name: String, remotePath: String) {
+        for index in draftItems.indices where draftItems[index].id == id {
+            draftItems[index] = .file(id: id, name: name, remotePath: remotePath)
+        }
     }
 
     private func removeDraftItem(_ id: String) {
         draftItems.removeAll { $0.id == id }
+        // Round 4, finding 3: removing the failed tile clears its
+        // error — a retained error can't outlive the problem.
+        if failedAttachmentItemID == id {
+            failedAttachmentItemID = nil
+            attachmentErrorMessage = nil
+        }
     }
 
     private func sendDraft() {
         let text = composedMessageText()
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        // Review round 7: an IMAGE-ONLY draft is a valid prompt — the
+        // structured images array carries the content, so empty text
+        // with image items MUST send (the old nonempty-text guard made
+        // image-only sends silently do nothing). The decision lives in
+        // ChatDraftComposer.isSendable (unit-testable): nonempty text
+        // OR attachments; only genuinely-empty is refused — never
+        // with fabricated filler text.
+        guard ChatDraftComposer.isSendable(text: text, items: draftItems),
             !isSending, let router
         else { return }
         isSending = true
@@ -1088,16 +1350,37 @@ struct ChatScreen: View {
             // the agent).
             if ChatDraftComposer.carriesAttachments(items: draftItems) {
                 do {
-                    try await deliver?(text)
+                    // Image draft items ride the structured send as REAL
+                    // image content (send-never-waits, user directive):
+                    // a LANDED blob upload references the broker's img:
+                    // store; an IN-FLIGHT image sends INLINE base64 —
+                    // the picked bytes are in hand and Send NEVER waits
+                    // on the upload (it stays a background history-dedup
+                    // optimization). Re-review finding 4 stays live in
+                    // buildOutgoingImages: MIME is SNIFFED from the
+                    // bytes' magic numbers (Self.sniffImageMIME), never
+                    // hardcoded, and the img: ref is the broker's blob
+                    // id — never the host filesystem path.
+                    let images: [AgentChatOutgoingImage] = try await buildOutgoingImages()
+                    try await deliverWithImages(text, images)
                     clearDraftAfterSend()
                     showSentConfirmation = true
                     Task { @MainActor in
                         try? await Task.sleep(for: .seconds(2))
                         showSentConfirmation = false
                     }
+                } catch let error as ChatAttachmentSendError {
+                    // Review rounds 3-4: the failure names the
+                    // attachment AND marks its tile; the error row
+                    // renders beside the tile rail, and the WHOLE draft
+                    // (text + items) stays. Local preparation/reads —
+                    // never an uncertain network delivery.
+                    deliveryError = nil
+                    attachmentErrorMessage = error.message
+                    failedAttachmentItemID = error.itemID
                 } catch {
                     // Visible + retryable: the draft (and items) stay.
-                    deliveryError = "Send failed — your message was not delivered. Retry when ready."
+                    deliveryError = "Send failed — your message may not have been delivered. Retry when ready."
                 }
                 return
             }
@@ -1118,10 +1401,159 @@ struct ChatScreen: View {
                     }
                 } catch {
                     // Visible + retryable: the draft (and items) stay.
-                    deliveryError = "Send failed — your message was not delivered. Retry when ready."
+                    deliveryError = "Send failed — your message may not have been delivered. Retry when ready."
                 }
             }
         }
+    }
+
+    /// Builds the structured-send image array (send-never-waits, user
+    /// directive + review round on 1d437286, findings 1-4). Every image
+    /// rides INLINE base64, ALWAYS in the ORIGINAL DRAFT ORDER, with
+    /// bytes normalized through the SAME local preparation the upload
+    /// path uses (bounded, orientation-applied, metadata-stripped,
+    /// supported formats only — raw picker data never bypasses prep),
+    /// and the MIME from the PREPARED format. THROWS when an attachment
+    /// cannot be resolved (a failed local read, an unrecoverable
+    /// restored image): the draft is RETAINED and the failed
+    /// attachment reported — never a silent partial send, never a
+    /// silently omitted image. The blob upload continues in the
+    /// background purely for the history record; it never gates this.
+    ///
+    /// Sources per item, in draft order:
+    /// 1. the tile's local bytes (paste: in hand; picker: the async
+    ///    read has usually landed);
+    /// 2. the stored PhotosPickerItem (a Send racing the picker's
+    ///    LOCAL read awaits just that read — a moment, not the upload);
+    /// 3. the staged HOST path via the fetch seam (a RESTORED image
+    ///    after a surface reopen — its upload may have landed while
+    ///    the surface was away; the bytes are the same file the upload
+    ///    staged).
+    private func buildOutgoingImages() async throws -> [AgentChatOutgoingImage] {
+        var images: [AgentChatOutgoingImage] = []
+        // Round 4, finding 1: images are named by their ORDINAL among
+        // the held image tiles (image 1, image 2, …) so the error copy
+        // identifies WHICH tile failed even with several picked.
+        var imageOrdinal = 0
+        for item in draftItems {
+            guard case .image(let id, let remotePath, let localData) = item
+            else { continue }
+            imageOrdinal += 1
+            let displayName = "image \(imageOrdinal)"
+            do {
+                // Resolve THIS attachment's bytes — any of the three
+                // sources, in order; none of them is the upload.
+                var bytes: Data?
+                if let localData, !localData.isEmpty {
+                    bytes = localData
+                } else if let pickerItem = pendingPickerItems[id] {
+                    bytes = try await pickerItem.loadTransferable(type: Data.self) ?? nil
+                } else if !remotePath.isEmpty, let fetch {
+                    bytes = try await fetch(remotePath)
+                }
+                guard let bytes, !bytes.isEmpty else {
+                    // A resolvable-but-failed attachment is NEVER
+                    // silently skipped — the send aborts, the draft
+                    // stays, and the failure is identified per tile.
+                    throw ChatAttachmentSendError(
+                        itemID: id, displayName: displayName)
+                }
+                // Finding 4: normalize through the shared local
+                // preparation (supported formats, bounded, oriented) —
+                // never raw picker data with a guessed MIME.
+                let prepared = try await Self.imagePreparer.prepare(
+                    DataImageSelection(data: bytes))
+                defer { try? prepared.remove() }
+                // Round 4, finding 2: the prepared-file READ is INSIDE
+                // this attachment's error boundary — a read failure is
+                // a typed LOCAL failure naming THIS tile, never a
+                // generic uncertain-delivery error (nothing was
+                // submitted).
+                let preparedBytes = try Data(contentsOf: prepared.fileURL)
+                images.append(AgentChatOutgoingImage(
+                    data: preparedBytes,
+                    mimeType: prepared.format == .png
+                        ? "image/png" : "image/jpeg",
+                    byteLength: preparedBytes.count))
+                // The tile keeps its live preview; the send used the
+                // normalized bytes.
+            } catch let error as ChatAttachmentSendError {
+                throw error
+            } catch {
+                throw ChatAttachmentSendError(
+                    itemID: id, displayName: displayName)
+            }
+        }
+        return images
+    }
+
+    /// The shared image preparation instance for the inline send path
+    /// (the same default configuration the staging pipeline uses).
+    private static let imagePreparer = ImagePreparer()
+
+    /// One attachment's user-facing name for error copy (review round
+    /// 3, finding 2): images are "image", files carry their own name.
+    private static func attachmentDisplayName(_ item: ChatDraftItem) -> String {
+        switch item {
+        case .image: "image"
+        case .file(_, let name, _): name
+        case .quote(_, let text, _):
+            String(text.prefix(24))
+        }
+    }
+
+    /// Review gap 7: the structured-send path for attachment-bearing
+    /// sends. The deliver closure stays text-only (the router's
+    /// passthrough contract); when the images seam is wired the send
+    /// routes through it so the broker receives REAL image content
+    /// blocks alongside the text — otherwise it degrades to the
+    /// text-only deliver (the pre-wire path).
+    private func deliverWithImages(
+        _ text: String, _ images: [AgentChatOutgoingImage]
+    ) async throws {
+        if let deliverStructured {
+            try await deliverStructured(text, images)
+        } else {
+            try await deliver?(text)
+        }
+    }
+
+    /// Image MIME by magic numbers (re-review finding 4): the adapter
+    /// accepts png/jpeg/gif/webp — the staged file's own bytes decide,
+    /// never a hardcoded guess. Unknown magic defaults to png (the
+    /// most common staged shape; the broker validates).
+    private static func sniffImageMIME(_ bytes: Data) -> String {
+        func has(_ magic: [UInt8], at offset: Int = 0) -> Bool {
+            guard bytes.count >= offset + magic.count else { return false }
+            return magic.enumerated().allSatisfy {
+                bytes[bytes.startIndex + offset + $0.offset] == $0.element
+            }
+        }
+        if has([0x89, 0x50, 0x4E, 0x47]) { return "image/png" }
+        if has([0xFF, 0xD8, 0xFF]) { return "image/jpeg" }
+        if has([0x47, 0x49, 0x46]) { return "image/gif" }
+        if has([0x52, 0x49, 0x46, 0x46]) && has([0x57, 0x45, 0x42, 0x50], at: 8) {
+            return "image/webp"
+        }
+        return "image/png"
+    }
+}
+
+/// A structured-send attachment failure that IDENTIFIES the attachment
+/// (review rounds 3-4): carries the failing tile's ITEM ID (so the
+/// tile can be MARKED, not just a composer row) and a distinguishing
+/// display name (images are named by their ordinal among the held
+/// image tiles — image 1, image 2 — so several picks are
+/// distinguishable; files carry their own name). Local
+/// read/preparation failures — the draft is always retained whole;
+/// distinct from uncertain network delivery, which keeps the generic
+/// retryable delivery copy.
+struct ChatAttachmentSendError: Error, Sendable, Equatable {
+    let itemID: String
+    let displayName: String
+
+    var message: String {
+        "The attachment \(displayName) could not be read for sending — it stays in your draft. Remove it or try again."
     }
 }
 

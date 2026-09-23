@@ -407,6 +407,7 @@ struct AgentDetailView: View {
         case .ready, .disconnected:
             ChatScreen(
                 paneID: agent.agent.paneID,
+                hostID: agent.hostID,
                 agentName: agent.tabLabel ?? agent.agent.displayName,
                 state: brokerAgentState,
                 content: brokerContent,
@@ -421,8 +422,36 @@ struct AgentDetailView: View {
                 deliver: { text in
                     try await store.send(text)
                 },
+                deliverStructured: { text, images in
+                    // Review gap 7: the attachment-bearing send — the
+                    // text AND its real image content reach the broker
+                    // as one structured prompt.send.
+                    try await store.send(text, images: images)
+                },
+                retrySend: { echoID in
+                    // Re-review round 3, findings 1+3: the row's
+                    // messageID IS the original echo UUID. The STORE
+                    // routes by the echo's own state: .failed → the
+                    // duplicate-safe retry (same key); .ambiguous →
+                    // the explicit may-duplicate resend (fresh key,
+                    // user decision).
+                    guard let store = brokerChat else { return }
+                    if let echo = store.outgoing.first(where: {
+                        $0.id == echoID
+                    }) {
+                        switch echo.state {
+                        case .failed:
+                            try await store.retry(echoID: echoID)
+                        case .ambiguous:
+                            try await store
+                                .resendAcknowledgingPossibleDuplicate(echoID: echoID)
+                        case .sending, .sent:
+                            break
+                        }
+                    }
+                },
                 pendingUnsupported: !store.askSupported,
-                authorLabel: "Heeler · \(agent.agent.kind.lowercased())",
+                authorLabel: "Meadow · \(agent.agent.kind.lowercased())",
                 attachments: chatAttachments,
                 onAskAnswer: { interaction, payloads in
                     guard let store = brokerChat,
@@ -431,10 +460,10 @@ struct AgentDetailView: View {
                     else {
                         // The card is stale (resolved elsewhere): the
                         // store's self-heal already dropped it and the
-                        // resolved note renders.
+                        // resolved block renders in the transcript.
                         throw AgentChatError.wire(
-                            code: "stale_interaction",
-                            message: "This question is no longer pending — it may have been answered or expired in the agent's terminal.",
+                            code: "item_changed",
+                            message: "This question is no longer pending — it may have been answered or cancelled elsewhere.",
                             retryable: false)
                     }
                     do {
@@ -447,14 +476,17 @@ struct AgentDetailView: View {
                                     customText: nil, note: nil)
                             })
                     } catch let error as AgentChatError {
+                        // The broker's real stale codes (ask.ts
+                        // claimEntry): the ask settled, expired with
+                        // its generation, or never existed.
                         if case .wire(let code, _, _) = error,
-                            code == "stale_interaction"
-                                || code == "unknown_request"
-                                || code == "settled"
+                            code == "item_changed"
+                                || code == "item_not_found"
+                                || code == "stale_generation"
                         {
                             throw AgentChatError.wire(
                                 code: code,
-                                message: "This question is no longer pending — it may have been answered or expired in the agent's terminal.",
+                                message: "This question is no longer pending — it may have been answered or cancelled elsewhere.",
                                 retryable: false)
                         }
                         throw error
@@ -463,7 +495,7 @@ struct AgentDetailView: View {
                 onAskCancel: { interaction in
                     guard let store = brokerChat else {
                         throw AgentChatError.wire(
-                            code: "stale_interaction",
+                            code: "item_changed",
                             message: "This ask is no longer pending.",
                             retryable: false)
                     }
@@ -480,21 +512,9 @@ struct AgentDetailView: View {
                         at: path, on: agent.hostID)
                 })
                 // The honest resolved-ask note (answered elsewhere /
-                // cancelled / expired): the card is gone but the WHY
-                // renders — the newest resolution, above the composer.
-                .overlay(alignment: .bottom) {
-                    if let latest = store.interactionResolutions.last {
-                        Text(latest.message)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(.thinMaterial, in: Capsule())
-                            .padding(.bottom, 120)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                            .id(latest.id)
-                    }
-                }
+                // cancelled / expired) now renders IN the transcript
+                // flow as a quiet block (brokerContent.resolvedAsks),
+                // not as a floating note above the composer.
                 .overlay(alignment: .bottom) {
                     if case .disconnected(let reason) = store.phase {
                         AgentChatStateBanner(
@@ -515,7 +535,7 @@ struct AgentDetailView: View {
             AgentChatStateBanner(
                 icon: "arrow.triangle.branch",
                 title: "Ambiguous agent mapping",
-                detail: "More than one agent claims this session; Heeler will not guess.")
+                detail: "More than one agent claims this session; Meadow will not guess.")
         case .failed(let reason):
             AgentChatStateBanner(
                 icon: "exclamationmark.triangle",
@@ -523,14 +543,75 @@ struct AgentDetailView: View {
         }
     }
 
-    /// The agent-chat store's content, with the provisional stream
-    /// tails rendered as separate in-flight assistant bubbles (stream
-    /// ids never masquerade as committed items).
+    /// The agent-chat store's content projection: outgoing echoes at
+    /// the tail FIRST, then provisional stream tails (review gap 4 —
+    /// the agent's streaming reply must render BELOW the user message
+    /// it answers, never above), then the pending surface.
     private var brokerContent: ChatContent {
         var content = brokerChat?.content ?? ChatContent()
+        // Outgoing echoes (items 1/11): each just-sent user message
+        // renders IMMEDIATELY as its own user bubble — the optimistic
+        // local echo. Deterministic "echo:" ids keep the row's identity
+        // stable across delivery-state transitions (sending →
+        // sent/failed re-renders in place, never a churn). A confirmed
+        // echo drops the moment the committed page carries the real
+        // record (AgentChatStore.reconcileOutgoing), so the echo and
+        // its confirmed twin never render together.
+        for echo in brokerChat?.outgoing ?? [] {
+            var blocks: [ChatBlock] = [.text(echo.text)]
+            // Structured images ride the echo too (review gap 7): the
+            // sent image previews as a real image block on the user's
+            // own bubble. Projection lives in
+            // AgentChatMapper.echoImageBlocks (re-review round 5,
+            // inline-ref finding): an inline-sent image carries its
+            // REAL BYTES (the renderer draws them directly; no
+            // fabricated fetchable id), and each image gets its OWN
+            // "inline:\(echoID)-\(index)" ref so multiple images in
+            // one echo stay DISTINCT rows.
+            blocks.append(
+                contentsOf: AgentChatMapper.echoImageBlocks(
+                    echoID: echo.id, images: echo.images))
+            switch echo.state {
+            case .failed:
+                // The broker answered NO: a replay is duplicate-SAFE
+                // (same key within the registration — the broker
+                // dedups).
+                if let message = echo.failureMessage {
+                    blocks.append(.notice(
+                        text: "\(message) Tap to retry.",
+                        level: "error"))
+                }
+            case .ambiguous:
+                // Re-review round 4, finding 3: acceptance UNKNOWN —
+                // the re-send MAY DUPLICATE. Distinct "resend" level
+                // so the AX hint names the risk, never "retry".
+                if let message = echo.failureMessage {
+                    blocks.append(.notice(
+                        text: "\(message) Send again — may duplicate.",
+                        level: "resend"))
+                }
+            case .sending, .sent:
+                break
+            }
+            // Re-review round 3, finding 1: the message id IS the
+            // ORIGINAL outgoing UUID — no derivation (a derived id
+            // broke the retry lookup: stableID("echo:"+id) ≠ id).
+            // The echo id is already a unique UUID; using it directly
+            // makes the retry row's messageID exactly store.echo.id.
+            content.messages.append(
+                ChatMessage(
+                    id: echo.id,
+                    role: .user, blocks: blocks, timestamp: echo.sentAt))
+        }
+        // Provisional stream tails AFTER the echoes: the reply follows
+        // the question. Deterministic per-stream ids (a fresh UUID per
+        // delta would churn the bubble's identity every chunk and
+        // flicker the whole row, item 20).
         for tail in brokerChat?.streamTails ?? [] where !tail.text.isEmpty {
             content.messages.append(
-                ChatMessage(role: .assistant, blocks: [.text(tail.text)]))
+                ChatMessage(
+                    id: AgentChatMapper.stableID(for: "stream:\(tail.streamId)"),
+                    role: .assistant, blocks: [.text(tail.text)]))
         }
         // Real pending asks from the broker interactions map into the
         // chat content's pending surface (the redesigned question card).
@@ -548,6 +629,24 @@ struct AgentDetailView: View {
                                 id: option.id, label: option.label)
                         })
                 })
+        } ?? []
+        // Resolved asks render as quiet blocks in the transcript flow:
+        // 'You answered: <labels>' (only when this store's own
+        // acknowledgement confirmed the win) or the honest outcome note
+        // (answered in terminal / answered remotely — the broadcast
+        // cannot identify the winner — / cancelled / expired /
+        // settled elsewhere). They persist across reconnects and
+        // reopen (the store keeps them for the agent's chat life).
+        // PLACEMENT: each block anchors to its question's own text
+        // — right after the message that posed the question, BEFORE
+        // the agent's reply that follows it; unanchored records park
+        // after the transcript's rows, before any pending card.
+        content.resolvedAsks = brokerChat?.interactionResolutions.map {
+            resolution in
+            ResolvedAsk(
+                id: resolution.requestId,
+                body: resolution.transcriptBody,
+                questionText: resolution.questionText)
         } ?? []
         return content
     }

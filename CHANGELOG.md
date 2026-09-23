@@ -8,6 +8,27 @@ Entries reference the issue that motivated them.
 ## [Unreleased]
 
 ### Added
+- Host detail: every connection route is a tappable row. Tapping a route
+  makes it the Host's active route — the path the next connection dials
+  first — persisted per Host and marked with a green checkmark (a live
+  session keeps its bolt on the route it dialed; the switch applies on
+  the next connect, never tearing down a working connection). A Host
+  reached through a Jump Host shows the shared jump hop above its
+  routes.
+- One source of truth for route state: the Hosts list, the Hosts sheet,
+  and the Host detail all read a shared observable active-route store
+  (backed by the same persisted preference the dialer consumes), so the
+  list's marks and the detail's checkmark can never disagree. A route
+  tap on the LIST now also reconnects through the Console's own
+  lifecycle: the tapped row shows a connecting spinner while the dial
+  runs, and a failed dial lands on the honest Unavailable status dot —
+  never the stale prior state.
+- `<system-notice>` and `<irc>` blocks in an agent transcript (harness
+  notices and peer messages) render as collapsed summary chips —
+  a label plus a one-line excerpt — instead of raw block text. They
+  hide entirely at the Text detail level, show as chips at Tools and
+  Results, and start expanded (full body visible, tap to collapse) at
+  the Thinking level; tapping a chip always toggles the full body.
 - A Host can carry additional addresses for the same machine (home LAN and
   VPN, for example). The Host form gives each address its own row (add,
   remove, reorder; the primary address always stays), the Host detail page

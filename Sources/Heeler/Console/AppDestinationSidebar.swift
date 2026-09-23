@@ -13,7 +13,7 @@ struct AppDestinationSidebar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
-                Text("Heeler")
+                Text("Meadow")
                     .font(.headline.weight(.semibold))
                     .padding(.leading, 8)
                 Spacer(minLength: 0)

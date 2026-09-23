@@ -256,10 +256,10 @@ final class HostsCardProofTests: XCTestCase {
 
     // MARK: Row tap switches the route (user directive)
 
-    /// Tapping a route ROW switches the Host's preferred dial path to
-    /// THAT route (v1 PreferredAddressStore semantics): observable via
-    /// the detail page's Addresses section, where the preferred route
-    /// leads and carries the Preferred mark. Instant, no confirmation.
+    /// Tapping a route ROW on the card switches the Host's active dial
+    /// path (PreferredAddressStore semantics): observable on the DETAIL
+    /// page's Routes section, where the switched route leads and carries
+    /// the active mark (AX "active route"). Instant, no confirmation.
     func testRouteRowTapSwitchesThePreferredPath() {
         app = UITestApp.launchDemo(.hostList)
 
@@ -274,28 +274,125 @@ final class HostsCardProofTests: XCTestCase {
                 .waitForExistence(timeout: 2),
             "a row tap must switch the route, not open the inspector")
 
-        // The preference is observable on the detail page's Addresses
-        // section: the switched route's ADDRESS now leads with the
-        // Preferred mark (the section lists addresses, not labels).
+        // The preference is observable on the detail page's Routes
+        // section: the switched route LEADS and its row reads as the
+        // active route (identifier'd rows; the section lists route
+        // names + exact address:port).
         let heading = app.buttons.matching(
             NSPredicate(format: "label BEGINSWITH 'Open details for Studio Mac'")
         ).firstMatch
         waitToExist(heading)
         heading.tap()
-        let lanAddress = app.staticTexts["studio.lan.demo.invalid"].firstMatch
+        let lanDetailRow = app.descendants(matching: .any)
+            .matching(
+                NSPredicate(
+                    format: "identifier == 'host-detail-route-studio.lan.demo.invalid'"))
+            .firstMatch
+        waitToExist(lanDetailRow)
         XCTAssertTrue(
-            lanAddress.waitForExistence(timeout: UITestTimeouts.standard),
-            "the switched route's address should appear in the Addresses section")
-        // The Preferred mark exists and sits on the SAME row as the
-        // switched address (same y band) — the preference moved.
-        let preferredMark = app.staticTexts["Preferred"].firstMatch
-        waitToExist(preferredMark)
-        let lanY = lanAddress.frame.minY
-        let markY = preferredMark.frame.minY
-        XCTAssertEqual(
-            abs(lanY - markY), 0, accuracy: 30,
-            "the Preferred mark should sit on the switched route's row")
-        captureScreenshot(app, "route-switched-preferred", lifetime: .keepAlways)
+            lanDetailRow.label.contains("active route"),
+            "the switched route must read as the active route: \(lanDetailRow.label)")
+        captureScreenshot(app, "route-switched-active", lifetime: .keepAlways)
+    }
+
+    // MARK: Detail route rows: tap = switch, persists, honest marks
+
+    /// The Host DETAIL's route rows (user directive): every route is a
+    /// tappable row; tapping makes it the active route (green checkmark
+    /// + "active route" AX state) — and only one row is ever active.
+    /// Switching while the primary route is the live connection keeps
+    /// the bolt on the live row: the tap never claims the live route
+    /// moved, it only sets the next-connect path.
+    func testDetailRouteTapSwitchesActiveRoute() {
+        app = UITestApp.launchDemo(.hostList)
+
+        let heading = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH 'Open details for Studio Mac'")
+        ).firstMatch
+        waitToExist(heading)
+        heading.tap()
+
+        let primaryRow = app.descendants(matching: .any)
+            .matching(
+                NSPredicate(
+                    format: "identifier == 'host-detail-route-studio.demo.invalid'"))
+            .firstMatch
+        let lanRow = app.descendants(matching: .any)
+            .matching(
+                NSPredicate(
+                    format: "identifier == 'host-detail-route-studio.lan.demo.invalid'"))
+            .firstMatch
+        waitToExist(primaryRow)
+        waitToExist(lanRow)
+
+        // Tap the Local network route: it becomes the active route.
+        lanRow.tap()
+        let activePredicate = NSPredicate(format: "label CONTAINS 'active route'")
+        expectation(for: activePredicate, evaluatedWith: lanRow)
+        waitForExpectations(timeout: UITestTimeouts.standard)
+        XCTAssertFalse(
+            primaryRow.label.contains("active route"),
+            "exactly one row may be active: \(primaryRow.label)")
+        XCTAssertTrue(
+            primaryRow.label.contains("currently in use"),
+            "the live route keeps its honest in-use mark: \(primaryRow.label)")
+        captureScreenshot(app, "detail-route-switched", lifetime: .keepAlways)
+
+        // Switch back: the active mark returns to the primary row (a
+        // switch is reversible; exactly one row active at a time).
+        primaryRow.tap()
+        expectation(for: activePredicate, evaluatedWith: primaryRow)
+        waitForExpectations(timeout: UITestTimeouts.standard)
+        XCTAssertFalse(
+            lanRow.label.contains("active route"),
+            "switching away must clear the previous active mark: \(lanRow.label)")
+        captureScreenshot(app, "detail-route-switched-back", lifetime: .keepAlways)
+    }
+
+    /// The active-route selection PERSISTS: relaunch the app, open the
+    /// same Host detail, and the route tapped before relaunch still
+    /// reads as the active one (per-Host preference on disk).
+    func testDetailActiveRoutePersistsAcrossRelaunch() {
+        app = UITestApp.launchDemo(.hostList)
+        let heading = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH 'Open details for Studio Mac'")
+        ).firstMatch
+        waitToExist(heading)
+        heading.tap()
+        let lanRow = app.descendants(matching: .any)
+            .matching(
+                NSPredicate(
+                    format: "identifier == 'host-detail-route-studio.lan.demo.invalid'"))
+            .firstMatch
+        waitToExist(lanRow)
+        lanRow.tap()
+        let activePredicate = NSPredicate(format: "label CONTAINS 'active route'")
+        expectation(for: activePredicate, evaluatedWith: lanRow)
+        waitForExpectations(timeout: UITestTimeouts.standard)
+
+        // Relaunch: the same Host detail must show the same active route.
+        // (Re-resolve every element against the NEW app instance — the
+        // old XCUIApplication object's queries die with the process.)
+        app.terminate()
+        app = UITestApp.launchDemo(.hostList)
+        let relaunchedHeading = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH 'Open details for Studio Mac'")
+        ).firstMatch
+        waitToExist(relaunchedHeading)
+        relaunchedHeading.tap()
+        let relaunchedLanRow = app.descendants(matching: .any)
+            .matching(
+                NSPredicate(
+                    format: "identifier == 'host-detail-route-studio.lan.demo.invalid'"))
+            .firstMatch
+        XCTAssertTrue(
+            relaunchedLanRow.waitForExistence(timeout: UITestTimeouts.launch),
+            "relaunched detail must list the Host's routes")
+        XCTAssertTrue(
+            relaunchedLanRow.label.contains("active route"),
+            "the route tapped before relaunch must still be the active one: "
+                + relaunchedLanRow.label)
+        captureScreenshot(app, "detail-route-persisted-relaunch", lifetime: .keepAlways)
     }
 
     /// The route CHEVRON opens the inspector for THAT route (the row's
@@ -546,5 +643,138 @@ final class HostsCardProofTests: XCTestCase {
             sshRow.label, verdictLabel,
             "check verdict lost across re-renders")
         captureScreenshot(app, "route-check-verdict-stuck", lifetime: .keepAlways)
+    }
+
+    // MARK: Unified route state (single source of truth)
+
+    /// The list and the detail read the SAME active-route source: tap a
+    /// route on the LIST, and the open DETAIL page (pushed from that
+    /// list) shows exactly that route as active — the marks can never
+    /// disagree. Runs against the real demo Console (live statuses,
+    /// shared active-route store, route tap = persist + reconnect).
+    func testListAndDetailAgreeOnTheActiveRoute() {
+        app = UITestApp.launchDemo(.hostListConsole)
+
+        // The Field Laptop card (never connects in the demo): its two
+        // routes are listed. Tap the VPN tunnel route.
+        let vpnRow = app.buttons["host-route-field.vpn.demo.invalid"]
+        waitToExist(vpnRow)
+        vpnRow.tap()
+
+        // Open the detail: the VPN route must read as the ACTIVE route
+        // there — same source, same answer.
+        let heading = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH 'Open details for Field Laptop'")
+        ).firstMatch
+        waitToExist(heading)
+        heading.tap()
+        let detailVpnRow = app.descendants(matching: .any)
+            .matching(
+                NSPredicate(
+                    format: "identifier == 'host-detail-route-field.vpn.demo.invalid'"))
+            .firstMatch
+        waitToExist(detailVpnRow)
+        XCTAssertTrue(
+            detailVpnRow.label.contains("active route"),
+            "the detail must show the route the LIST tapped as active: "
+                + detailVpnRow.label)
+        captureScreenshot(app, "list-detail-active-agree", lifetime: .keepAlways)
+
+        // Review round 2: a route tap on the DETAIL — opened from this
+        // list, the root-style entry point — must run the SAME
+        // persist + redial action the list's rows run, never a
+        // preference-only no-op. Tap the Home LAN row on the detail;
+        // the Console redials through it (~2.5 s fixture window).
+        let detailLanRow = app.descendants(matching: .any)
+            .matching(
+                NSPredicate(
+                    format: "identifier == 'host-detail-route-field.lan.demo.invalid'"))
+            .firstMatch
+        waitToExist(detailLanRow)
+        detailLanRow.tap()
+
+        // Back on the list: the DETAIL's tap launched the dial — the
+        // Home LAN row (now active) shows the connecting spinner, the
+        // same in-flight signal a list-card tap produces.
+        let back = app.navigationBars.buttons.firstMatch
+        waitToExist(back)
+        back.tap()
+        let lanSpinner = app.descendants(matching: .any)
+            .matching(
+                NSPredicate(
+                    format: "identifier == 'host-route-connecting-field.lan.demo.invalid'"))
+            .firstMatch
+        XCTAssertTrue(
+            lanSpinner.waitForExistence(timeout: UITestTimeouts.standard),
+            "the DETAIL's route tap must drive the Console redial — the "
+                + "tapped row's connecting spinner never appeared on the list")
+        captureScreenshot(app, "detail-tap-redial-connecting", lifetime: .keepAlways)
+
+        // The dial fails honestly (no demo profile): the spinner yields
+        // to the failed dot — the detail tap's connect lifecycle is
+        // identical to a list tap's.
+        let spinnerGone = NSPredicate(format: "exists == 0")
+        expectation(for: spinnerGone, evaluatedWith: lanSpinner)
+        waitForExpectations(timeout: UITestTimeouts.standard)
+        let fieldHeading = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH 'Open details for Field Laptop'")
+        ).firstMatch
+        waitToExist(fieldHeading)
+        let unavailable = NSPredicate(format: "label CONTAINS 'Unavailable'")
+        expectation(for: unavailable, evaluatedWith: fieldHeading)
+        waitForExpectations(timeout: UITestTimeouts.standard)
+        captureScreenshot(app, "detail-tap-redial-failed", lifetime: .keepAlways)
+    }
+
+    /// The route-switch connect lifecycle, driven through the real
+    /// Console: tapping a route that cannot answer shows the connecting
+    /// animation first (the active row's spinner), then the honest
+    /// FAILED dot — the status tracks the switch, never the stale prior
+    /// state. The Field Laptop has no demo profile, so its dial fails.
+    func testRouteSwitchFailureShowsConnectingThenFailedDot() {
+        app = UITestApp.launchDemo(.hostListConsole)
+
+        // The Field Laptop starts failed (never connected, unreachable).
+        // Tap its VPN tunnel route: the switch persists AND reconnects.
+        let vpnRow = app.buttons["host-route-field.vpn.demo.invalid"]
+        waitToExist(vpnRow)
+
+        // The tap drives the Console lifecycle: the active row shows the
+        // connecting spinner while the dial runs (the fixture bounds the
+        // dial window at ~2.5 s), then the dial fails and the status dot
+        // honestly reads Unavailable (failed) — never the stale prior
+        // state.
+        vpnRow.tap()
+
+        // CONNECTING: the tapped (now active) row replaces its dot with
+        // the connecting spinner while the dial runs — the route-switch
+        // connect is visibly in flight (the fixture bounds the dial
+        // window at ~2.5 s).
+        let connectingSpinner = app.descendants(matching: .any)
+            .matching(
+                NSPredicate(
+                    format: "identifier == 'host-route-connecting-field.vpn.demo.invalid'"))
+            .firstMatch
+        XCTAssertTrue(
+            connectingSpinner.waitForExistence(timeout: 3),
+            "a route-switch tap must show the connecting spinner on the tapped row")
+        captureScreenshot(app, "route-switch-connecting", lifetime: .keepAlways)
+
+
+        // FAILED: the dial could not answer; the card's dot settles on
+        // the honest failure (Unavailable), and the active mark stays on
+        // the tapped route — the switch is recorded, the next connect
+        // (Reconnect) tries the VPN route first.
+        let heading = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH 'Open details for Field Laptop'")
+        ).firstMatch
+        waitToExist(heading)
+        let notConnecting = NSPredicate(format: "label CONTAINS 'Unavailable'")
+        expectation(for: notConnecting, evaluatedWith: heading)
+        waitForExpectations(timeout: UITestTimeouts.standard)
+        XCTAssertFalse(
+            heading.label.contains("Currently in use"),
+            "a failed route switch must never read as connected: \(heading.label)")
+        captureScreenshot(app, "route-switch-failed", lifetime: .keepAlways)
     }
 }

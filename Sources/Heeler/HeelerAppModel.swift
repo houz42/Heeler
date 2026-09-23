@@ -24,6 +24,11 @@ final class HeelerAppModel {
     let pushRegistration: PushRegistrationStore
     let sceneDirectory: AgentSceneDirectory
     let hostStore: HostStore
+    /// The ONE observable active-route source for every surface: the
+    /// Hosts page, the Hosts sheet, and the Host detail all read this
+    /// instance, so a route switch anywhere re-renders the marks
+    /// everywhere (the same `PreferredAddressStore` the dial consumes).
+    let activeRouteStore = HostActiveRouteStore()
     let console: ConsoleStore
     let notificationPreferences: NotificationPreferencesStore
     let terminalThemes: TerminalThemeSettings

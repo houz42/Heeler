@@ -46,6 +46,13 @@ struct ChatImageRef: Sendable, Equatable, Identifiable {
     let ref: String
     let mimeType: String
     var byteLength: Int?
+    /// Inline bytes (re-review round 4, finding 2): a locally-sent
+    /// image whose REAL BYTES the client already holds — an inline
+    /// send (base64 `data`, no img: blob ref). When set, renderers
+    /// use these bytes directly and NEVER go through the fetch seam
+    /// (a fabricated ref cannot be fetched). nil = the wire's blob
+    /// ref path (fetch resolves it).
+    var inlineData: Data?
 
     var id: String { ref }
 }
@@ -55,6 +62,10 @@ enum ChatBlock: Sendable, Equatable {
     case thinking(String)
     case toolCall(ToolCall)
     case image(ChatImageRef)
+    /// A system/structural notice the wire carries with its severity
+    /// level ("info" | "warning" | "error"). Never dropped: the view
+    /// renders every level, styling the quiet/system wash off `level`.
+    case notice(text: String, level: String)
 }
 
 /// A `role:"toolResult"` record, flattened for display: the id it pairs to,

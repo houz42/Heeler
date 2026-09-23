@@ -33,6 +33,12 @@ enum AgentChatEventEffect: Sendable, Equatable {
     case resync
     /// interaction lifecycle (only when the capability is on).
     case interaction(InteractionSignal)
+    /// send.confirmed (delivery contract): the adapter durably bound a
+    /// committed user record to this send's requestKey — the
+    /// AUTHORITATIVE echo confirmation. Until it arrives, an echo is
+    /// never declared sent (text/baseline correlation can only ever
+    /// mark it unconfirmed).
+    case sendConfirmed(requestKey: String, recordId: String)
     /// Buffered until a watermark or out-of-scope: no action now.
     case ignored
 }
@@ -84,6 +90,16 @@ enum AgentChatEventReconcile: Sendable {
                     text: frame["text"]?.stringValue ?? ""))
         case "message.finished":
             return .stream(.finished(streamId: frame["streamId"]?.stringValue ?? ""))
+        case "send.confirmed":
+            // The delivery contract's authoritative correlation: the
+            // adapter popped this send's requestKey from its FIFO and
+            // durably bound it to the committed record id. Both fields
+            // are required — a malformed frame is consumed for
+            // ordering, never guessed from.
+            guard let requestKey = frame["requestKey"]?.stringValue,
+                let recordId = frame["recordId"]?.stringValue
+            else { return .ignored }
+            return .sendConfirmed(requestKey: requestKey, recordId: recordId)
         case "history.changed":
             return .refetchRecent
         case "resync_required", "session.changed":

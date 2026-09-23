@@ -438,6 +438,96 @@ struct ChatTableStylingTests {
         // The stripe must be weaker than the header.
         #expect(shades[1] > shades[0] + 0.005)
     }
+
+    /// The decoration must cover EVERY table row: the v2 wide-table
+    /// adaptor's hidden measuring copy once stayed mounted, and its
+    /// cell anchor preferences (last-writer-wins merge) pulled the
+    /// visible table's border/stripe bounds short — the last body row
+    /// rendered outside the decorated box. Pin: the sample column's
+    /// colored bands (header + stripes) extend CONTIGUOUSLY over every
+    /// tinted band, and after the last tinted band the rest of the
+    /// column is pure page white — no table content below the
+    /// decoration's extent.
+    @Test func decorationCoversEveryTableRow() throws {
+        let view = ChatMarkdownView(markdown: table)
+            .frame(width: 380)
+            .background(Color.white)
+        let controller = UIHostingController(rootView: view)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        window.overrideUserInterfaceStyle = .light
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        // Two runloop turns: the measuring pass reports after the
+        // first layout; the adaptor re-renders on the second.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        controller.view.layoutIfNeeded()
+
+        let raster = UIGraphicsImageRenderer(
+            size: controller.view.bounds.size
+        ).image { _ in
+            controller.view.drawHierarchy(
+                in: controller.view.bounds, afterScreenUpdates: true)
+        }
+        let bands = try #require(
+            raster.rowBackgroundBands(), "rasterization diagnostics: \(raster.diagnostics())")
+        let tinted = bands.filter { $0.shade < 0.99 }
+        #expect(tinted.count >= 2, "header + stripe bands, saw \(bands.map(\.shade))")
+        // No TINTED band may appear after a plain gap below the
+        // decoration's extent: the bands sequence must be
+        // [plain-page?, header, stripe/plain...] with nothing colored
+        // after the last tinted band's run.
+        if let lastTinted = bands.lastIndex(where: { $0.shade < 0.99 }) {
+            let after = bands[(lastTinted + 1)...]
+            #expect(
+                after.allSatisfy { $0.shade >= 0.99 },
+                "table content after the decoration's last band — a row rendered outside the decorated table: \(bands)")
+        }
+    }
+
+    /// The on-sim context: the table renders inside the chat's
+    /// ScrollView + LazyVStack row. The decoration must cover every
+    /// row in THAT context too (captures showed the last body row
+    /// outside the decorated box — this test pins the real layout
+    /// pipeline, not the free window).
+    @Test func decorationCoversEveryTableRowInLazyScrollContext() throws {
+        let view = ScrollView {
+            LazyVStack(alignment: .leading, spacing: 12) {
+                ChatMarkdownView(markdown: table)
+                    .padding(.horizontal, 12)
+            }
+            .padding(.vertical, 10)
+        }
+        .frame(width: 390, height: 700)
+        .background(Color.white)
+        let controller = UIHostingController(rootView: view)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 700))
+        window.overrideUserInterfaceStyle = .light
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        controller.view.layoutIfNeeded()
+
+        let raster = UIGraphicsImageRenderer(
+            size: controller.view.bounds.size
+        ).image { _ in
+            controller.view.drawHierarchy(
+                in: controller.view.bounds, afterScreenUpdates: true)
+        }
+        let bands = try #require(
+            raster.rowBackgroundBands(), "rasterization diagnostics: \(raster.diagnostics())")
+        let tinted = bands.filter { $0.shade < 0.99 }
+        #expect(
+            tinted.count >= 2,
+            "header + stripe bands in the lazy-scroll context, saw \(bands.map(\.shade))")
+        if let lastTinted = bands.lastIndex(where: { $0.shade < 0.99 }) {
+            let after = bands[(lastTinted + 1)...]
+            #expect(
+                after.allSatisfy { $0.shade >= 0.99 },
+                "content below the decoration's extent in the lazy-scroll context: \(bands)")
+        }
+    }
 }
 
 /// Horizontal shade bands discovered in a rasterized table image: every
@@ -573,32 +663,329 @@ private extension UIImage {
     }
 }
 
-// MARK: - Hard line breaks (the multiline-collapse device finding)
+// MARK: - Multiline (the v2 contract: one paragraph, line breaks inside)
 
 struct ChatMarkdownHardBreakTests {
-    @Test func proseLinesBecomeSeparateParagraphs() {
-        // A single newline must render as a paragraph boundary, not a
-        // space (cmark's soft-break rule collapsed multi-line agent
-        // messages on the device).
-        let out = ChatMarkdownText.preservingHardBreaks("first line\nsecond line")
-        #expect(out == "first line\n\nsecond line")
+    /// A single newline is a line break WITHIN one paragraph — never a
+    /// paragraph split (cmark's soft break). The v1 pre-pass inserted a
+    /// blank line between every prose line; that shattered GFM tables
+    /// and fragmented multi-line blockquotes, so the render now keeps
+    /// the source structure and turns soft breaks into line breaks at
+    /// the view (markdownSoftBreakMode(.lineBreak)). Structure proof:
+    /// one <p>, the newline inside it.
+    @Test func singleNewlineIsOneParagraph() {
+        let html = MarkdownContent("first line\nsecond line").renderHTML()
+        #expect(html.components(separatedBy: "<p>").count - 1 == 1)
+        // The line break survives as a newline INSIDE the paragraph.
+        #expect(html.contains("first line\nsecond line"))
     }
 
-    @Test func alreadyBlankLinesStaySingle() {
-        let out = ChatMarkdownText.preservingHardBreaks("para one\n\npara two")
-        #expect(out == "para one\n\npara two")
+    /// A blank line is a real paragraph boundary (two <p> blocks).
+    @Test func blankLineStillSplitsParagraphs() {
+        let html = MarkdownContent("para one\n\npara two").renderHTML()
+        #expect(html.components(separatedBy: "<p>").count - 1 == 2)
     }
 
+    /// A GFM table stays ONE table block — rows are not paragraphs.
+    /// The v1 pre-pass turned every row into a separate <p>, which the
+    /// chat table view then framed as stripes of unrelated paragraphs;
+    /// with the pre-pass gone, MarkdownUI parses the whole table.
+    @Test func gfmTableParsesAsOneTable() {
+        let source = """
+            | Phase | Status |
+            | --- | --- |
+            | Build | passing |
+            | Tests | failing |
+            """
+        let html = MarkdownContent(source).renderHTML()
+        #expect(html.contains("<table>"))
+        #expect(html.contains("<thead>"))
+        // cmark's table renderer keeps header cells inside <thead> without
+        // emitting <th> tags; the contract is the ONE-table structure with
+        // header separated — not a specific tag.
+        #expect(html.components(separatedBy: "<p>").count - 1 == 0)
+    }
+
+    /// A multi-line blockquote is ONE blockquote with its line breaks
+    /// inside — the accent bar + wash render once per action, never
+    /// one bar per line (the v1 "quote renders duplicated" finding).
+    @Test func multilineBlockquoteIsOneQuote() {
+        let source = "> quoted line one\n> quoted line two"
+        let content = MarkdownContent(source)
+        let html = content.renderHTML()
+        #expect(html.components(separatedBy: "<blockquote>").count - 1 == 1)
+        // The lines stay in ONE paragraph inside the quote.
+        let quoteHTML = content.childContent?.renderHTML() ?? ""
+        #expect(quoteHTML.components(separatedBy: "<p>").count - 1 == 1)
+        #expect(quoteHTML.contains("quoted line one\nquoted line two"))
+    }
+
+    /// Fenced code keeps its literal line structure (a code block is
+    /// data, not prose — soft-break mode never reaches inside it).
     @Test func fencedCodeStaysVerbatim() {
         let source = "before\n```swift\nlet a = 1\nlet b = 2\n```\nafter"
-        let out = ChatMarkdownText.preservingHardBreaks(source)
-        // Code lines stay verbatim; cmark's own block rules close the
-        // code at the fence, so no separator is needed after it.
-        #expect(out.contains("```swift\nlet a = 1\nlet b = 2\n```"))
-        // cmark's block rules separate the paragraph from the code
-        // block without any inserted blank — the pre-pass leaves fence
-        // boundaries to the parser.
-        #expect(out.hasPrefix("before\n```"))
-        #expect(out.hasSuffix("```\nafter"))
+        let html = MarkdownContent(source).renderHTML()
+        #expect(html.contains("<pre><code"))
+        #expect(html.contains("let a = 1\nlet b = 2"))
+        #expect(html.contains("before"))
+        #expect(html.contains("after"))
+    }
+}
+
+// MARK: - IRC section fencing (v2; the review's data-loss regressions)
+
+struct ChatMarkdownIRCFencingTests {
+    /// The review's data-loss repro: a paragraph whose SINGLE line
+    /// matches `Nick: ...` is ordinary prose — it must pass through
+    /// UNCHANGED (the first cut's flush dropped it to '').
+    @Test func loneNickLinePassesThroughUnchanged() {
+        let input = "Note: keep this"
+        #expect(ChatMarkdownText.fenceIRCSections(input) == input)
+    }
+
+    /// A qualifying multi-line log still fences — the pass-through
+    /// guard must not over-correct into never fencing.
+    @Test func qualifyingLogFences() {
+        let input = "[09:41] <jhou> the build broke\n[09:42] <sam> seeing it"
+        let out = ChatMarkdownText.fenceIRCSections(input)
+        #expect(out.hasPrefix("```irc\n"))
+        #expect(out.hasSuffix("\n```"))
+        #expect(out.contains("[09:41] <jhou> the build broke"))
+    }
+
+    /// A MIXED paragraph (some matching, some prose lines) is NOT
+    /// fenceable — the fence must wrap the WHOLE paragraph or nothing;
+    /// a matching subsequence inside prose never fences alone.
+    @Test func mixedParagraphPassesThroughWhole() {
+        let input = "Intro prose line\n[09:41] <jhou> log line\nMore prose here"
+        #expect(ChatMarkdownText.fenceIRCSections(input) == input)
+    }
+
+    /// The review's tilde repro: content inside a TILDE fence is data —
+    /// a `Note: preserve literally` line inside ~~~ fences must stay
+    /// verbatim, never re-fenced and never dropped.
+    @Test func tildeFenceContentStaysVerbatim() {
+        let input = "~~~text\nNote: preserve literally\n~~~"
+        #expect(ChatMarkdownText.fenceIRCSections(input) == input)
+    }
+
+    /// Blank-line separators between paragraphs are preserved — the
+    /// paragraph rewriter must not merge or drop them.
+    @Test func blankSeparatorsSurvive() {
+        // A single-line log paragraph stays PROSE (>= 2-line gate):
+        // the whole input passes through unchanged, separators intact.
+        let input = "first para\n\n[09:41] <jhou> a log line\n\nlast para"
+        #expect(ChatMarkdownText.fenceIRCSections(input) == input)
+        // A TWO-line log paragraph between the same separators fences,
+        // and the separators + prose paragraphs survive around it.
+        let input2 = "first para\n\n[09:41] <jhou> a log line\n[09:42] <sam> another\n\nlast para"
+        let out = ChatMarkdownText.fenceIRCSections(input2)
+        #expect(out.hasPrefix("first para\n\n```irc\n"))
+        #expect(out.hasSuffix("\n```\n\nlast para"))
+    }
+
+    /// A fence NEVER wraps a partial run: the qualifying paragraph is
+    /// classified before any rewrite, so an unfenced emit is the
+    /// ORIGINAL text, not a truncated one.
+    @Test func noPartialFencing() {
+        let input = "The build broke on main today:\nsee the CI log for why"
+        #expect(ChatMarkdownText.fenceIRCSections(input) == input)
+    }
+}
+
+// MARK: - ChatKeyboardInset (v2 item 5; the review's geometry regressions)
+
+struct ChatKeyboardInsetTests {
+    /// The REAL geometry calculation (bottomEdgeCoverage), driven with
+    /// window-geometry inputs — frame + bounds + safe area — exactly
+    /// what the production notification path hands it. No injected
+    /// result: the docked/floating/off-window decisions run for real.
+    @Test func dockedKeyboardMeasuresCoveredHeight() {
+        // Docked at a 390x844 window: reaches the bottom edge.
+        let windowBounds = CGRect(x: 0, y: 0, width: 390, height: 844)
+        let frame = CGRect(x: 0, y: 444, width: 390, height: 400)
+        let withSafeArea: CGFloat = ChatKeyboardInset.bottomEdgeCoverage(
+            frameInWindow: frame, windowBounds: windowBounds,
+            bottomSafeArea: 34)
+        #expect(withSafeArea == 366)
+        // Safe area zero (test windows): full covered height.
+        let noSafeArea: CGFloat = ChatKeyboardInset.bottomEdgeCoverage(
+            frameInWindow: frame, windowBounds: windowBounds,
+            bottomSafeArea: 0)
+        #expect(noSafeArea == 400)
+    }
+
+    /// The review's floating-keyboard case: a frame hovering mid-window
+    /// NEVER touches the bottom edge and measures ZERO however large.
+    @Test func floatingKeyboardMeasuresZero() {
+        let windowBounds = CGRect(x: 0, y: 0, width: 1024, height: 1366)
+        // Floating on iPad: hovers mid-window, maxY far above the edge.
+        let floating = CGRect(x: 100, y: 400, width: 320, height: 280)
+        #expect(ChatKeyboardInset.bottomEdgeCoverage(
+            frameInWindow: floating, windowBounds: windowBounds,
+            bottomSafeArea: 20) == 0)
+        // Even a HUGE floating rect (bigger than the docked inset would
+        // be) measures zero — its maxY still misses the bottom edge.
+        let hugeFloating = CGRect(x: 40, y: 300, width: 700, height: 500)
+        #expect(ChatKeyboardInset.bottomEdgeCoverage(
+            frameInWindow: hugeFloating, windowBounds: windowBounds,
+            bottomSafeArea: 20) == 0)
+    }
+
+    /// Docked→floating→docked transitions over the real calculation:
+    /// the floating update measures zero (the state machine CLEARS on
+    /// it — pinned below), and the re-docked frame measures again.
+    @Test func dockedFloatingDockedTransitions() {
+        let windowBounds = CGRect(x: 0, y: 0, width: 390, height: 844)
+        let docked = CGRect(x: 0, y: 444, width: 390, height: 400)
+        let floating = CGRect(x: 40, y: 200, width: 320, height: 200)
+        let redocked = CGRect(x: 0, y: 544, width: 390, height: 300)
+        // Docked: covered height.
+        #expect(ChatKeyboardInset.bottomEdgeCoverage(
+            frameInWindow: docked, windowBounds: windowBounds,
+            bottomSafeArea: 0) == 400)
+        // Floating: zero — the state machine must CLEAR, not discard.
+        #expect(ChatKeyboardInset.bottomEdgeCoverage(
+            frameInWindow: floating, windowBounds: windowBounds,
+            bottomSafeArea: 0) == 0)
+        // Re-docked (shorter): measures its own height again.
+        #expect(ChatKeyboardInset.bottomEdgeCoverage(
+            frameInWindow: redocked, windowBounds: windowBounds,
+            bottomSafeArea: 0) == 300)
+    }
+
+    /// Off-window frames (the keyboard slid off the bottom, or the
+    /// notification's end frame lies below the screen — the iPad
+    /// off-screen frame family) measure zero.
+    @Test func offWindowFramesMeasureZero() {
+        let windowBounds = CGRect(x: 0, y: 0, width: 390, height: 844)
+        // Wholly below the window: intersection empty.
+        let below = CGRect(x: 0, y: 900, width: 390, height: 300)
+        #expect(ChatKeyboardInset.bottomEdgeCoverage(
+            frameInWindow: below, windowBounds: windowBounds,
+            bottomSafeArea: 0) == 0)
+        // 1pt tolerance: a frame 2pt short of the edge is floating.
+        let nearly = CGRect(x: 0, y: 44, width: 390, height: 798)
+        #expect(ChatKeyboardInset.bottomEdgeCoverage(
+            frameInWindow: nearly, windowBounds: windowBounds,
+            bottomSafeArea: 0) == 0)
+    }
+
+    /// The notification state machine (coalescing + clear-on-zero):
+    /// driven through real notifications with the measure seam, since
+    /// a unit-test host window has no UIWindowScene to satisfy the
+    /// production window-ownership gate (the geometry itself is
+    /// covered by the bottomEdgeCoverage tests above).
+    @MainActor
+    private func makeInset(
+        measure: @escaping @MainActor (CGRect) -> CGFloat?
+    ) -> (ChatKeyboardInset, NotificationCenter) {
+        let center = NotificationCenter()
+        let inset = ChatKeyboardInset(
+            notificationCenter: center, measure: measure)
+        return (inset, center)
+    }
+
+    @MainActor
+    private func post(
+        _ center: NotificationCenter, _ name: Notification.Name,
+        frame: CGRect
+    ) {
+        center.post(
+            name: name, object: nil,
+            userInfo: [UIResponder.keyboardFrameEndUserInfoKey: frame])
+    }
+
+    @MainActor
+    private func settle(
+        _ inset: ChatKeyboardInset, to height: CGFloat
+    ) async -> Bool {
+        for _ in 0..<50 {
+            if inset.height == height { return true }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return inset.height == height
+    }
+
+    @Test func zeroMeasurementClearsAPreviouslySetInset() async throws {
+        let (inset, center) = await MainActor.run {
+            makeInset { frame in
+                // Docked geometry (real shape): the window's bottom 400pt.
+                if frame.maxY > 800 { return 400 }
+                // Floating geometry: zero.
+                return 0
+            }
+        }
+        await MainActor.run {
+            post(center, UIResponder.keyboardWillShowNotification, frame: CGRect(
+                x: 0, y: 444, width: 390, height: 400))
+        }
+        let docked = await settle(inset, to: 400)
+        #expect(docked, "docked presentation never landed")
+        await MainActor.run {
+            post(center, UIResponder.keyboardWillChangeFrameNotification, frame: CGRect(
+                x: 40, y: 200, width: 320, height: 200))
+        }
+        let cleared = await settle(inset, to: 0)
+        let finalHeight = await MainActor.run { inset.height }
+        #expect(cleared, "floating transition never cleared the inset; got \(finalHeight)")
+    }
+
+    @Test func dismissalClearsHeight() async throws {
+        let (inset, center) = await MainActor.run {
+            makeInset { frame in frame.maxY > 800 ? 400 : nil }
+        }
+        await MainActor.run {
+            post(center, UIResponder.keyboardWillShowNotification, frame: CGRect(
+                x: 0, y: 444, width: 390, height: 400))
+        }
+        _ = await settle(inset, to: 400)
+        await MainActor.run {
+            post(center, UIResponder.keyboardWillHideNotification, frame: .zero)
+        }
+        let cleared = await settle(inset, to: 0)
+        #expect(cleared, "dismissal never cleared the inset")
+    }
+
+    /// The observer leak teardown: the inset's block registrations are
+    /// REMOVED at deinit — no registration outlives the inset.
+    @Test func observersAreRemovedAtDeinit() async throws {
+        try await MainActor.run {
+            let center = NotificationCenter()
+            do {
+                _ = ChatKeyboardInset(notificationCenter: center)
+            }
+            var delivered = 0
+            let probe = center.addObserver(
+                forName: UIResponder.keyboardWillShowNotification,
+                object: nil, queue: .main
+            ) { _ in delivered += 1 }
+            defer { center.removeObserver(probe) }
+            center.post(name: UIResponder.keyboardWillShowNotification, object: nil)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+            #expect(delivered == 1)
+        }
+    }
+
+    /// Item 18 + review: two hosts with the SAME pane id keep
+    /// independent drafts — the draft identity is HOST-QUALIFIED.
+    @Test func draftKeysAreHostQualified() {
+        let suite = "test.drafts.\(UUID().uuidString)"
+        let store = ChatDraftPersistenceStore(
+            defaults: UserDefaults(suiteName: suite)!)
+        let hostA = UUID()
+        let hostB = UUID()
+        let keyA = "\(hostA.uuidString)#w1:p1"
+        let keyB = "\(hostB.uuidString)#w1:p1"
+        store.save(
+            ChatPaneDraft(text: "host A draft", caretLocation: 4, items: []),
+            paneID: keyA)
+        #expect(store.draft(paneID: keyA)?.text == "host A draft")
+        #expect(store.draft(paneID: keyB) == nil)
+        store.save(
+            ChatPaneDraft(text: "host B draft", caretLocation: 0, items: []),
+            paneID: keyB)
+        #expect(store.draft(paneID: keyB)?.text == "host B draft")
+        #expect(store.draft(paneID: keyA)?.text == "host A draft")
     }
 }

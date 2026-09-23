@@ -3,177 +3,26 @@ import UIKit
 
 // SPDX-License-Identifier: Apache-2.0
 //
-// The chat input's prefix-key bar: one accessory row above the system
-// keyboard with `/ # @ !` keys, replacing the QuickType prediction bar.
-// The keys exist because every composer mode starts with one of these
-// characters, and iOS offers no way to tap them from the default keyboard
-// without a secondary-symbol page hunt. Autocorrection and spell-check are
-// off on the input's text view (below), which is what hides the prediction
-// row — so the prefix bar is the one bar above the keys, in the user's words
-// "instead of the recommended words".
+// The chat input's UIKit text view + its representable (v2: the
+// prefix-key accessory bar — the `/ # @ !` quick-insert row above the
+// keyboard — is REMOVED per user decision; the composer is
+// Messages-clean. Command modes still work from TYPED text: the
+// ComposerRouterStore classifies a leading / # @ ! from the draft as
+// before. Autocorrection and spell-check stay off on the input's text
+// view, so no prediction row competes with the keys either.
 
-/// The four composer-mode prefixes the bar offers. The router classifies
-/// by these characters; the bar is their one-tap entry.
-enum ChatPrefixKey: CaseIterable, Sendable {
-    case slash
-    case hash
-    case mention
-    case bash
-
-    /// The character the key inserts at the draft cursor.
-    var character: Character {
-        switch self {
-        case .slash: "/"
-        case .hash: "#"
-        case .mention: "@"
-        case .bash: "!"
-        }
-    }
-
-    /// What the key opens, for accessibility.
-    var accessibilityLabel: String {
-        switch self {
-        case .slash: "Slash commands"
-        case .hash: "Tag filter"
-        case .mention: "Mention an agent"
-        case .bash: "Run a shell command"
-        }
-    }
-}
-
-/// The pure insert: one prefix character into a draft at the cursor.
-/// `selection` is a UTF-16 offset (Swift's String index distance matches
-/// UITextView's selectedRange on the same string). The cursor lands AFTER
-/// the inserted character so the suggestion menu — recomputed by the
-/// caller from the returned draft — targets the new token.
-func chatDraftByInserting(
-    _ character: Character, into draft: String, selection: Int
-) -> (draft: String, selection: Int) {
-    // UITextView clamps selectedRange to the text length; mirror that so a
-    // stale selection (e.g. after programmatic draft replacement) cannot
-    // crash or silently re-anchor.
-    let clamped = min(max(selection, 0), draft.utf16.count)
-    let inserted = String(character)
-    guard let index = draft.utf16.index(
-        draft.startIndex, offsetBy: clamped, limitedBy: draft.endIndex)
-    else { return (draft + inserted, draft.utf16.count + inserted.utf16.count) }
-    var newDraft = draft
-    newDraft.insert(contentsOf: inserted, at: index)
-    return (newDraft, clamped + inserted.utf16.count)
-}
-
-/// The prefix-key bar as a plain UIKit view, not hosted SwiftUI: a
-/// UIHostingController's view docked as an inputAccessoryView reports its
-/// intrinsic height only after the keyboard has already laid out, which
-/// clipped the bar behind the keys' top edge on device. A stack of four
-/// fill-equally buttons with one fixed height constraint has no sizing
-/// to get wrong. The frame's own chevron stays the dismiss control, so
-/// the bar carries no dismiss affordance of its own.
-@MainActor
-final class ChatPrefixKeyBarView: UIView {
-    var onInsert: ((ChatPrefixKey) -> Void)?
-
-    private static let barHeight: CGFloat = 44
-
-    /// The keyboard's accessory hosting sizes the bar by frame/intrinsic
-    /// size, not by constraints: the bar is created with frame .zero and
-    /// autoresizing .flexibleWidth, so without this it docks at zero
-    /// height — invisible behind the keys even though its constraints
-    /// would measure 44pt. (A `systemLayoutSizeFitting` test passes
-    /// either way; the keyboard does not call it.)
-    override var intrinsicContentSize: CGSize {
-        CGSize(width: UIView.noIntrinsicMetric, height: Self.barHeight)
-    }
-
-    /// The keyboard's accessory hosting frames the bar, it does not run
-    /// a constraint-solving size pass: created with frame .zero and
-    /// autoresizing-based layout, a zero frame docks at zero height —
-    /// invisible behind the keys even though `systemLayoutSizeFitting`
-    /// (which DOES solve constraints) would measure 44pt. Start at the
-    /// declared height; .flexibleWidth keeps width following the screen.
-    convenience init() {
-        self.init(frame: CGRect(x: 0, y: 0, width: 0, height: Self.barHeight))
-    }
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        install()
-    }
-
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        install()
-    }
-
-    private func install() {
-        autoresizingMask = .flexibleWidth
-        backgroundColor = .clear
-
-        let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterial))
-        blur.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(blur)
-
-        let stack = UIStackView()
-        stack.axis = .horizontal
-        stack.distribution = .fillEqually
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
-
-        for key in ChatPrefixKey.allCases {
-            let button = UIButton(type: .system)
-            button.setTitle(String(key.character), for: .normal)
-            if let descriptor = UIFont.systemFont(
-                ofSize: UIFont.preferredFont(forTextStyle: .body).pointSize,
-                weight: .medium
-            ).fontDescriptor.withDesign(.monospaced) {
-                button.titleLabel?.font = UIFont(descriptor: descriptor, size: 0)
-            }
-            button.titleLabel?.adjustsFontForContentSizeCategory = true
-            button.accessibilityLabel = key.accessibilityLabel
-            button.accessibilityHint = "Inserts \(key.character) at the cursor"
-            button.addAction(
-                UIAction { [weak self] _ in self?.onInsert?(key) },
-                for: .touchUpInside)
-            stack.addArrangedSubview(button)
-        }
-
-        let hairline = UIView()
-        hairline.backgroundColor = .separator
-        hairline.translatesAutoresizingMaskIntoConstraints = false
-        hairline.contentMode = .scaleToFill
-        addSubview(hairline)
-
-        let separatorHeight = hairline.traitCollection.displayScale > 1 ? 0.5 : 1
-        NSLayoutConstraint.activate([
-            blur.leadingAnchor.constraint(equalTo: leadingAnchor),
-            blur.trailingAnchor.constraint(equalTo: trailingAnchor),
-            blur.topAnchor.constraint(equalTo: topAnchor),
-            blur.bottomAnchor.constraint(equalTo: bottomAnchor),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.bottomAnchor.constraint(equalTo: hairline.topAnchor),
-            hairline.leadingAnchor.constraint(equalTo: leadingAnchor),
-            hairline.trailingAnchor.constraint(equalTo: trailingAnchor),
-            hairline.bottomAnchor.constraint(equalTo: bottomAnchor),
-            hairline.heightAnchor.constraint(equalToConstant: separatorHeight),
-            // No self heightAnchor: with autoresizing layout that would
-            // fight the autoresizing-derived height constraint. Frame +
-            // intrinsicContentSize carry the 44pt.
-        ])
-    }
-}
-
-/// The chat input's UIKit text view: owns the prefix-key bar as its input
-/// accessory, so the bar is mounted/unmounted with the keyboard and never
-/// outlives the field. Autocorrection/spell-check stay off (set by the
-/// representable) so the accessory is the only bar above the keys.
+/// The chat input's UIKit text view (v2: the prefix-key accessory bar
+/// is GONE — no inputAccessoryView; the keyboard presents clean).
+/// Autocorrection/spell-check stay off (set by the representable) so
+/// no prediction row competes with the keys. Reports externally-applied
+/// drafts (suggestion accepts) through ``onExternalDraft`` so the
+/// owner's draft binding and the router's suggestion pass see them.
 @MainActor
 final class ChatInputUITextView: UITextView {
-    let prefixBar = ChatPrefixKeyBarView()
-    /// Reports a prefix-key insert the same way a typed edit reports, so
-    /// the owner's draft binding and the router's suggestion pass see it.
-    var onPrefixInsert: ((String, Int) -> Void)?
+    /// Reports an externally-applied draft (a suggestion accept) the
+    /// same way a typed edit reports, so the owner's draft binding and
+    /// the router's suggestion pass see it.
+    var onExternalDraft: ((String, Int) -> Void)?
     /// Return-key arbitration for the suggestion menu: consulted before
     /// a newline is inserted. Returning true consumes the key, so with
     /// the menu open Return accepts instead of inserting "\n". Nil keeps
@@ -216,13 +65,11 @@ final class ChatInputUITextView: UITextView {
 
     override init(frame: CGRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
-        installPrefixBar()
         observePasteboardChanges()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
-        installPrefixBar()
         observePasteboardChanges()
     }
 
@@ -316,30 +163,12 @@ final class ChatInputUITextView: UITextView {
         imagePasteboardAvailable = UIPasteboard.general.hasImages
     }
 
-    private func installPrefixBar() {
-        inputAccessoryView = prefixBar
-        prefixBar.onInsert = { [weak self] in
-            self?.insertPrefix($0)
-        }
-    }
-
-    /// Inserts one prefix key at the cursor and reports it as an edit.
-    /// Lives here (not the representable) so the bar works even if a
-    /// SwiftUI layout pass has not run yet, and so tests can drive the
-    /// exact path a touch takes.
-    func insertPrefix(_ key: ChatPrefixKey) {
-        let (newDraft, newSelection) = chatDraftByInserting(
-            key.character, into: text, selection: selectedRange.location)
-        text = newDraft
-        selectedRange = NSRange(location: newSelection, length: 0)
-        onPrefixInsert?(newDraft, newSelection)
-    }
-
     /// Applies an externally-computed draft with an explicit caret
     /// (suggestion accept): the text and selection land together, so the
     /// caret sits at the end of the insertion — after the trailing space
     /// "/agents " carries — and reports as an edit so the owner's
-    /// binding and the router's suggestion pass both see it.
+    /// binding and the router's suggestion pass both see it. The report
+    /// rides ``onExternalDraft`` (the bar's prefix-insert path is gone).
     ///
     /// A programmatic `.text` assignment does NOT fire the delegate's
     /// `textViewDidChange` (UIKit only calls it for user edits), so this
@@ -355,7 +184,7 @@ final class ChatInputUITextView: UITextView {
             location: min(max(caret, 0), newDraft.utf16.count), length: 0)
         isApplyingExternalCaret = false
         delegate?.textViewDidChange?(self)
-        onPrefixInsert?(newDraft, selectedRange.location)
+        onExternalDraft?(newDraft, selectedRange.location)
     }
 
     /// The chat-input text configuration, in one place: the one-bar
@@ -454,16 +283,16 @@ struct ChatInputTextView: UIViewRepresentable {
         textView.accessibilityLabel = placeholder
         context.coordinator.attachPlaceholder(
             to: textView, placeholder: placeholder)
-        textView.onPrefixInsert = onEdit
+        textView.onExternalDraft = onEdit
         return textView
     }
 
     func updateUIView(_ textView: ChatInputUITextView, context: Context) {
         context.coordinator.onEdit = onEdit
         // A new representable value carries a new onEdit closure; the
-        // text view's insert path must keep reporting through the
-        // current one.
-        textView.onPrefixInsert = onEdit
+        // text view's external-draft path must keep reporting through
+        // the current one.
+        textView.onExternalDraft = onEdit
         textView.onReturnKey = onReturnKey
         textView.onPaste = onPaste
         // The edit menu's Paste item needs the image arm whenever the
@@ -540,7 +369,11 @@ struct ChatInputTextView: UIViewRepresentable {
         textView.isScrollEnabled = wasScrollEnabled
         let lineHeight = textView.font?.lineHeight ?? 20
         if collapsed {
-            let height = max(36, min(measured.height, lineHeight))
+            // Compact resting row (v2 device note): the collapsed floor
+            // matches the row's 28pt controls (chevron/add/send), so the
+            // resting composer is one tight row — the transcript keeps
+            // maximum content area when no keyboard is up.
+            let height = max(28, min(measured.height, lineHeight))
             textView.isScrollEnabled = measured.height > lineHeight
             return CGSize(width: width, height: height)
         }
