@@ -15,6 +15,10 @@ enum OpenerAction: Equatable, Sendable {
     /// `dev.houz42.heeler.openers`; `nil`: no decision exists yet, so the
     /// presentation asks the user first.
     case browse(url: URL, allowed: Bool?)
+    /// A loopback/localhost link: presented as the honest "Local address
+    /// unavailable" notice (the address belongs to the originating
+    /// agent host, not the phone; no forwarding exists in v3).
+    case localAddress(LocalAddressNotice)
     /// A remote absolute path ending `.md` fetched silently and opened in
     /// the internal markdown viewer.
     case viewMarkdown(path: String)

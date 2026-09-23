@@ -244,6 +244,48 @@ struct OpenRouterRoutingTests {
         #expect(OpenRouter.allowsSilentFetch(byteCount: OpenRouter.maximumSilentFetchBytes))
         #expect(!OpenRouter.allowsSilentFetch(byteCount: OpenRouter.maximumSilentFetchBytes + 1))
     }
+
+    @Test func localhostURLRoutesToLocalNotice() {
+        let action = OpenRouter.route(
+            .url("http://localhost:4173/preview"), embeddedBrowseAllowed: nil)
+        guard case .localAddress(let notice) = action else {
+            Issue.record("expected localAddress, got \(String(describing: action))")
+            return
+        }
+        #expect(notice.loopbackHost == "localhost")
+        #expect(notice.url.absoluteString == "http://localhost:4173/preview")
+    }
+
+    @Test func loopbackIPRoutesToLocalNotice() {
+        for raw in [
+            "http://127.0.0.1:8080/", "https://127.1.2.3/x",
+            "http://0.0.0.0:3000", "http://app.localhost:9222",
+        ] {
+            guard case .localAddress = OpenRouter.route(
+                .url(raw), embeddedBrowseAllowed: true)
+            else {
+                Issue.record("\(raw) must classify as a local address")
+                continue
+            }
+        }
+    }
+
+    @Test func externalURLsNeverClassifyLocal() {
+        // The phone may genuinely reach LAN addresses — that is the
+        // user's network call, not ours.
+        for raw in [
+            "https://example.com/a", "http://192.168.1.4:8080",
+            "https://10.0.0.5/x", "http://172.17.0.2:3000",
+            "http://notlocalhost.example/", "http://localhost.com.evil.io/",
+        ] {
+            guard case .browse = OpenRouter.route(
+                .url(raw), embeddedBrowseAllowed: nil)
+            else {
+                Issue.record("\(raw) must NOT classify as a local address")
+                continue
+            }
+        }
+    }
 }
 
 // MARK: - Allowlist persistence
@@ -447,6 +489,55 @@ struct OpenRouterCoreTests {
         #expect(router.refusal != nil)
         #expect(router.lastAction == nil)
     }
+
+    @Test func localhostLinkPresentsNoticeWithHostName() throws {
+        let router = OpenRouterCore(
+            allowlist: ChatLinkAllowlistStore(defaults: try makeDefaults()))
+        router.hostName = "Studio Mac"
+        router.open(.url("http://localhost:4173/preview"))
+        #expect(router.localNotice?.originLabel == "Studio Mac")
+        #expect(router.localNotice?.loopbackHost == "localhost")
+        #expect(router.localNotice?.url
+            == URL(string: "http://localhost:4173/preview"))
+        // NEVER a browser path for a loopback link.
+        #expect(router.browsing == nil)
+        #expect(router.ask == nil)
+        #expect(router.defaultBrowserCandidate == nil)
+    }
+
+    @Test func localhostNoticeWithoutHostNameNeverGuesses() throws {
+        let router = OpenRouterCore(
+            allowlist: ChatLinkAllowlistStore(defaults: try makeDefaults()))
+        router.open(.url("http://127.0.0.1:9222"))
+        #expect(router.localNotice?.hostName == nil)
+        #expect(router.localNotice?.originLabel == "the agent's host")
+    }
+
+    @Test func dismissingLocalNoticeKeepsRouterClean() throws {
+        let router = OpenRouterCore(
+            allowlist: ChatLinkAllowlistStore(defaults: try makeDefaults()))
+        router.hostName = "Studio Mac"
+        router.open(.url("http://localhost:4173/preview"))
+        router.dismissLocalNotice()
+        #expect(router.localNotice == nil)
+        // A subsequent loopback tap presents again (Close preserved
+        // nothing stale).
+        router.open(.url("http://localhost:4173/preview"))
+        #expect(router.localNotice?.originLabel == "Studio Mac")
+    }
+
+    @Test func allowlistDecisionNeverOverridesLoopbackRefusal() throws {
+        // Even a domain persisted "Open Here" must not open a
+        // localhost link embedded — classification precedes policy.
+        let defaults = try makeDefaults()
+        let store = ChatLinkAllowlistStore(defaults: defaults)
+        store.setAllowsEmbeddedBrowse(true, host: "localhost")
+        let router = OpenRouterCore(allowlist: store)
+        router.open(.url("http://localhost:4173/preview"))
+        #expect(router.browsing == nil)
+        #expect(router.localNotice != nil)
+    }
+
 
     @Test func dismissingMarkdownCancelsInflightFetch() async throws {
         let fetcher = RecordingFetcher(files: ["/home/me/README.md": Data("x".utf8)])

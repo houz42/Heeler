@@ -712,7 +712,8 @@ struct AgentDetailView: View {
                 // applied to ConsoleAgent.status), never by the
                 // transport phase — connection alone never implies
                 // thinking. Nil (no fresh report) renders nothing.
-                liveWork: liveWorkState)
+                liveWork: liveWorkState,
+                hostName: console.host(for: agent.hostID)?.displayName ?? "")
                 // The honest resolved-ask note (answered elsewhere /
                 // cancelled / expired) now renders IN the transcript
                 // flow as a quiet block (brokerContent.resolvedAsks),
@@ -1006,6 +1007,7 @@ struct AgentDetailView: View {
                         Task { await buildChatIfPossible() }
                     })
             }
+        }
         // The Agent menu's New conversation entry: the same StartAgentView
         // sheet the Composer's New Agent uses, with this agent as the
         // launch origin (its Host, workspace, and working directory), so

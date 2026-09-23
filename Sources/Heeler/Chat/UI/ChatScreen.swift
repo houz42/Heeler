@@ -146,7 +146,12 @@ struct ChatScreen: View {
         /// default) keeps the live edge exactly as before — no
         /// marker, no reserved space.
         liveWork: ChatLiveWorkState? = nil,
-        liveWorkDetail: String = ""
+        liveWorkDetail: String = "",
+        /// The originating agent host's display name, shown by the
+        /// "Local address unavailable" sheet when a loopback link is
+        /// tapped (empty = the sheet says "the agent's host" instead
+        /// of guessing).
+        hostName: String = ""
     ) {
         self.paneID = paneID
         self.hostID = hostID
@@ -177,8 +182,14 @@ struct ChatScreen: View {
         self.fetch = fetch
         self.liveWork = liveWork
         self.liveWorkDetail = liveWorkDetail
+        self.hostName = hostName
         self._level = State(initialValue: initialLevel)
     }
+
+    /// The originating agent host's display name ("" when the pane
+    /// never knew one) — carried to the openers router so the local
+    /// address notice never guesses a host identity.
+    private var hostName: String = ""
 
     /// The HOST-QUALIFIED draft identity (item 18 + review): pane ids
     /// are host-local, so a bare pane id would let two hosts' panes
@@ -448,6 +459,10 @@ struct ChatScreen: View {
         }
         .onChange(of: pagingInputs) { _, _ in
             firePagingIfNeeded()
+        }
+        .onAppear { openRouter.hostName = hostName }
+        .onChange(of: hostName) { _, newValue in
+            openRouter.hostName = newValue
         }
         .modifier(
             ChatOpenersSurface(

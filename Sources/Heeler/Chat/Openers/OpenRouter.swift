@@ -73,6 +73,10 @@ enum OpenRouter {
                 let scheme = url.scheme?.lowercased(),
                 scheme == "http" || scheme == "https"
             else { return nil }
+            if let loopbackHost = LocalAddressLink.loopbackHost(of: url) {
+                return .localAddress(LocalAddressNotice(
+                    url: url, loopbackHost: loopbackHost, hostName: nil))
+            }
             return .browse(url: url, allowed: embeddedBrowseAllowed)
         case .path(let path):
             if path.lowercased().hasSuffix(".md") {
@@ -92,6 +96,9 @@ final class OpenRouterCore: ObservableObject {
     @Published private(set) var shareTarget: RemoteShareTarget?
     /// A URL awaiting the embedded-vs-default decision (the ask sheet).
     @Published private(set) var ask: URL?
+    /// A loopback link presented as the honest "Local address
+    /// unavailable" notice sheet.
+    @Published private(set) var localNotice: LocalAddressNotice?
     /// A plain refusal message (the alert).
     @Published private(set) var refusal: String?
     /// The URL the pane should hand to `\.openURL` (default browser).
@@ -100,6 +107,11 @@ final class OpenRouterCore: ObservableObject {
 
     private(set) var lastAction: OpenerAction?
     private var fetchTask: Task<Void, Never>?
+
+    /// The originating agent host's display name, shown by the local
+    /// address notice. Injectable like `fetch`: ChatScreen sets it from
+    /// the pane's Host (never guessed); the demo/tests set it directly.
+    var hostName: String?
 
     private let allowlist: ChatLinkAllowlistStore
 
@@ -129,6 +141,10 @@ final class OpenRouterCore: ObservableObject {
             } else {
                 ask = url
             }
+        case .localAddress(let notice):
+            localNotice = LocalAddressNotice(
+                url: notice.url, loopbackHost: notice.loopbackHost,
+                hostName: hostName)
         case .viewMarkdown(let path):
             fetchMarkdown(at: path)
         case .shareFile(let path):
@@ -157,6 +173,8 @@ final class OpenRouterCore: ObservableObject {
         ask = nil
         defaultBrowserCandidate = url
     }
+
+    func dismissLocalNotice() { localNotice = nil }
 
     func dismissBrowse() { browsing = nil }
     func dismissMarkdown() {
