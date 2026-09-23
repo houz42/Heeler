@@ -2805,7 +2805,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.8;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.houz42.heeler.Widgets;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.houz42.meadow.Widgets;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -2821,7 +2821,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.houz42.heeler.uitests;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.houz42.meadow.uitests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_TARGET_NAME = Heeler;
@@ -2851,7 +2851,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 0.1.8;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.houz42.heeler;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.houz42.meadow;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -2869,7 +2869,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.8;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.houz42.heeler.Widgets;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.houz42.meadow.Widgets;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -2885,7 +2885,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.houz42.heeler.uitests;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.houz42.meadow.uitests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_TARGET_NAME = Heeler;
@@ -2904,7 +2904,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.8;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.houz42.heeler.NotificationService;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.houz42.meadow.NotificationService;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -2986,7 +2986,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.houz42.heeler.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.houz42.meadow.tests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Heeler.app/Heeler";
@@ -3003,7 +3003,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.houz42.heeler.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.houz42.meadow.tests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Heeler.app/Heeler";
@@ -3033,7 +3033,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 0.1.8;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.houz42.heeler;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.houz42.meadow;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -3051,7 +3051,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.8;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.houz42.heeler.NotificationService;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.houz42.meadow.NotificationService;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};

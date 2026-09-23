@@ -251,7 +251,7 @@ struct OpenRouterRoutingTests {
 @Suite("Chat Link Allowlist")
 struct ChatLinkAllowlistTests {
     private func freshDefaults() throws -> UserDefaults {
-        let name = "dev.houz42.heeler.tests.\(UUID().uuidString)"
+        let name = "dev.houz42.meadow.tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)
         defaults?.removePersistentDomain(forName: name)
         return defaults ?? .standard
@@ -325,7 +325,7 @@ struct OpenRouterCoreTests {
     }
 
     private func makeDefaults() throws -> UserDefaults {
-        let name = "dev.houz42.heeler.tests.\(UUID().uuidString)"
+        let name = "dev.houz42.meadow.tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)
         defaults?.removePersistentDomain(forName: name)
         return defaults ?? .standard

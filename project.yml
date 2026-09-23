@@ -78,7 +78,7 @@ targets:
         # window from it only for a declared type. The generated scene
         # manifest already declares multiple-scene support.
         NSUserActivityTypes:
-          - dev.houz42.heeler.agent
+          - dev.houz42.meadow.agent
     entitlements:
       path: Sources/Heeler/Heeler.entitlements
       properties:
@@ -87,11 +87,11 @@ targets:
         # Shared with the Notification Service Extension; doubles as the
         # Keychain access group holding the Notification Keys.
         com.apple.security.application-groups:
-          - group.dev.houz42.heeler.shared
+          - group.dev.houz42.meadow.shared
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
-        PRODUCT_BUNDLE_IDENTIFIER: dev.houz42.heeler
+        PRODUCT_BUNDLE_IDENTIFIER: dev.houz42.meadow
         # Home-screen name; the App Store listing is "Heeler for herdr".
         INFOPLIST_KEY_CFBundleDisplayName: Meadow
         MARKETING_VERSION: "0.1.8"
@@ -148,7 +148,7 @@ targets:
       path: Sources/HeelerNotificationService/HeelerNotificationService.entitlements
       properties:
         com.apple.security.application-groups:
-          - group.dev.houz42.heeler.shared
+          - group.dev.houz42.meadow.shared
     info:
       path: Sources/HeelerNotificationService/Info.plist
       properties:
@@ -166,7 +166,7 @@ targets:
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.houz42.heeler.NotificationService
+        PRODUCT_BUNDLE_IDENTIFIER: dev.houz42.meadow.NotificationService
         MARKETING_VERSION: "0.1.8"
         CURRENT_PROJECT_VERSION: "20"
         # Match the containing app's iPhone and iPad device family.
@@ -197,7 +197,7 @@ targets:
       path: Sources/HeelerWidgets/HeelerWidgets.entitlements
       properties:
         com.apple.security.application-groups:
-          - group.dev.houz42.heeler.shared
+          - group.dev.houz42.meadow.shared
     info:
       path: Sources/HeelerWidgets/Info.plist
       properties:
@@ -214,7 +214,7 @@ targets:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.houz42.heeler.Widgets
+        PRODUCT_BUNDLE_IDENTIFIER: dev.houz42.meadow.Widgets
         MARKETING_VERSION: "0.1.8"
         CURRENT_PROJECT_VERSION: "20"
         # Match the containing app's iPhone and iPad device family.
@@ -241,7 +241,7 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
-        PRODUCT_BUNDLE_IDENTIFIER: dev.houz42.heeler.tests
+        PRODUCT_BUNDLE_IDENTIFIER: dev.houz42.meadow.tests
     dependencies:
       - target: Heeler
       - package: HeelerSSH
@@ -260,7 +260,7 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
-        PRODUCT_BUNDLE_IDENTIFIER: dev.houz42.heeler.uitests
+        PRODUCT_BUNDLE_IDENTIFIER: dev.houz42.meadow.uitests
     dependencies:
       - target: Heeler
 
