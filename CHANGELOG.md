@@ -75,6 +75,16 @@ Entries reference the issue that motivated them.
 
 ### Fixed
 
+- The left-edge swipe opens the navigation drawer reliably: a swipe
+  starting anywhere in a 44 pt band along the left edge now opens the
+  drawer, not only one starting in the narrow bezel strip the stock
+  system edge recognizer claims (a real-thumb swipe routinely starts
+  20–44 pt in, where the old recognizer silently never engaged and
+  the drawer needed retries). The widened band opens only for a
+  horizontal rightward drag — a vertical drag near the edge still
+  scrolls the page, a leftward fling opens nothing — and the pushed
+  detail's back-swipe keeps the edge entirely (the same fail-closed
+  veto, at touch start and live).
 - Chat tables fit the phone's reading width again: every markdown
   table is constrained to the available transcript width and its
   cells wrap — long cell text folds onto more lines and rows grow

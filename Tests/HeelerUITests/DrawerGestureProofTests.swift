@@ -2,14 +2,21 @@ import XCTest
 
 // SPDX-License-Identifier: Apache-2.0
 
-/// Drawer gesture + animation proofs (v2), phone width, on the demo
-/// console fixture. The two user items this file pins:
+/// Drawer gesture + animation proofs (v2; reliability widening v3),
+/// phone width, on the demo console fixture. The user items this
+/// file pins:
 ///
 /// 1. LEFT-EDGE SWIPE opens the drawer — from the left screen edge on
 ///    the ROOT pages only, following the finger, committing past the
 ///    velocity/position threshold; a pushed detail's edge swipe still
 ///    goes BACK (the recognizer is disabled on the same suppression
 ///    seam as the trigger, so the interactive pop never competes).
+///    V3 RELIABILITY: the drawer also opens from the WIDENED band —
+///    a swipe that starts 20–44 pt in from the bezel (where the stock
+///    screen-edge recognizer silently never engaged — the real-phone
+///    "doesn't always work" report) — at multiple heights and speeds;
+///    a VERTICAL drag starting in that band stays the page's scroll
+///    and never opens the drawer.
 /// 2. ANIMATION — the drawer slides edge-following with a spring
 ///    settle and the scrim fading in sync; drag-to-close with
 ///    snap-back: a short drag springs back open, a committed drag
@@ -191,6 +198,127 @@ final class DrawerGestureProofTests: XCTestCase {
         XCTAssertTrue(
             waitOpen(),
             "after Back, the edge swipe must open the drawer again")
+    }
+
+    // MARK: 1b. V3 reliability — the widened begin band
+
+    /// A drag synthesized with an EXACT start x (points, not the
+    /// normalized 0.01 the edge helpers use). The v3 proofs start
+    /// INSIDE the widened band (20–44 pt) where a real-phone swipe
+    /// routinely lands — the stock screen-edge recognizer never
+    /// engaged there, which is the "doesn't always work" report.
+    private func dragFromX(
+        _ startX: CGFloat, _ startY: CGFloat,
+        toEndX endX: CGFloat, velocity: XCUIGestureVelocity = .default
+    ) {
+        let start = app.coordinate(
+            withNormalizedOffset: CGVector(
+                dx: startX / app.frame.width,
+                dy: startY / app.frame.height))
+        start.press(
+            forDuration: 0.05,
+            thenDragTo: app.coordinate(
+                withNormalizedOffset: CGVector(
+                    dx: endX / app.frame.width,
+                    dy: startY / app.frame.height)),
+            withVelocity: velocity,
+            thenHoldForDuration: 0)
+    }
+
+    /// THE reliability proof (v3): the drawer opens from starts all
+    /// across the widened 44 pt band — near the bezel, mid-band, at the
+    /// band's outer edge — at more than one height and both a slow and
+    /// a fast swipe. One miss anywhere in the band is the user's
+    /// "retry" experience; the whole matrix must open.
+    func testWidenedBandOpensAtEveryStartPoint() {
+        XCTAssertTrue(
+            trigger.waitForExistence(timeout: UITestTimeouts.launch))
+
+        let height = app.frame.height
+        // (start x pt, start y fraction, velocity): starts at 6 pt
+        // (bezel — the stock recognizer's own territory, still open),
+        // 24 pt and 40 pt (inside the widened band but OUTSIDE the
+        // stock ~20 pt bezel region — the previously-dead zone), and
+        // 42 pt (the band's outer edge, off the exact 44 boundary).
+        // and lower screen; speeds cover slow, default, and fast.
+        let cases: [(CGFloat, CGFloat, XCUIGestureVelocity)] = [
+            (6, 0.5, .default),
+            (24, 0.5, .slow),
+            (40, 0.3, .fast),
+            (42, 0.7, .slow),
+        ]
+        var caseIndex = 0
+        for (startX, yFraction, velocity) in cases {
+            dragFromX(
+                startX, height * yFraction, toEndX: 280, velocity: velocity)
+            XCTAssertTrue(
+                waitOpen(),
+                "a swipe starting at \(Int(startX)) pt from the edge "
+                    + "must open the drawer")
+            // The proof capture rides the FIRST previously-dead-zone
+            // case (24 pt — outside the stock ~20 pt bezel band, the
+            // exact real-phone miss): the drawer must be VISIBLE open
+            // in the frame, not just asserted.
+            if caseIndex == 1 {
+                captureScreenshot(
+                    app, "drawer-v3-widened-band-open",
+                    lifetime: .keepAlways)
+            }
+            // Reset to the closed root page for the next case.
+            app.buttons["Close navigation"].firstMatch.tap()
+            XCTAssertTrue(
+                waitClosed(),
+                "the close must fully dismiss before the next swipe")
+            caseIndex += 1
+        }
+    }
+
+    /// The widened band must not eat the page's VERTICAL scroll: a
+    /// drag that starts inside the band and moves DOWN never opens
+    /// the drawer (the design's rule — vertical gestures scroll the
+    /// conversation), and the page's list is still live afterwards.
+    func testVerticalDragInsideBandDoesNotOpenDrawer() {
+        XCTAssertTrue(
+            trigger.waitForExistence(timeout: UITestTimeouts.launch))
+
+        let height = app.frame.height
+        // Start 24 pt in — mid-band — and drag DOWN 150 pt.
+        let start = app.coordinate(
+            withNormalizedOffset: CGVector(
+                dx: 24 / app.frame.width, dy: 0.35))
+        start.press(
+            forDuration: 0.05,
+            thenDragTo: app.coordinate(
+                withNormalizedOffset: CGVector(
+                    dx: 24 / app.frame.width,
+                    dy: 0.35 + 150 / height)),
+            withVelocity: .slow,
+            thenHoldForDuration: 0)
+
+        XCTAssertTrue(
+            waitClosed(),
+            "a vertical drag starting in the widened band must stay "
+                + "the page's scroll — never open the drawer")
+        // The page is untouched by the band: the trigger still works.
+        XCTAssertTrue(
+            app.buttons[UITestFixtures.navigationTrigger].firstMatch
+                .isHittable,
+            "the page must remain interactive after the vertical drag")
+    }
+
+    /// A LEFTWARD fling starting in the widened band opens nothing
+    /// (and never triggers Back on a root page): the band's gate
+    /// demands horizontal-dominant RIGHTWARD motion.
+    func testLeftwardDragInsideBandDoesNotOpenDrawer() {
+        XCTAssertTrue(
+            trigger.waitForExistence(timeout: UITestTimeouts.launch))
+
+        // Start 24 pt in, drag toward the bezel (out to 2 pt).
+        dragFromX(24, app.frame.height * 0.5, toEndX: 2)
+        XCTAssertTrue(
+            waitClosed(),
+            "a leftward drag starting in the widened band must not "
+                + "open the drawer")
     }
 
     // MARK: 2. Drag-snap + animation
