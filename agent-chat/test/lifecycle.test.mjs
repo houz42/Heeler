@@ -12,6 +12,8 @@ import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import {
   LifecycleCoordinator,
   HerdrApi,
@@ -24,6 +26,7 @@ import {
 
 let dir;
 let servers = []; // every fake herdr server this test file started
+let socketSeq = 0; // unique fake socket names (close() unlinks; reuse would collide)
 
 function fakeAgent(fields = {}) {
   return {
@@ -54,7 +57,7 @@ function fakeAgent(fields = {}) {
  * test can still force wire-drift shapes by setting them explicitly).
  */
 async function startFakeHerdr(script = {}, opts = {}) {
-  const socketPath = opts.socketPath ?? path.join(dir, `herdr-${servers.length}.sock`);
+  const socketPath = opts.socketPath ?? path.join(dir, `herdr-${socketSeq++}.sock`);
   const state = {
     socketPath,
     callLog: [],
@@ -164,10 +167,19 @@ afterEach(async () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+let stateRootSeq = 0;
+
+/** A fresh isolated Meadow state root so the persisted host registry and
+ *  the interprocess lock file never leak between tests. */
+function freshStateRoot() {
+  return path.join(dir, `state-${stateRootSeq++}`);
+}
+
 async function withCoordinator(script, opts, fn) {
   const fake = await startFakeHerdr(script);
   const coordinator = new LifecycleCoordinator({
     herdr: new HerdrApi({ socketPath: fake.socketPath, requestTimeoutMs: 2000 }),
+    stateRoot: freshStateRoot(),
     ...(opts ?? {}),
   });
   return fn(coordinator, fake);
@@ -419,11 +431,11 @@ test('start: protocol-older server is unsupported, not attempted', async () => {
 // ---------------------------------------------------------------------------
 // single-writer domain
 test('single-writer guard spans the whole host across sessions, not just the selected one', async () => {
-  // Two coordinators on DIFFERENT herdr session sockets, SAME host label.
-  // Each fake delays its agent.start answer by 60ms. If the writer guard
-  // covered only one session, both starts would be in flight at once
-  // (probe.maxConcurrent 2); the whole-host guard must serialize the two
-  // mutation sequences (maxConcurrent stays 1).
+  // Two coordinators on DIFFERENT herdr session sockets, SAME host label +
+  // SAME persisted state root. Each fake delays its agent.start answer by
+  // 60ms. If the writer guard covered only one session (or one process),
+  // both starts would be in flight at once (probe.maxConcurrent 2); the
+  // whole-host guard must serialize the two mutation sequences.
   const probe = { inFlight: 0, maxConcurrent: 0 };
   const slowStart = (d) => async (params, state) => {
     probe.inFlight++;
@@ -434,8 +446,15 @@ test('single-writer guard spans the whole host across sessions, not just the sel
   };
   const fake1 = await startFakeHerdr({ 'agent.start': slowStart(60) });
   const fake2 = await startFakeHerdr({ 'agent.start': slowStart(60) });
-  const c1 = new LifecycleCoordinator({ herdr: new HerdrApi({ socketPath: fake1.socketPath, requestTimeoutMs: 3000 }), hostLabel: 'host-x' });
-  const c2 = new LifecycleCoordinator({ herdr: new HerdrApi({ socketPath: fake2.socketPath, requestTimeoutMs: 3000 }), hostLabel: 'host-x' });
+  const stateRoot = freshStateRoot();
+  const mk = (fake) => new LifecycleCoordinator({
+    herdr: new HerdrApi({ socketPath: fake.socketPath, requestTimeoutMs: 3000 }),
+    hostLabel: 'host-x',
+    stateRoot,
+    lockTimeoutMs: 5000,
+  });
+  const c1 = mk(fake1);
+  const c2 = mk(fake2);
 
   const [e1, e2] = await Promise.all([
     c1.start({ conversationKey: 'conv-sw1', kind: 'pi', cwd: '/tmp' }),
@@ -447,27 +466,62 @@ test('single-writer guard spans the whole host across sessions, not just the sel
 });
 
 // Same conversation, two sessions on one host: the second start is refused
-// because occupancy on the other session's socket cannot be inspected.
-test('start: cross-session record is a refusal (occupancy not inspectable from this socket)', async () => {
+// after DISCOVERING the live agent by probing the recorded session's socket
+// (the persisted registry, not process memory, carries the record).
+test('start: cross-session occupancy is discovered by probing the recorded session', async () => {
   const fake1 = await startFakeHerdr({});
+  const fake2 = await startFakeHerdr({});
+  const stateRoot = freshStateRoot();
   const c1 = new LifecycleCoordinator({
     herdr: new HerdrApi({ socketPath: fake1.socketPath, requestTimeoutMs: 2000 }),
     hostLabel: 'host-y',
+    stateRoot,
   });
   const first = await c1.start({ conversationKey: 'conv-x1', kind: 'pi', cwd: '/tmp' });
   assert.equal(first.outcome, 'completed');
 
-  const fake2 = await startFakeHerdr({});
   const c2 = new LifecycleCoordinator({
     herdr: new HerdrApi({ socketPath: fake2.socketPath, requestTimeoutMs: 2000 }),
     hostLabel: 'host-y',
+    stateRoot,
   });
   const env = await c2.start({ conversationKey: 'conv-x1', kind: 'pi', cwd: '/tmp' });
   assert.equal(env.outcome, 'refused');
   assert.equal(env.code, 'already_running');
-  assert.match(env.reason, /cannot be inspected from this session/);
+  assert.match(env.reason, /live on herdr session .* \(verified by probing it\)/);
   assert.equal(env.existing.session, fake1.socketPath);
   assert.equal(env.existing.paneId, first.result.conversation.paneId);
+  // fake2 was never asked to create anything
+  assert.ok(!fake2.callLog.some((c2x) => c2x.method === 'tab.create'));
+});
+
+// Cross-session record whose session has gone silent: unverifiable
+// occupancy is a refusal, never permission.
+test('start: unreachable recorded session is a refusal (unverifiable occupancy)', async () => {
+  const fake1 = await startFakeHerdr({});
+  const fake1Server = servers[servers.length - 1]; // the server startFakeHerdr just pushed
+  const stateRoot = freshStateRoot();
+  const c1 = new LifecycleCoordinator({
+    herdr: new HerdrApi({ socketPath: fake1.socketPath, requestTimeoutMs: 2000 }),
+    hostLabel: 'host-z',
+    stateRoot,
+  });
+  await c1.start({ conversationKey: 'conv-x2', kind: 'pi', cwd: '/tmp' });
+  // the recorded session's socket disappears (server down)
+  servers.splice(servers.indexOf(fake1Server), 1); // afterEach must not close it again
+  await new Promise((r) => fake1Server.close(r));
+
+  const fake2 = await startFakeHerdr({});
+  const c2 = new LifecycleCoordinator({
+    herdr: new HerdrApi({ socketPath: fake2.socketPath, requestTimeoutMs: 2000 }),
+    hostLabel: 'host-z',
+    stateRoot,
+  });
+  const env = await c2.start({ conversationKey: 'conv-x2', kind: 'pi', cwd: '/tmp' });
+  assert.equal(env.outcome, 'refused');
+  assert.equal(env.code, 'already_running');
+  assert.match(env.reason, /cannot be reached to verify it stopped/);
+  assert.ok(!fake2.callLog.some((c2x) => c2x.method === 'tab.create'));
 });
 
 // ---------------------------------------------------------------------------
@@ -731,4 +785,145 @@ test('every envelope carries the versioned lifecycle envelope tag and a known op
       assert.ok(['completed', 'refused', 'unsupported'].includes(env.outcome));
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// review blockers: malformed occupancy, ledger ordering, key preservation,
+// and the cross-PROCESS host guard.
+
+// Blocker 2: a successful agent.list reply with a malformed payload is NOT
+// "no agents" — it is unknown occupancy and must never become a mutation.
+test('start: malformed agent.list result is occupancy_unknown, never permission', async () => {
+  for (const bad of [
+    () => ({ type: 'agent_list' }), // missing agents array
+    () => ({ type: 'agent_list', agents: 'nope' }), // agents not an array
+    () => ({ type: 'agent_list', agents: [null] }), // non-object entry
+    () => ({ type: 'agent_list', agents: [{ name: 42 }] }), // entry not validated later, but shape check must hold
+    () => null, // no result object at all
+  ]) {
+    await withCoordinator({ 'agent.list': bad }, {}, async (c, fake) => {
+      const env = await c.start({ conversationKey: 'conv-mal', kind: 'pi', cwd: '/tmp' });
+      assert.equal(env.outcome, 'refused', JSON.stringify(bad()));
+      assert.equal(env.code, 'occupancy_unknown');
+      assert.match(env.reason, /wire drift|not an object/);
+      assert.ok(!fake.callLog.some((x) => x.method === 'tab.create'),
+        'a malformed occupancy reply must never become a mutation');
+    });
+  }
+});
+
+test('status: malformed agent.list result reports unknown, never a state', async () => {
+  await withCoordinator({ 'agent.list': () => ({ type: 'agent_list' }) }, {}, async (c) => {
+    const env = await c.status({ conversationKey: 'conv-mal-status' });
+    assert.equal(env.result.state, 'unknown');
+    assert.match(env.result.reason, /occupancy inspection untrustworthy/);
+  });
+});
+
+// Blocker 3: forceClose replay of a COMPLETED close returns the recorded
+// envelope — even though the record it consumed is already dropped, and
+// even from a fresh coordinator process reading the persisted ledger.
+test('forceClose: replay AFTER completion returns the recorded completed envelope, not not_managed', async () => {
+  await withCoordinator({}, {}, async (c, fake) => {
+    await c.start({ conversationKey: 'conv-fcr', kind: 'pi', cwd: '/tmp' });
+    const e1 = await c.forceClose({ conversationKey: 'conv-fcr', requestKey: 'fc-replay-1' });
+    assert.equal(e1.outcome, 'completed');
+    assert.equal(e1.requestKey, 'fc-replay-1', 'the completed envelope carries its requestKey');
+    // the conversation record is consumed — a ledger-less repeat is not_managed
+    const bare = await c.forceClose({ conversationKey: 'conv-fcr' });
+    assert.equal(bare.outcome, 'refused');
+    assert.equal(bare.code, 'not_managed');
+    // but the SAME requestKey replays the recorded completed envelope
+    const e2 = await c.forceClose({ conversationKey: 'conv-fcr', requestKey: 'fc-replay-1' });
+    assert.equal(e2.outcome, 'completed', 'the ledger is consulted before the record lookup');
+    assert.equal(e2.result.closed, true);
+    assert.ok(e2.replayed);
+    assert.equal(e2.requestKey, 'fc-replay-1');
+    assert.equal(fake.callLog.filter((x) => x.method === 'pane.close').length, 1, 'still exactly one pane.close');
+  });
+});
+
+test('start: completed envelopes carry their requestKey (envelope contract)', async () => {
+  await withCoordinator({}, {}, async (c) => {
+    const env = await c.start({ conversationKey: 'conv-keyed', kind: 'pi', cwd: '/tmp', requestKey: 'start-keyed-1' });
+    assert.equal(env.outcome, 'completed');
+    assert.equal(env.requestKey, 'start-keyed-1', 'a completed start must echo the requestKey');
+  });
+});
+
+// Cross-process replay: a SECOND coordinator instance (fresh ledger,
+// same persisted state root) replays the first's completed start.
+test('requestKey replay works across coordinator instances via the persisted ledger', async () => {
+  const fake = await startFakeHerdr({});
+  const stateRoot = freshStateRoot();
+  const mk = () => new LifecycleCoordinator({
+    herdr: new HerdrApi({ socketPath: fake.socketPath, requestTimeoutMs: 2000 }),
+    hostLabel: 'host-replay',
+    stateRoot,
+  });
+  const e1 = await mk().start({ conversationKey: 'conv-xproc', kind: 'pi', cwd: '/tmp', requestKey: 'xp-1' });
+  assert.equal(e1.outcome, 'completed');
+  assert.ok(!e1.replayed);
+  const e2 = await mk().start({ conversationKey: 'conv-xproc', kind: 'pi', cwd: '/tmp', requestKey: 'xp-1' });
+  assert.equal(e2.outcome, 'completed');
+  assert.ok(e2.replayed, 'a fresh instance replays from the persisted ledger');
+  assert.deepEqual(e2.result.conversation, e1.result.conversation);
+  assert.equal(fake.callLog.filter((x) => x.method === 'tab.create').length, 1, 'still one tab total');
+});
+
+// Cross-process mutation race: a SECOND PROCESS (real child_process.fork)
+// must not interleave mutations with this one — the lock file is the
+// arbiter. Child and parent both start an agent with a slow agent.start;
+// exactly one runs at a time and both complete.
+test('interprocess lock: two real processes serialize whole-host mutations', async () => {
+  const probe = { count: 0, inFlight: 0, max: 0 };
+  const fake = await startFakeHerdr({
+    'agent.start': async (params, state) => {
+      probe.count++;
+      probe.inFlight++;
+      probe.max = Math.max(probe.max, probe.inFlight);
+      await new Promise((r) => setTimeout(r, 120));
+      probe.inFlight--;
+      return state.defaults['agent.start'](params, state);
+    },
+  });
+  const stateRoot = freshStateRoot();
+  const childSrc = `
+import { LifecycleCoordinator, HerdrApi } from ${JSON.stringify(pathToFileURL(path.resolve('src/lifecycle.mjs')).href)};
+const c = new LifecycleCoordinator({
+  herdr: new HerdrApi({ socketPath: ${JSON.stringify(fake.socketPath)}, requestTimeoutMs: 5000 }),
+  hostLabel: 'host-race',
+  stateRoot: ${JSON.stringify(stateRoot)},
+  lockTimeoutMs: 10000,
+  lockStaleMs: 30000,
+});
+const env = await c.start({ conversationKey: 'conv-child', kind: 'pi', cwd: '/tmp' });
+process.stdout.write(JSON.stringify(env));
+`;
+  const parent = new LifecycleCoordinator({
+    herdr: new HerdrApi({ socketPath: fake.socketPath, requestTimeoutMs: 5000 }),
+    hostLabel: 'host-race',
+    stateRoot,
+    lockTimeoutMs: 10000,
+    lockStaleMs: 30000,
+  });
+  const childPromise = new Promise((resolve, reject) => {
+    execFile(process.execPath, ['--input-type=module', '-e', childSrc], { cwd: process.cwd() }, (err, so, se) => {
+      if (err) return reject(Object.assign(new Error(se || String(err)), { code: err.code }));
+      try {
+        resolve(JSON.parse(so));
+      } catch (e) {
+        reject(new Error(`child printed unparseable output: ${so.slice(0, 200)}`));
+      }
+    });
+  });
+  const [childEnv, parentEnv] = await Promise.all([
+    childPromise,
+    parent.start({ conversationKey: 'conv-parent', kind: 'pi', cwd: '/tmp' }),
+  ]);
+  assert.equal(childEnv.outcome, 'completed', JSON.stringify(childEnv));
+  assert.equal(parentEnv.outcome, 'completed', JSON.stringify(parentEnv));
+  assert.equal(probe.max, 1, 'the lock file must serialize mutations across real processes');
+  assert.equal(probe.count, 2, 'both starts ran (serialized)');
+  assert.equal(fake.callLog.filter((x) => x.method === 'tab.create').length, 2, 'one tab each');
 });

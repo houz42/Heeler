@@ -14,6 +14,7 @@
 //   and cleans up after itself (closes what it created).
 
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { LifecycleCoordinator, HerdrApi, declaredLifecycleCapabilities, agentNameFor } from '../src/lifecycle.mjs';
@@ -23,14 +24,17 @@ const cwd = '/tmp';
 const run = `${Date.now()}-${process.pid}`;
 const conversationKey = `meadow-live-proof-${run}`;
 
+// Isolated state root for this run so the live proof never touches the
+// real host registry and cleans up with the temp dir.
+const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'meadow-live-lifecycle-'));
 const events = [];
 const api = new HerdrApi({ socketPath, requestTimeoutMs: 20_000 });
 const coordinator = new LifecycleCoordinator({
   herdr: api,
   hostLabel: `live-${os.hostname()}`,
+  stateRoot,
   log: (ev) => events.push(ev),
 });
-
 let failures = 0;
 function check(name, fn) {
   return Promise.resolve()
@@ -74,9 +78,11 @@ try {
     ]);
     assert.equal(e1.outcome, 'completed', JSON.stringify(e1));
     assert.ok(!e1.replayed);
+    assert.equal(e1.requestKey, startParams.requestKey, 'completed envelope carries its requestKey');
     for (const e of [e2, e3]) {
       assert.equal(e.outcome, 'completed');
       assert.ok(e.replayed, 'duplicate delivery must replay');
+      assert.equal(e.requestKey, startParams.requestKey);
       assert.deepEqual(e.result.conversation, e1.result.conversation);
     }
     started = e1;
@@ -129,6 +135,45 @@ try {
     assert.equal(env.result.closed, true);
     assert.equal(env.result.paneId, started.result.conversation.paneId);
     assert.match(env.result.guard, /re-resolved immediately before/);
+    assert.equal(env.requestKey, `fc-${run}`, 'the completed close carries its requestKey');
+  });
+
+  // Review blocker 3, live: replaying the SAME forceClose requestKey AFTER
+  // completion returns the recorded completed envelope (the conversation
+  // record is already consumed — not_managed would be the bug).
+  await check('forceClose replay after completion returns the recorded envelope', async () => {
+    const env = await coordinator.forceClose({ conversationKey, requestKey: `fc-${run}` });
+    assert.equal(env.outcome, 'completed', 'ledger is consulted before the record lookup');
+    assert.equal(env.result.closed, true);
+    assert.ok(env.replayed);
+  });
+
+  // Review blocker 1, live: a SECOND PROCESS replays the same start
+  // requestKey from the persisted ledger and creates nothing.
+  await check('second process replays the completed start requestKey without creating a tab', async () => {
+    const { execFile } = await import('node:child_process');
+    const { pathToFileURL } = await import('node:url');
+    const src = `
+import { LifecycleCoordinator, HerdrApi } from ${JSON.stringify(pathToFileURL(path.resolve('src/lifecycle.mjs')).href)};
+const c = new LifecycleCoordinator({
+  herdr: new HerdrApi({ socketPath: ${JSON.stringify(socketPath)}, requestTimeoutMs: 20000 }),
+  hostLabel: 'live-${os.hostname()}',
+  stateRoot: ${JSON.stringify(stateRoot)},
+  lockTimeoutMs: 15000,
+});
+const env = await c.start({ conversationKey: ${JSON.stringify(conversationKey)}, kind: 'pi', cwd: '/tmp', requestKey: ${JSON.stringify(startParams.requestKey)} });
+process.stdout.write(JSON.stringify(env));
+`;
+    const out = await new Promise((resolve, reject) => {
+      execFile(process.execPath, ['--input-type=module', '-e', src], { cwd: process.cwd() }, (err, so, se) => {
+        if (err) reject(new Error(se || String(err)));
+        else resolve(so);
+      });
+    });
+    const env = JSON.parse(out);
+    assert.equal(env.outcome, 'completed', JSON.stringify(env));
+    assert.ok(env.replayed, 'a fresh process replays from the persisted ledger');
+    assert.deepEqual(env.result.conversation, started.result.conversation);
   });
 
   await check('status after close: stopped, from inspection not prompt text', async () => {

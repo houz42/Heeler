@@ -2,10 +2,18 @@
 // "Verified primitives and proposed lifecycle operations").
 //
 // ONE coordinator owns lifecycle mutations for one herdr session socket;
-// coordinators for the same host share one writer guard, one conversation
-// registry and one requestKey ledger, so the single-writer domain is the
-// WHOLE HOST, not the selected session. Clients never race multi-step
-// sequences against herdr themselves.
+// the single-writer guard covers the WHOLE HOST SECURITY DOMAIN across
+// herdr sessions AND across host-package processes:
+//   - in-process: an async mutex per hostLabel (this process);
+//   - interprocess: an exclusive-create lock file under the Meadow state
+//     root (`lifecycle/<hostHash>/mutation.lock`), same model as the
+//     consolidation's broker owner socket — the filesystem is the
+//     arbiter, so two host-package processes cannot both mutate.
+// A per-host persisted registry (`conversations.json`) carries records and
+// completed requestKey envelopes across processes, and cross-session
+// occupancy is DISCOVERED by probing the recorded session's herdr socket,
+// never guessed from memory. Clients never race multi-step sequences
+// against herdr themselves.
 //
 // herdr surface this module is built on — VERIFIED, never assumed:
 //   - `herdr api schema --json` on herdr 0.9.1 (protocol 22) lists
@@ -30,9 +38,12 @@
 //     explicitly destructive pane close is a SEPARATE operation
 //     (lifecycle.forceClose), never masquerading as graceful stop.
 //   - Repeated delivery of one requestKey replays the recorded envelope
-//     and must not create extra tabs/panes.
+//     and must not create extra tabs/panes. The ledger is consulted BEFORE
+//     any mutable lookup, and completed envelopes persist in the host
+//     registry so a replay from another process still replays.
 //   - An already-running conversation is refused; occupancy that cannot
-//     be inspected is a refusal, never permission.
+//     be inspected — unreachable herdr, a malformed agent.list result, an
+//     unreadable host registry — is a REFUSAL, never permission.
 //   - Destructive close re-resolves the pane from the recorded stable
 //     terminal identity immediately before dispatch and refuses on
 //     mismatch. herdr 0.9.1 has no atomic expected-identity close, so the
@@ -44,6 +55,8 @@
 // The client UI that drives these operations is a follow-up slice.
 
 import net from 'node:net';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
@@ -77,6 +90,8 @@ export const REFUSAL_CODES = Object.freeze([
   'unknown_kind',
   'already_running',
   'occupancy_unknown',
+  'lock_timeout',
+  'lock_failed',
   'target_gone',
   'identity_mismatch',
   'inspection_failed',
@@ -138,11 +153,8 @@ export function declaredLifecycleCapabilities(kind) {
 // conversation key, matching herdr's agent-name rule ^[a-z][a-z0-9_-]{0,31}$
 // (verified live via agent.rename on 0.7.5 and exercised via agent.start on
 // 0.9.1). The deterministic name is the occupancy marker: a second start of
-// the same conversation — even from another process, within this herdr
-// session — is detectable via agent.list. Cross-PROCESS coverage beyond
-// this session is the record + name contract stated here; cross-SESSION
-// occupancy cannot be inspected from one socket and is therefore a
-// refusal, not permission.
+// the same conversation — from any process or herdr session on this host —
+// is detectable via agent.list against the recorded session.
 
 export function agentNameFor(conversationKey) {
   if (typeof conversationKey !== 'string' || conversationKey.length === 0) {
@@ -250,10 +262,215 @@ export class HerdrApi {
   tabClose(tabId) { return this.rpc('tab.close', { tab_id: tabId }); }
 }
 
+/**
+ * VALIDATED agent.list occupancy. A successful herdr reply that does not
+ * carry a well-formed agents array is NOT "no agents" — it is unknown
+ * occupancy, and unknown occupancy is a refusal, never permission.
+ * Returns {ok:true, agents:[...]} (each entry a plain object) or
+ * {ok:false, reason}.
+ */
+function validatedAgentList(result) {
+  if (result === null || typeof result !== 'object' || Array.isArray(result)) {
+    return { ok: false, reason: 'agent.list result was not an object (wire drift)' };
+  }
+  if (!Array.isArray(result.agents)) {
+    return { ok: false, reason: 'agent.list result carried no agents array (wire drift)' };
+  }
+  for (const a of result.agents) {
+    if (a === null || typeof a !== 'object' || Array.isArray(a)) {
+      return { ok: false, reason: 'agent.list agents array contained a non-object entry (wire drift)' };
+    }
+    // AgentInfo.name is OPTIONAL (string|null) on protocol 22 — the live
+    // server omits it for unnamed agents. Absent = unnamed = valid; only a
+    // PRESENT name of a non-string non-null type cannot be matched for
+    // occupancy, which makes the whole inspection untrustworthy.
+    if (a.name !== undefined && a.name !== null && typeof a.name !== 'string') {
+      return { ok: false, reason: 'agent.list carried an entry whose name is neither string nor null (wire drift)' };
+    }
+  }
+  return { ok: true, agents: result.agents };
+}
+
 // ---------------------------------------------------------------------------
-// Host domain: single-writer guard + conversation locks + records + the
-// requestKey ledger. Shared across every coordinator with the same
-// hostLabel, so the domain is the whole host, not one session.
+// Interprocess whole-host mutation lock.
+//
+// Exclusive-create lock FILE (the consolidation owner-socket's model: the
+// filesystem is the arbiter; a crashed owner's lock goes stale and is
+// taken over after lockStaleMs). The lock is held only for the duration of
+// one mutation, never for a coordinator's lifetime. lockStaleMs must
+// exceed the longest possible held mutation (startShellWaitMs + rpc
+// timeouts) or a takeover could overlap a still-running mutation.
+
+const LOCK_RETRY_DELAY_MS = 50;
+
+export class InterprocessLock {
+  constructor(lockPath, opts = {}) {
+    this.lockPath = lockPath;
+    this.timeoutMs = positiveInt(opts.timeoutMs, 15_000);
+    this.staleMs = positiveInt(opts.staleMs, 30_000);
+    this.token = `${process.pid}-${crypto.randomBytes(8).toString('hex')}`;
+  }
+
+  async acquire() {
+    const deadline = Date.now() + this.timeoutMs;
+    fs.mkdirSync(path.dirname(this.lockPath), { recursive: true });
+    for (;;) {
+      try {
+        fs.writeFileSync(this.lockPath, JSON.stringify({ token: this.token, pid: process.pid, acquiredAt: isoNow() }), { flag: 'wx' });
+        return true;
+      } catch (err) {
+        if (err.code !== 'EEXIST') return { error: `cannot create lock file ${this.lockPath}: ${err.message}` };
+      }
+      // Held. Stale takeover: only when the holder's file has aged past
+      // staleMs (a crashed owner) — never while a live mutation may run.
+      let st;
+      try {
+        st = fs.statSync(this.lockPath);
+      } catch {
+        continue; // vanished between stat and now: retry the create
+      }
+      if (Date.now() - st.mtimeMs > this.staleMs) {
+        try {
+          fs.rmSync(this.lockPath, { force: true });
+        } catch {}
+        this.#note(`took over stale lock ${this.lockPath} (age ${Math.round(Date.now() - st.mtimeMs)}ms)`);
+        continue;
+      }
+      if (Date.now() >= deadline) {
+        return { error: `another host-package process holds ${this.lockPath}; timed out after ${this.timeoutMs}ms` };
+      }
+      await sleep(LOCK_RETRY_DELAY_MS);
+    }
+  }
+
+  release() {
+    try {
+      const raw = fs.readFileSync(this.lockPath, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.token === this.token) fs.rmSync(this.lockPath, { force: true });
+      // A foreign token means a takeover already happened: not ours to remove.
+    } catch {}
+  }
+
+  #note(msg) {
+    if (typeof this.onNote === 'function') this.onNote(msg);
+  }
+}
+
+/** Run `fn` while holding the whole-host interprocess mutation lock. */
+async function withHostLock(lock, fn) {
+  const acquired = await lock.acquire();
+  if (acquired !== true) return { __lockError: acquired.error };
+  try {
+    return await fn();
+  } finally {
+    lock.release();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Persisted host registry: conversation records + completed requestKey
+// envelopes, shared by every host-package process on the host. Reads are
+// validated — a corrupt registry is UNKNOWN OCCUPANCY, and unknown occupancy
+// is a refusal, never permission. Writes are atomic (tmp + rename) and only
+// happen under the interprocess mutation lock.
+
+const REGISTRY_MAX_REQUESTS = 256; // completed envelopes kept, oldest dropped
+
+function hostStateDir(stateRoot, hostLabel) {
+  const hash = crypto.createHash('sha256').update(hostLabel, 'utf8').digest('hex').slice(0, 16);
+  return path.join(stateRoot, 'lifecycle', hash);
+}
+
+function isPlain(v) {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+function isStr(v, max = 512) {
+  return typeof v === 'string' && v.length > 0 && v.length <= max;
+}
+
+function validRegistryRecord(r) {
+  return (
+    isPlain(r) &&
+    isStr(r.conversationKey) &&
+    isStr(r.name) &&
+    isStr(r.paneId) &&
+    isStr(r.terminalId) &&
+    isStr(r.session)
+  );
+}
+
+function readRegistryJson(file, what) {
+  let raw;
+  try {
+    raw = fs.readFileSync(file, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') return { ok: true, value: null };
+    return { ok: false, reason: `cannot read the host ${what} (${err.code})` };
+  }
+  if (raw.trim() === '') return { ok: true, value: null };
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ok: false, reason: `the host ${what} is not valid JSON (corrupt state)` };
+  }
+  return { ok: true, value: parsed };
+}
+
+function readConversations(stateDir) {
+  const r = readRegistryJson(path.join(stateDir, 'conversations.json'), 'conversation registry');
+  if (!r.ok) return r;
+  if (r.value === null) return { ok: true, conversations: new Map() };
+  if (!Array.isArray(r.value)) {
+    return { ok: false, reason: 'the host conversation registry is not an array (corrupt state)' };
+  }
+  const map = new Map();
+  for (const rec of r.value) {
+    if (!validRegistryRecord(rec)) {
+      return { ok: false, reason: 'the host conversation registry carries a malformed record (corrupt state)' };
+    }
+    map.set(rec.conversationKey, rec);
+  }
+  return { ok: true, conversations: map };
+}
+
+function writeConversations(stateDir, map) {
+  const file = path.join(stateDir, 'conversations.json');
+  const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(tmp, JSON.stringify([...map.values()]) + '\n');
+  fs.renameSync(tmp, file);
+}
+
+function readRequests(stateDir) {
+  const r = readRegistryJson(path.join(stateDir, 'requests.json'), 'request ledger');
+  if (!r.ok) return r;
+  if (r.value === null) return { ok: true, requests: [] };
+  if (!Array.isArray(r.value)) {
+    return { ok: false, reason: 'the host request ledger is not an array (corrupt state)' };
+  }
+  for (const e of r.value) {
+    if (!isPlain(e) || !isStr(e.requestKey) || !isPlain(e.envelope)) {
+      return { ok: false, reason: 'the host request ledger carries a malformed entry (corrupt state)' };
+    }
+  }
+  return { ok: true, requests: r.value };
+}
+
+function writeRequests(stateDir, requests) {
+  const file = path.join(stateDir, 'requests.json');
+  const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(tmp, JSON.stringify(requests.slice(-REGISTRY_MAX_REQUESTS)) + '\n');
+  fs.renameSync(tmp, file);
+}
+
+// ---------------------------------------------------------------------------
+// Host domain (in-process half): per-hostLabel mutex + per-conversation
+// locks + the in-memory requestKey ledger. The cross-process half lives in
+// the persisted registry; the two are bridged in the coordinator.
 
 class AsyncMutex {
   #tail = Promise.resolve();
@@ -275,7 +492,6 @@ function domainFor(hostLabel) {
     hostDomains.set(hostLabel, (d = {
       guard: new AsyncMutex(),
       conversationLocks: new Map(), // conversationKey -> AsyncMutex
-      records: new Map(), // conversationKey -> record (latest identity)
       requests: new Map(), // requestKey -> {state:'in_flight',promise} | {state:'completed',envelope}
     }));
   }
@@ -313,10 +529,6 @@ function unsupported(op, requestKey, reason, extra = {}) {
   return envelope(op, requestKey, 'unsupported', { reason, ...extra });
 }
 
-function isStr(v, max = 512) {
-  return typeof v === 'string' && v.length > 0 && v.length <= max;
-}
-
 function positiveInt(v, dflt) {
   return Number.isInteger(v) && v > 0 ? v : dflt;
 }
@@ -349,9 +561,16 @@ export class LifecycleCoordinator {
    * @param {HerdrApi} opts.herdr  one herdr session socket
    * @param {string} [opts.hostLabel]  the host security domain shared by all
    *   herdr sessions on that host; coordinators with the same label share the
-   *   single-writer guard, conversation registry and requestKey ledger.
+   *   single-writer guard, conversation registry and requestKey ledger —
+   *   in this process AND, via the persisted registry + lock file, across
+   *   every host-package process on the host.
+   * @param {string} [opts.stateRoot]  Meadow state root for the interprocess
+   *   lock and persisted registry (default: XDG_STATE_HOME/meadow).
    * @param {number} [opts.startShellWaitMs]  agent_pane_busy retry budget
    * @param {number} [opts.busyRetryDelayMs]  delay between retries
+   * @param {number} [opts.lockTimeoutMs]  interprocess lock acquisition budget
+   * @param {number} [opts.lockStaleMs]  interprocess lock stale-takeover age;
+   *   must exceed the longest held mutation (startShellWaitMs + rpc budgets)
    */
   constructor(opts = {}) {
     if (!opts.herdr || typeof opts.herdr.rpc !== 'function') {
@@ -360,8 +579,16 @@ export class LifecycleCoordinator {
     this.herdr = opts.herdr;
     this.hostLabel = isStr(opts.hostLabel, 256) ? opts.hostLabel : 'localhost';
     this.domain = domainFor(this.hostLabel);
+    this.stateRoot = isStr(opts.stateRoot, 4096)
+      ? opts.stateRoot
+      : path.join(process.env.XDG_STATE_HOME ?? path.join(os.homedir(), '.local', 'state'), 'meadow');
+    this.stateDir = hostStateDir(this.stateRoot, this.hostLabel);
     this.startShellWaitMs = positiveInt(opts.startShellWaitMs, 10_000);
     this.busyRetryDelayMs = positiveInt(opts.busyRetryDelayMs, 250);
+    this.lock = new InterprocessLock(path.join(this.stateDir, 'mutation.lock'), {
+      timeoutMs: positiveInt(opts.lockTimeoutMs, 15_000),
+      staleMs: positiveInt(opts.lockStaleMs, 30_000),
+    });
     this.log = typeof opts.log === 'function' ? opts.log : null;
     this.#server = null; // cached ping result once a compatible server answered
   }
@@ -375,13 +602,59 @@ export class LifecycleCoordinator {
     } catch {}
   }
 
+  // --- ledger (cross-process requestKey idempotency) -------------------------
+
+  /**
+   * SYNCHRONOUS requestKey ledger claim — runs BEFORE any await, so two
+   * concurrent deliveries of one requestKey in this process can never both
+   * pass: the first claims the in-memory slot, the second finds it. Also
+   * consults the persisted host registry (another process's completed
+   * deliveries). Returns:
+   *   {replay} — a duplicate delivery; await the replayed envelope
+   *   {slot}   — this delivery owns the requestKey; set slot.promise
+   *   {refusal} — the ledger is corrupt; idempotency is unverifiable, and
+   *              unknown idempotency state must not become a mutation
+   */
+  #claimLedger(op, requestKey) {
+    if (requestKey === undefined) return {};
+    const prior = this.domain.requests.get(requestKey);
+    if (prior) {
+      if (prior.state === 'completed') return { replay: Promise.resolve({ ...prior.envelope, replayed: true }) };
+      return { replay: prior.promise.then((env) => ({ ...env, replayed: true })) };
+    }
+    const persisted = readRequests(this.stateDir);
+    if (!persisted.ok) {
+      return {
+        refusal: refused(op, requestKey, 'occupancy_unknown',
+          `cannot verify requestKey delivery (${persisted.reason}); refusing rather than risk a duplicate mutation`),
+      };
+    }
+    const hit = persisted.requests.find((e) => e.requestKey === requestKey);
+    if (hit) return { replay: Promise.resolve({ ...hit.envelope, replayed: true }) };
+    const slot = { state: 'in_flight', promise: null };
+    this.domain.requests.set(requestKey, slot);
+    return { slot };
+  }
+
+  /** Complete an in-process slot (the persisted copy was written under the lock). */
+  #settleSlot(requestKey, slot, promise) {
+    if (requestKey === undefined || !slot) return;
+    slot.promise = promise;
+    promise.then(
+      (env) => this.domain.requests.set(requestKey, { state: 'completed', envelope: env }),
+      () => this.domain.requests.delete(requestKey), // an internal throw: the key may be retried
+    );
+  }
+
   // --- start ---------------------------------------------------------------
 
   /**
    * Start the exact conversation `conversationKey` as agent `kind` in `cwd`.
    * Idempotent per requestKey: repeated delivery replays the recorded
    * envelope and never creates extra tabs/panes. Refuses when the
-   * conversation is already running or occupancy cannot be inspected.
+   * conversation is already running (discovered via the persisted host
+   * registry + live probes of the recorded session) or occupancy cannot be
+   * inspected.
    */
   async start(params = {}) {
     const v = validateStartParams(params);
@@ -395,82 +668,116 @@ export class LifecycleCoordinator {
       return unsupported('lifecycle.start', requestKey, caps.start.reason);
     }
 
+    // Ledger FIRST — a SYNCHRONOUS claim before any mutable lookup, so
+    // concurrent duplicate delivery of one requestKey cannot double-run.
+    const claim = this.#claimLedger('lifecycle.start', requestKey);
+    if (claim.refusal) return claim.refusal;
+    if (claim.replay) return claim.replay;
+
     const domain = this.domain;
-    if (requestKey !== undefined) {
-      const prior = domain.requests.get(requestKey);
-      if (prior) {
-        // Repeated delivery: replay the recorded outcome, never a second tab.
-        if (prior.state === 'completed') return { ...prior.envelope, replayed: true };
-        return prior.promise.then((env) => ({ ...env, replayed: true }));
-      }
-    }
-    const promise = this.#guarded(() =>
-      conversationLock(domain, conversationKey).runExclusive(() => this.#startLocked(v.value)),
+    const promise = this.#guarded('lifecycle.start', requestKey, (key) =>
+      conversationLock(domain, conversationKey).runExclusive(() => this.#startLocked(key, v.value)),
     );
-    if (requestKey !== undefined) domain.requests.set(requestKey, { state: 'in_flight', promise });
+    this.#settleSlot(requestKey, claim.slot, promise);
     let env;
     try {
       env = await promise;
     } catch (err) {
       env = refused('lifecycle.start', requestKey, 'internal_error', `unexpected internal failure: ${err && err.message}`);
+      if (requestKey !== undefined) this.domain.requests.set(requestKey, { state: 'completed', envelope: env });
     }
-    if (requestKey !== undefined) domain.requests.set(requestKey, { state: 'completed', envelope: env });
     return env;
   }
 
-  async #startLocked({ conversationKey, kind, cwd, label, focus }) {
+  async #startLocked(requestKey, { conversationKey, kind, cwd, label, focus }) {
     // 1. Server gate: a protocol-older server has none of the verified
     //    semantics; say unsupported rather than attempt them.
-    const gate = await this.#serverGate('lifecycle.start');
+    const gate = await this.#serverGate('lifecycle.start', requestKey);
     if (gate) return gate;
 
     const name = agentNameFor(conversationKey);
-    const domain = this.domain;
 
-    // 2. Occupancy inspection BEFORE creating anything.
-    const record = domain.records.get(conversationKey);
-    if (record && record.session !== this.herdr.socketPath) {
-      // Cross-session occupancy cannot be inspected from this socket.
-      // Unknown occupancy is a refusal, not permission.
-      return refused('lifecycle.start', undefined, 'already_running',
-        `conversation is recorded as started on herdr session ${record.session}; ` +
-          'cross-session occupancy cannot be inspected from this session, so this is a refusal',
-        { existing: recordIdentity(record) });
+    // 2. Registry read — whole-host occupancy, cross-process and
+    //    cross-session. Corrupt/unreadable registry = unknown occupancy.
+    const reg = readConversations(this.stateDir);
+    if (!reg.ok) {
+      return refused('lifecycle.start', requestKey, 'occupancy_unknown', `${reg.reason}; unknown occupancy is a refusal`);
     }
+    const conversations = reg.conversations;
+    let record = conversations.get(conversationKey) || null;
+
+    // 3. Cross-session occupancy DISCOVERY: a record on another session's
+    //    socket is probed on that socket — verified alive = already_running;
+    //    verified gone = stale, cleared; unreachable = unverifiable = refusal.
+    if (record && record.session !== this.herdr.socketPath) {
+      const probeApi = new HerdrApi({ socketPath: record.session, requestTimeoutMs: Math.min(this.herdr.requestTimeoutMs, 5000) });
+      const probe = await probeApi.agentList();
+      if (!probe.ok) {
+        return refused('lifecycle.start', requestKey, 'already_running',
+          `conversation is recorded as started on herdr session ${record.session}, which cannot be reached to verify it stopped ` +
+            `(${probe.error.code}); unverifiable occupancy is a refusal`,
+          { existing: recordIdentity(record) });
+      }
+      const validated = validatedAgentList(probe.result);
+      if (!validated.ok) {
+        return refused('lifecycle.start', requestKey, 'already_running',
+          `conversation is recorded as started on herdr session ${record.session}, whose occupancy reply was malformed ` +
+            `(${validated.reason}); unverifiable occupancy is a refusal`,
+          { existing: recordIdentity(record) });
+      }
+      const live = validated.agents.find((a) => a.name === record.name);
+      if (live) {
+        return refused('lifecycle.start', requestKey, 'already_running',
+          `an agent for this conversation identity is live on herdr session ${record.session} (verified by probing it)`,
+          { existing: recordIdentity(record) });
+      }
+      // Recorded agent is gone from its session: stale, clear it.
+      conversations.delete(conversationKey);
+      record = null;
+    }
+
+    // 4. Same-session occupancy inspection BEFORE creating anything.
     const list = await this.herdr.agentList();
     if (!list.ok) {
-      return refused('lifecycle.start', undefined, 'occupancy_unknown',
+      return refused('lifecycle.start', requestKey, 'occupancy_unknown',
         `cannot inspect registered processes (agent.list: ${list.error.code}: ${list.error.message}); unknown occupancy is a refusal`);
     }
-    const agents = (list.result && Array.isArray(list.result.agents) && list.result.agents) || [];
-    const live = agents.find((a) => a && typeof a === 'object' && a.name === name);
+    const sameSession = validatedAgentList(list.result);
+    if (!sameSession.ok) {
+      // A malformed occupancy reply is NOT "no agents" — refuse.
+      return refused('lifecycle.start', requestKey, 'occupancy_unknown',
+        `cannot trust the occupancy inspection (${sameSession.reason}); unknown occupancy is a refusal`);
+    }
+    const live = sameSession.agents.find((a) => a.name === name);
     if (live) {
       // Adopt the live identity so later ops (status/forceClose) target it.
-      domain.records.set(conversationKey, recordFromAgent(conversationKey, live, this.herdr.socketPath, { adopted: true }));
-      return refused('lifecycle.start', undefined, 'already_running',
+      const adopted = recordFromAgent(conversationKey, live, this.herdr.socketPath, { adopted: true });
+      conversations.set(conversationKey, adopted);
+      writeConversations(this.stateDir, conversations);
+      return refused('lifecycle.start', requestKey, 'already_running',
         'an agent for this conversation identity is already registered in this herdr session',
-        { existing: recordIdentity(domain.records.get(conversationKey)) });
+        { existing: recordIdentity(adopted) });
     }
-    if (record) domain.records.delete(conversationKey); // recorded agent is gone from this session: stale
+    if (record) conversations.delete(conversationKey); // recorded agent is gone from this session: stale
 
-    // 3. Create the destination tab and start the agent in it.
+    // 5. Create the destination tab and start the agent in it.
     const tab = await this.herdr.tabCreate({
       cwd,
       ...(label !== undefined && { label }),
       ...(focus !== undefined && { focus }),
     });
     if (!tab.ok) {
-      return refused('lifecycle.start', undefined, 'herdr_rejected', `tab.create failed (${tab.error.code}): ${tab.error.message}`);
+      return refused('lifecycle.start', requestKey, 'herdr_rejected', `tab.create failed (${tab.error.code}): ${tab.error.message}`);
     }
     const tabInfo = tab.result && tab.result.tab;
     const rootPane = tab.result && tab.result.root_pane;
     if (!tabInfo || typeof tabInfo.tab_id !== 'string' || !rootPane || typeof rootPane.pane_id !== 'string') {
-      return refused('lifecycle.start', undefined, 'herdr_rejected',
+      return refused('lifecycle.start', requestKey, 'herdr_rejected',
         'tab.create result lacked the correlated {tab,root_pane} identity (wire drift); refusing without a start');
     }
     this.#wire('lifecycle.tab_created', { tabId: tabInfo.tab_id, paneId: rootPane.pane_id });
 
-    // 4. agent.start: a fresh pane can answer agent_pane_busy until its
+    // 6. agent.start: a fresh pane can answer agent_pane_busy until its
     //    shell reaches the prompt (verified live on 0.9.1) — bounded retry.
     const deadline = Date.now() + this.startShellWaitMs;
     for (;;) {
@@ -479,7 +786,7 @@ export class LifecycleCoordinator {
         const agent = st.result && st.result.agent;
         if (!agent || typeof agent.pane_id !== 'string' || typeof agent.terminal_id !== 'string') {
           const cleanup = await this.#cleanupTab(tabInfo.tab_id);
-          return refused('lifecycle.start', undefined, 'herdr_rejected',
+          return refused('lifecycle.start', requestKey, 'herdr_rejected',
             'agent_started result lacked the correlated agent identity (pane_id/terminal_id); the created tab was closed',
             { cleanup });
         }
@@ -494,9 +801,10 @@ export class LifecycleCoordinator {
           startedAt: isoNow(),
           launchPending: !!agent.launch_pending,
         };
-        domain.records.set(conversationKey, rec);
+        conversations.set(conversationKey, rec);
+        writeConversations(this.stateDir, conversations);
         this.#wire('lifecycle.started', { conversationKey, paneId: rec.paneId, terminalId: rec.terminalId });
-        return envelope('lifecycle.start', undefined, 'completed', {
+        return envelope('lifecycle.start', requestKey, 'completed', {
           result: {
             conversation: recordIdentity(rec),
             launchPending: rec.launchPending,
@@ -506,12 +814,12 @@ export class LifecycleCoordinator {
       }
       if (st.error.code !== 'agent_pane_busy') {
         const cleanup = await this.#cleanupTab(tabInfo.tab_id);
-        return refused('lifecycle.start', undefined, 'herdr_rejected',
+        return refused('lifecycle.start', requestKey, 'herdr_rejected',
           `agent.start failed (${st.error.code}): ${st.error.message}`, { cleanup });
       }
       if (Date.now() >= deadline) {
         const cleanup = await this.#cleanupTab(tabInfo.tab_id);
-        return refused('lifecycle.start', undefined, 'start_failed',
+        return refused('lifecycle.start', requestKey, 'start_failed',
           `pane did not reach its interactive shell prompt within ${this.startShellWaitMs}ms (agent_pane_busy)`,
           { cleanup });
       }
@@ -567,14 +875,21 @@ export class LifecycleCoordinator {
   }
 
   async #resolveKind(conversationKey) {
-    const rec = this.domain.records.get(conversationKey);
+    const rec = this.#registryRecord(conversationKey);
     if (rec && rec.kind) return rec.kind;
     const name = agentNameFor(conversationKey);
     const list = await this.herdr.agentList();
     if (!list.ok) return null;
-    const agents = (list.result && Array.isArray(list.result.agents) && list.result.agents) || [];
-    const live = agents.find((a) => a && typeof a === 'object' && a.name === name);
+    const validated = validatedAgentList(list.result);
+    if (!validated.ok) return null;
+    const live = validated.agents.find((a) => a.name === name);
     return (live && typeof live.agent === 'string' && live.agent) || null;
+  }
+
+  #registryRecord(conversationKey) {
+    const reg = readConversations(this.stateDir);
+    if (!reg.ok) return null;
+    return reg.conversations.get(conversationKey) || null;
   }
 
   // --- status ----------------------------------------------------------------
@@ -590,7 +905,11 @@ export class LifecycleCoordinator {
       return refused('lifecycle.status', params.requestKey, 'invalid_params', 'conversationKey is required');
     }
     const name = agentNameFor(conversationKey);
-    const record = this.domain.records.get(conversationKey);
+    const reg = readConversations(this.stateDir);
+    if (!reg.ok) {
+      return unknownStatus(conversationKey, `${reg.reason}; occupancy cannot be trusted`);
+    }
+    const record = reg.conversations.get(conversationKey) || null;
     const list = await this.herdr.agentList();
     if (!list.ok) {
       return envelope('lifecycle.status', params.requestKey, 'completed', {
@@ -601,10 +920,14 @@ export class LifecycleCoordinator {
         },
       });
     }
-    const agents = (list.result && Array.isArray(list.result.agents) && list.result.agents) || [];
+    const validated = validatedAgentList(list.result);
+    if (!validated.ok) {
+      // Malformed occupancy reply: never invent a state from it.
+      return unknownStatus(conversationKey, `occupancy inspection untrustworthy (${validated.reason})`);
+    }
     const live =
-      agents.find((a) => a && typeof a === 'object' && a.name === name) ||
-      (record ? agents.find((a) => a && typeof a === 'object' && a.pane_id === record.paneId) : undefined);
+      validated.agents.find((a) => a.name === name) ||
+      (record ? validated.agents.find((a) => a.pane_id === record.paneId) : undefined);
     if (live) {
       // Running: herdr holds a live registration. Enrich with process
       // inspection when it answers (best-effort, never fabricated).
@@ -637,6 +960,46 @@ export class LifecycleCoordinator {
           conversationKey,
           state: 'stopped',
           evidence: { basis: 'no agent registered under the conversation identity (herdr agent.list)' },
+        },
+      });
+    }
+    if (record.session !== this.herdr.socketPath) {
+      // The record belongs to another session: discover there, do not guess.
+      const probeApi = new HerdrApi({ socketPath: record.session, requestTimeoutMs: Math.min(this.herdr.requestTimeoutMs, 5000) });
+      const probe = await probeApi.agentList();
+      if (!probe.ok) {
+        return unknownStatus(conversationKey,
+          `recorded on herdr session ${record.session}, which cannot be reached to verify state (${probe.error.code})`);
+      }
+      const probeValidated = validatedAgentList(probe.result);
+      if (!probeValidated.ok) {
+        return unknownStatus(conversationKey,
+          `recorded on herdr session ${record.session}, whose occupancy reply was malformed (${probeValidated.reason})`);
+      }
+      const liveThere = probeValidated.agents.find((a) => a.name === record.name);
+      if (liveThere) {
+        return envelope('lifecycle.status', params.requestKey, 'completed', {
+          result: {
+            conversationKey,
+            state: 'running',
+            agent: {
+              name: liveThere.name,
+              paneId: liveThere.pane_id,
+              terminalId: liveThere.terminal_id,
+              tabId: liveThere.tab_id,
+              kind: typeof liveThere.agent === 'string' ? liveThere.agent : null,
+              agentStatus: liveThere.agent_status,
+            },
+            evidence: { registration: `herdr agent.list on session ${record.session} (cross-session discovery)` },
+          },
+        });
+      }
+      return envelope('lifecycle.status', params.requestKey, 'completed', {
+        result: {
+          conversationKey,
+          state: 'unknown',
+          reason: `recorded on herdr session ${record.session} where the agent is no longer registered; ` +
+            'stale-registry reclamation happens on the next start mutation, not on a read',
         },
       });
     }
@@ -678,77 +1041,96 @@ export class LifecycleCoordinator {
 
   /**
    * Explicitly DESTRUCTIVE close of exactly one agent pane, identified either
-   * by a managed conversationKey (its record) or an explicit
-   * {paneId, terminalId} pair. Re-resolves the pane identity immediately
-   * before dispatch and refuses on mismatch — pane ids are opaque and
-   * reusable, and herdr 0.9.1 has no atomic expected-identity close, so the
-   * envelope states the guard that was applied.
+   * by a managed conversationKey (its registry record) or an explicit
+   * {paneId, terminalId} pair. The requestKey ledger is consulted BEFORE the
+   * mutable record lookup, so a replay of a completed close returns the
+   * recorded envelope (never a fresh not_managed). Re-resolves the pane
+   * identity immediately before dispatch and refuses on mismatch — pane ids
+   * are opaque and reusable, and herdr 0.9.1 has no atomic expected-identity
+   * close, so the envelope states the guard that was applied.
    */
   async forceClose(params = {}) {
-    let target;
-    if (isStr(params.conversationKey)) {
-      const rec = this.domain.records.get(params.conversationKey);
-      if (!rec) {
-        return refused('lifecycle.forceClose', params.requestKey, 'not_managed',
-          'no coordinator record for this conversation; refusing to close an unverified pane ' +
-            '(an explicit {paneId, terminalId} pair can be closed after re-resolution)');
-      }
-      target = { conversationKey: params.conversationKey, paneId: rec.paneId, terminalId: rec.terminalId, record: rec };
-    } else if (isStr(params.paneId) && isStr(params.terminalId)) {
-      target = { paneId: params.paneId, terminalId: params.terminalId };
-    } else {
-      return refused('lifecycle.forceClose', params.requestKey, 'invalid_params',
-        'provide conversationKey (managed) or an explicit {paneId, terminalId} pair');
+    const requestKey = params.requestKey;
+    if (requestKey !== undefined && !isStr(requestKey, 256)) {
+      return refused('lifecycle.forceClose', requestKey, 'invalid_params', 'requestKey must be a non-empty string <=256 chars');
+    }
+
+    // Ledger FIRST — a SYNCHRONOUS claim BEFORE the mutable record lookup
+    // (review blocker 3): a completed close replays its recorded envelope
+    // even though the record it consumed is already dropped.
+    const claim = this.#claimLedger('lifecycle.forceClose', requestKey);
+    if (claim.refusal) return claim.refusal;
+    if (claim.replay) return claim.replay;
+
+    // Target resolution (may itself refuse, e.g. not_managed).
+    const target = this.#resolveForceCloseTarget(params);
+    if (target.error) {
+      const env = refused('lifecycle.forceClose', requestKey, target.code, target.error);
+      if (requestKey !== undefined && claim.slot) this.#settleSlot(requestKey, claim.slot, Promise.resolve(env));
+      return env;
     }
 
     const domain = this.domain;
-    const requestKey = params.requestKey;
-    if (requestKey !== undefined) {
-      const prior = domain.requests.get(requestKey);
-      if (prior) {
-        if (prior.state === 'completed') return { ...prior.envelope, replayed: true };
-        return prior.promise.then((env) => ({ ...env, replayed: true }));
-      }
-    }
-    const promise = this.#guarded(() => {
-      const body = () => this.#forceCloseLocked(target);
-      return target.conversationKey !== undefined
-        ? conversationLock(domain, target.conversationKey).runExclusive(body)
+    const promise = this.#guarded('lifecycle.forceClose', requestKey, (key) => {
+      const body = () => this.#forceCloseLocked(key, target.value);
+      return target.value.conversationKey !== undefined
+        ? conversationLock(domain, target.value.conversationKey).runExclusive(body)
         : body();
     });
-    if (requestKey !== undefined) domain.requests.set(requestKey, { state: 'in_flight', promise });
+    this.#settleSlot(requestKey, claim.slot, promise);
     let env;
     try {
       env = await promise;
     } catch (err) {
       env = refused('lifecycle.forceClose', requestKey, 'internal_error', `unexpected internal failure: ${err && err.message}`);
+      if (requestKey !== undefined) this.domain.requests.set(requestKey, { state: 'completed', envelope: env });
     }
-    if (requestKey !== undefined) domain.requests.set(requestKey, { state: 'completed', envelope: env });
     return env;
   }
 
-  async #forceCloseLocked(target) {
+  #resolveForceCloseTarget(params) {
+    if (isStr(params.conversationKey)) {
+      const rec = this.#registryRecord(params.conversationKey);
+      if (!rec) {
+        return {
+          code: 'not_managed',
+          error: 'no coordinator record for this conversation; refusing to close an unverified pane ' +
+            '(an explicit {paneId, terminalId} pair can be closed after re-resolution)',
+        };
+      }
+      return { value: { conversationKey: params.conversationKey, paneId: rec.paneId, terminalId: rec.terminalId, record: rec } };
+    }
+    if (isStr(params.paneId) && isStr(params.terminalId)) {
+      return { value: { paneId: params.paneId, terminalId: params.terminalId } };
+    }
+    return {
+      code: 'invalid_params',
+      error: 'provide conversationKey (managed) or an explicit {paneId, terminalId} pair',
+    };
+  }
+
+  async #forceCloseLocked(requestKey, target) {
     // Re-resolve from stable identity immediately before dispatch.
     const pane = await this.herdr.paneGet(target.paneId);
     if (!pane.ok) {
       if (pane.error.code === 'pane_not_found') {
         this.#dropRecord(target);
-        return refused('lifecycle.forceClose', undefined, 'target_gone',
+        return refused('lifecycle.forceClose', requestKey, 'target_gone',
           'the pane no longer exists (pane.get: pane_not_found); nothing was closed',
           { paneId: target.paneId });
       }
-      return refused('lifecycle.forceClose', undefined, 'inspection_failed',
+      return refused('lifecycle.forceClose', requestKey, 'inspection_failed',
         `cannot re-resolve the pane before dispatch (pane.get: ${pane.error.code}): ${pane.error.message}; refusing to close unverified`);
     }
     const p = pane.result && pane.result.pane;
     if (!p || typeof p !== 'object' || typeof p.terminal_id !== 'string') {
-      return refused('lifecycle.forceClose', undefined, 'inspection_failed',
+      return refused('lifecycle.forceClose', requestKey, 'inspection_failed',
         'pane.get result lacked pane identity (wire drift); refusing to close unverified');
     }
     if (p.terminal_id !== target.terminalId) {
       // The pane id was reused by another terminal: close nothing.
       this.#dropRecord(target);
-      return refused('lifecycle.forceClose', undefined, 'identity_mismatch',
+      return refused('lifecycle.forceClose', requestKey, 'identity_mismatch',
         `pane ${target.paneId} now belongs to terminal ${p.terminal_id}, not the recorded ${target.terminalId}; refused so the wrong pane is never closed`,
         { observedTerminalId: p.terminal_id });
     }
@@ -756,16 +1138,16 @@ export class LifecycleCoordinator {
     if (!close.ok) {
       if (close.error.code === 'pane_not_found') {
         this.#dropRecord(target);
-        return refused('lifecycle.forceClose', undefined, 'target_gone',
+        return refused('lifecycle.forceClose', requestKey, 'target_gone',
           'the pane disappeared between re-resolution and close; nothing was closed by us',
           { paneId: target.paneId });
       }
-      return refused('lifecycle.forceClose', undefined, 'herdr_rejected',
+      return refused('lifecycle.forceClose', requestKey, 'herdr_rejected',
         `pane.close failed (${close.error.code}): ${close.error.message}`);
     }
     this.#dropRecord(target);
     this.#wire('lifecycle.force_closed', { paneId: target.paneId, terminalId: target.terminalId });
-    return envelope('lifecycle.forceClose', undefined, 'completed', {
+    return envelope('lifecycle.forceClose', requestKey, 'completed', {
       result: {
         closed: true,
         paneId: target.paneId,
@@ -777,33 +1159,78 @@ export class LifecycleCoordinator {
   }
 
   #dropRecord(target) {
-    if (target.conversationKey !== undefined && this.domain.records.get(target.conversationKey) === target.record) {
-      this.domain.records.delete(target.conversationKey);
+    if (target.conversationKey === undefined) return;
+    // Only remove OUR conversation's record; keep the rest intact.
+    const reg = readConversations(this.stateDir);
+    if (!reg.ok) return;
+    const existing = reg.conversations.get(target.conversationKey);
+    if (existing && target.record && existing.paneId === target.record.paneId && existing.terminalId === target.record.terminalId) {
+      reg.conversations.delete(target.conversationKey);
+      writeConversations(this.stateDir, reg.conversations);
     }
   }
 
   // --- shared plumbing ---------------------------------------------------------
 
-  #guarded(fn) {
-    // Host-domain single writer: every lifecycle mutation (start, forceClose)
-    // passes through the whole-host guard, not just this session's.
-    return this.domain.guard.runExclusive(fn);
+  /**
+   * Whole-host mutation guard: in-process domain mutex, then the
+   * INTERPROCESS lock file (two host-package processes cannot both mutate),
+   * then the op. The op + requestKey are threaded through the closure so
+   * completed envelopes carry them (review blocker 3).
+   */
+  #guarded(op, requestKey, fn) {
+    // The op + requestKey are bound in the CLOSURE (never instance state:
+    // a second queued operation on the same coordinator must not clobber
+    // the first's key while it waits for the guard).
+    return this.domain.guard.runExclusive(() =>
+      withHostLock(this.lock, async () => {
+        // Under the interprocess lock: a duplicate of this requestKey may
+        // have COMPLETED in another process while we waited. Replay it.
+        if (requestKey !== undefined) {
+          const persisted = readRequests(this.stateDir);
+          if (persisted.ok) {
+            const hit = persisted.requests.find((e) => e.requestKey === requestKey);
+            if (hit) return { ...hit.envelope, replayed: true };
+          }
+        }
+        const env = await fn(requestKey);
+        // Persist the completed envelope while STILL holding the lock, so
+        // a concurrent process's re-check can never miss it.
+        if (requestKey !== undefined && env && typeof env === 'object') {
+          try {
+            const persisted = readRequests(this.stateDir);
+            if (persisted.ok) {
+              const kept = persisted.requests.filter((e) => e.requestKey !== requestKey);
+              kept.push({ requestKey, envelope: env });
+              writeRequests(this.stateDir, kept);
+            }
+          } catch {} // a failed persist degrades replay, never correctness
+        }
+        return env;
+      }).then((out) => {
+        if (out && out.__lockError) {
+          const code = out.__lockError.includes('timed out') ? 'lock_timeout' : 'lock_failed';
+          return refused(op, requestKey, code, out.__lockError);
+        }
+        return out;
+      }),
+    );
   }
 
   /**
    * Returns an envelope to short-circuit with, or null to proceed.
    * Caches the ping result once a protocol-compatible server answered.
    */
-  async #serverGate(op) {
+  async #serverGate(op, requestKey) {
     if (this.#server) return null;
     const ping = await this.herdr.ping();
     if (!ping.ok) {
-      return refused(op, undefined, 'occupancy_unknown',
+      return refused(op, requestKey, 'occupancy_unknown',
         `herdr unreachable (ping: ${ping.error.code}: ${ping.error.message}); unknown occupancy is a refusal`);
     }
     const proto = ping.result && ping.result.protocol;
     if (typeof proto !== 'number' || proto < MIN_HERDR_PROTOCOL) {
-      return unsupported(op, undefined,
+      return unsupported(op, requestKey,
         `herdr server protocol ${String(proto)} predates the verified protocol ${MIN_HERDR_PROTOCOL} semantics; lifecycle operations are unsupported on it`);
     }
     this.#server = ping.result;
