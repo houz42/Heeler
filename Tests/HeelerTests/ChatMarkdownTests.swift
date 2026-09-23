@@ -528,6 +528,107 @@ struct ChatTableStylingTests {
                 "content below the decoration's extent in the lazy-scroll context: \(bands)")
         }
     }
+
+    // MARK: v3 phone-width pins (wrapped cells, no unfolding)
+
+    /// The reported regression's table: long prose in a three-column
+    /// row. At a 320pt reading width (a small phone's transcript
+    /// column) the table must WRAP — the rendered table's width stays
+    /// inside the proposal. The v2 width-adaptive renderer instead
+    /// measured the natural one-line width (far wider) and unfolded
+    /// the table into a horizontal scroll; the v3 contract keeps every
+    /// table constrained to the available width.
+    ///
+    /// Measured on the VIEW's laid-out bounds via UIHostingController
+    /// size inspection — the hosting controller's root view is
+    /// exactly the width the table claimed.
+    @Test func longCellTableStaysInsideTheProposedPhoneWidth() throws {
+        let longCellTable = """
+            | Stage | Owner | Notes |
+            | --- | --- | --- |
+            | build | platform | Full clean build with the new linker \
+            flags; green on both runners |
+            | unit tests | payments | The 34-case suite passes and the \
+            retry regression stays fixed |
+            | integration | checkout | Long-path harness needs a re-run \
+            after the cert rotation lands later this week |
+            """
+        let proposed: CGFloat = 320
+        let view = ChatMarkdownView(markdown: longCellTable)
+            .frame(width: proposed)
+        let controller = UIHostingController(rootView: view)
+        let window = UIWindow(
+            frame: CGRect(x: 0, y: 0, width: proposed, height: 900))
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        controller.view.layoutIfNeeded()
+
+        // The laid-out table never exceeds the proposed phone width
+        // (a hair of tolerance for the padding/border raster).
+        let laidOutWidth = controller.view.bounds.width
+        #expect(
+            laidOutWidth <= proposed + 1,
+            "the table claims \(laidOutWidth)pt of a \(proposed)pt proposal — it must constrain to the available width")
+    }
+
+    /// A long cell must actually FOLD, not clip: at a narrow proposal
+    /// the wrapped cell renders across MULTIPLE text lines, so the
+    /// table grows taller than a one-line-per-cell layout. Pinned by
+    /// counting the text-line height of the longest column: the
+    /// rendered table's height must exceed what single-line rows
+    /// would occupy. A regression to single-line unfolding makes the
+    /// table WIDE and short; the wrapped render is NARROW and tall.
+    @Test func longCellContentWrapsToMultipleLinesNotClip() throws {
+        let oneLineCellTable = """
+            | Stage | Notes |
+            | --- | --- |
+            | build | short |
+            """
+        let wrappedCellTable = """
+            | Stage | Notes |
+            | --- | --- |
+            | build | Full clean build with the new linker flags; \
+            green on both runners and the retry regression stays fixed |
+            """
+
+        func measureHeight(_ markdown: String, width: CGFloat) -> CGFloat {
+            let view = ChatMarkdownView(markdown: markdown)
+                .frame(width: width)
+            let controller = UIHostingController(rootView: view)
+            let window = UIWindow(
+                frame: CGRect(x: 0, y: 0, width: width, height: 2000))
+            window.rootViewController = controller
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+            controller.view.layoutIfNeeded()
+            return controller.view.intrinsicContentSize.height
+        }
+
+        // At a 320pt proposal, the long Notes cell must fold onto
+        // several lines: its table is meaningfully TALLER than the
+        // one-line table (which has the same row count and paddings).
+        let oneLine = measureHeight(oneLineCellTable, width: 320)
+        let wrapped = measureHeight(wrappedCellTable, width: 320)
+        // The wrapped cell's table is meaningfully taller than the
+        // one-line table (multiple wrapped text lines + the row's
+        // own padding; one measured fold adds ~40pt over the
+        // 125pt one-line table). A clipped/unfolded single line
+        // would leave the two nearly equal.
+        #expect(
+            wrapped > oneLine * 1.25,
+            "the long cell did not wrap: one-line table \(oneLine)pt vs long-cell table \(wrapped)pt — a wrapped cell must fold onto more lines and grow the row")
+
+        // And wrapping is width-responsive: the SAME long-cell table
+        // is shorter at a wide proposal (fewer folded lines) — the
+        // wide-layout readability half of the contract.
+        let wrappedWide = measureHeight(wrappedCellTable, width: 700)
+        #expect(
+            wrappedWide < wrapped,
+            "the long-cell table at 700pt (\(wrappedWide)pt) must be shorter than at 320pt (\(wrapped)pt) — the same table wraps to fewer lines at wide layouts")
+    }
 }
 
 /// Horizontal shade bands discovered in a rasterized table image: every

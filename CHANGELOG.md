@@ -52,6 +52,14 @@ Entries reference the issue that motivated them.
 
 ### Fixed
 
+- Chat tables fit the phone's reading width again: every markdown
+  table is constrained to the available transcript width and its
+  cells wrap — long cell text folds onto more lines and rows grow
+  to keep the content inside its borders — instead of switching to
+  a horizontal scroll the moment any cell ran long (which left the
+  table's content hidden right of the viewport). Wide layouts render
+  the same tables wrapped at their larger width.
+
 - Agents tree follows the herdr window's pane order: workspaces, tabs,
   and panes read the way the user arranged them (the snapshot's
   collection order, and pane geometry within a tab), instead of
