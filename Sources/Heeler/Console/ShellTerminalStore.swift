@@ -324,6 +324,10 @@ final class ShellTerminalStore {
     /// device whose Ghostty surface never reports a valid grid still opens
     /// its PTY; the first genuine size report corrects it in-band).
     func terminalViewDidAppear() {
+        #if DEBUG
+        terminal.restorationTrace.emitDiagnostic(
+            "shell_arm_hop lifecycle=\(lifecycleState) on_stage=\(isOnStage())")
+        #endif
         guard lifecycleState == .active, isOnStage() else { return }
         terminal.terminalViewDidAppear()
     }

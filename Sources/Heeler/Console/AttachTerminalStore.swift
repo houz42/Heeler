@@ -99,6 +99,20 @@ struct TerminalSurfaceID: Hashable, Sendable {
     init() {}
 }
 
+extension AttachTerminalStore {
+    /// DIAGNOSTIC (throwaway, not for commit): a stable status spelling for
+    /// the arm-instrumentation lines.
+    nonisolated static func diagnosticStatusName(_ status: AttachTerminalStore.Status) -> String {
+        switch status {
+        case .waitingForSize: "waitingForSize"
+        case .connecting: "connecting"
+        case .live: "live"
+        case .ended: "ended"
+        case .stopped: "stopped"
+        }
+    }
+}
+
 /// Reconciles the two independently scheduled signals that identify a
 /// foreground recovery's Transport. Readiness is projected before terminal
 /// waiters resume, so either signal may arrive first. A decision is made only
@@ -311,11 +325,30 @@ final class AttachTerminalStore {
     /// `viewDidResize` rides the live channel as a window-change exactly
     /// like any later resize.
     func terminalViewDidAppear() {
+        #if DEBUG
+        if status == .waitingForSize, sizeFallbackTask == nil {
+            restorationTrace.emitDiagnostic("arm_enter status=waitingForSize scheduling=1")
+        } else {
+            restorationTrace.emitDiagnostic(
+                "arm_enter status=\(Self.diagnosticStatusName(status)) "
+                + "task_armed=\(sizeFallbackTask != nil) guarded_out=1")
+        }
+        #endif
         guard status == .waitingForSize, sizeFallbackTask == nil else { return }
         sizeFallbackTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: Self.sizeReportGrace)
+            if Task.isCancelled, let self {
+                #if DEBUG
+                self.restorationTrace.emitDiagnostic("grace_cancelled_before_wake")
+                #endif
+            }
             guard !Task.isCancelled, let self else { return }
             self.sizeFallbackTask = nil
+            #if DEBUG
+            self.restorationTrace.emitDiagnostic(
+                "grace_fired status=\(Self.diagnosticStatusName(self.status)) "
+                + "run_task=\(self.runTask != nil)")
+            #endif
             guard self.status == .waitingForSize, self.runTask == nil else { return }
             #if DEBUG
             self.restorationTrace.emitFallbackStart()
@@ -339,6 +372,10 @@ final class AttachTerminalStore {
             generation: transportGeneration)
         #endif
         guard cols > 0, rows > 0, cols != self.cols || rows != self.rows else { return }
+        if sizeFallbackTask != nil {
+            restorationTrace.emitDiagnostic(
+                "arm_cancelled site=viewDidResize cols=\(cols) rows=\(rows)")
+        }
         sizeFallbackTask?.cancel()
         sizeFallbackTask = nil
         self.cols = cols
@@ -381,6 +418,9 @@ final class AttachTerminalStore {
 
     /// Reattaches after the session ended remotely.
     func retry() {
+        if sizeFallbackTask != nil {
+            restorationTrace.emitDiagnostic("arm_cancelled site=retry")
+        }
         sizeFallbackTask?.cancel()
         sizeFallbackTask = nil
         guard case .ended = status, runTask == nil else { return }
@@ -403,6 +443,7 @@ final class AttachTerminalStore {
             await session.end()
         }
         if let task = sizeFallbackTask {
+            restorationTrace.emitDiagnostic("arm_cancelled site=stop")
             task.cancel()
             sizeFallbackTask = nil
         }

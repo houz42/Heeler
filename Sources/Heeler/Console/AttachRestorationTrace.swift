@@ -126,6 +126,24 @@ final class AttachRestorationTrace {
             "trace_id=%{public}s", traceID)
     }
 
+    /// DIAGNOSTIC (throwaway, not for commit): a free-form line with the
+    /// fallback's arm lifecycle — entered, guarded out (with the status at
+    /// that moment), scheduled, fired, or cancelled (with the cancelling
+    /// site). Same container file as the other diagnostics.
+    func emitDiagnostic(_ note: String) {
+        let line = "[attach-trace] \(note) trace=\(traceID)\n"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("attach-trace.log")
+        if let data = line.data(using: .utf8) {
+            if let h = try? FileHandle(forWritingTo: url) {
+                h.seekToEndOfFile(); h.write(data); try? h.close()
+            } else {
+                try? data.write(to: url)
+            }
+        }
+        os_signpost(.event, log: Self.log, name: "attach_diagnostic", signpostID: signpostID,
+            "%{public}s trace_id=%{public}s", note, traceID)
+    }
+
     var recordedPhases: Set<Phase> { state.emittedPhases }
 }
 

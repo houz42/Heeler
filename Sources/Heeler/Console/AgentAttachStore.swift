@@ -175,6 +175,10 @@ final class AgentAttachStore {
     /// reports a valid grid still opens its PTY; the first real size
     /// report corrects it in-band).
     func terminalViewDidAppear() {
+        #if DEBUG
+        terminal.restorationTrace.emitDiagnostic(
+            "surface_attach_arm_hop status=\(AttachTerminalStore.diagnosticStatusName(terminal.status))")
+        #endif
         terminal.terminalViewDidAppear()
     }
 
@@ -511,6 +515,10 @@ final class AgentAttachStore {
     /// and hold the Host's only terminal channel, leaving the screen the user
     /// is actually looking at queued behind it on "Connecting…" forever.
     func rejoin() {
+        #if DEBUG
+        terminal.restorationTrace.emitDiagnostic(
+            "attach_rejoin lifecycle=\(lifecycleState) on_stage=\(isOnStage())")
+        #endif
         guard lifecycleState != .active, isOnStage() else { return }
         activationRecovery.clear()
         let requiresFullReplacement = lifecycleState == .rejoinRequired
@@ -622,6 +630,10 @@ final class AgentAttachStore {
     private func leave(
         preservingOnStageActivationRecovery: Bool
     ) -> Task<Void, Never> {
+        #if DEBUG
+        terminal.restorationTrace.emitDiagnostic(
+            "attach_leave lifecycle=\(lifecycleState) preserving=\(preservingOnStageActivationRecovery)")
+        #endif
         guard lifecycleState != .left else {
             return lifecycleTask ?? Task {}
         }
