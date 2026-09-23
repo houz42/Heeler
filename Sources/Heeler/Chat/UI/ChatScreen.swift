@@ -82,6 +82,14 @@ struct ChatScreen: View {
     /// The chat input's attachment bundle (the + button/paste flow).
     /// Nil keeps the frame exactly as before (previews, unwired hosts).
     var attachments: ChatAttachments? = nil
+    /// The v3 live-work indicator's producer-backed state (the work
+    /// spark at the live edge). Nil = no fresh producer activity
+    /// report — renders NOTHING (no marker, no reserved space).
+    /// `ChatLiveWorkIndicator` owns the state→visibility mapping.
+    var liveWork: ChatLiveWorkState? = nil
+    /// The details line the indicator's tap sheet carries (the
+    /// producer's own status prose, when it has one).
+    var liveWorkDetail: String = ""
 
     @State private var level: DetailLevel
     init(
@@ -112,7 +120,12 @@ struct ChatScreen: View {
         onAskAnswer: ((PendingInteraction, [ChatInteractionAnswerPayload]) async throws -> Void)? = nil,
         onAskCancel: ((PendingInteraction) async throws -> Void)? = nil,
         imageFetcher: ((String) async throws -> Data)? = nil,
-        fetch: RemoteFileFetcher? = nil
+        fetch: RemoteFileFetcher? = nil,
+        /// The v3 live-work spark's producer-backed state. Nil (the
+        /// default) keeps the live edge exactly as before — no
+        /// marker, no reserved space.
+        liveWork: ChatLiveWorkState? = nil,
+        liveWorkDetail: String = ""
     ) {
         self.paneID = paneID
         self.hostID = hostID
@@ -135,6 +148,8 @@ struct ChatScreen: View {
         self.onAskCancel = onAskCancel
         self.imageFetcher = imageFetcher
         self.fetch = fetch
+        self.liveWork = liveWork
+        self.liveWorkDetail = liveWorkDetail
         self._level = State(initialValue: initialLevel)
     }
 
@@ -188,6 +203,13 @@ struct ChatScreen: View {
                                 .padding(.horizontal, 12)
                         }
                         bottomSentinel
+                        // The v3 live-work spark: the transcript's LAST
+                        // row, after the sentinel (so the sentinel stays
+                        // the latest-edge measurement). Renders NOTHING
+                        // while nil/idle — no marker, no reserved space.
+                        ChatLiveWorkIndicator(
+                            state: liveWork,
+                            detail: liveWorkDetail)
                     }
                     .padding(.vertical, 10)
                     // Reading-size applies here: the transcript's reading

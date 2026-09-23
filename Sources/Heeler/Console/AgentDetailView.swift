@@ -258,6 +258,26 @@ struct AgentDetailView: View {
         }
     }
 
+    /// The v3 live-work spark's producer-backed state: the producer's
+    /// own working report (herdr's pane status), 1:1 — NO transport
+    /// inference. `unknown` (or an unrecognized raw value) renders the
+    /// static mark; a nil report (agent not in the snapshot) renders
+    /// nothing.
+    private var liveWorkState: ChatLiveWorkState? {
+        switch console.agents.first(where: { $0.id == agent.id })?.agent.status {
+        case .working: .working
+        case .blocked: .blocked
+        case .done: .completed
+        case .idle: .idle
+        case .unknown: .unknown
+        case nil: nil
+        default:
+            // An unrecognized raw value: herdr's schema is closed but
+            // has no stability guarantee — render the honest unknown.
+            .unknown
+        }
+    }
+
     /// One icon, one tap: on the chat surface it switches to the terminal,
     /// on the terminal surface it switches back to chat. The icon names the
     /// destination, not the current surface.
@@ -519,7 +539,13 @@ struct AgentDetailView: View {
                 fetch: { path in
                     try await console.readRemoteFile(
                         at: path, on: agent.hostID)
-                })
+                },
+                // The v3 live-work spark: driven by the producer's
+                // OWN working report (pane.agent_status_changed
+                // applied to ConsoleAgent.status), never by the
+                // transport phase — connection alone never implies
+                // thinking. Nil (no fresh report) renders nothing.
+                liveWork: liveWorkState)
                 // The honest resolved-ask note (answered elsewhere /
                 // cancelled / expired) now renders IN the transcript
                 // flow as a quiet block (brokerContent.resolvedAsks),

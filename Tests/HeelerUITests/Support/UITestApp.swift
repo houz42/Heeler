@@ -63,6 +63,10 @@ enum UITestApp {
         /// links) — the wrapped-cell table capture surface (v3 table
         /// proofs).
         case chatTables
+        /// The chat surface with the v3 live-work indicator: the state
+        /// control drives Working/Idle/Blocked/Completed/Unknown/No
+        /// report — the state→render mapping capture surface.
+        case chatLiveWork
         /// The Scan-to-Pair sheet, camera-authorized, with the
         /// always-mounted paste entry — the remote-pairing paste path
         /// proof surface.
@@ -85,6 +89,8 @@ enum UITestApp {
                 return ["--demo-screenshots", "--demo-chat-pending-ask"]
             case .chatQACards:
                 return ["--demo-screenshots", "--demo-chat-qa-cards"]
+            case .chatLiveWork:
+                return ["--demo-screenshots", "--demo-chat-live-work"]
             case .chatBubbles:
                 return ["--demo-screenshots", "--demo-chat-bubbles"]
             case .chatTables:
