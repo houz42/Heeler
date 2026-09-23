@@ -423,7 +423,7 @@
                     ],
                     resolvedAsks: [
                         // Answered, multi-question with different answer
-                        // shapes: labels + note, then free text.
+                        // shapes: labels, then free text.
                         ResolvedAsk(
                             id: "demo-qa-answered",
                             questions: [
@@ -435,8 +435,7 @@
                                         .init(
                                             id: "o1",
                                             label: "Validation report"),
-                                    ],
-                                    note: "Include the first ten seconds only."),
+                                    ]),
                                 ResolvedAskQuestion(
                                     id: "q1",
                                     question: "Any custom export options?",
@@ -460,7 +459,7 @@
                             outcome: .answeredRemotely,
                             questionText: "Bump the dependency to v2?"),
                         // Long answer collapsed to ONE ellipsized line;
-                        // tap expands the full text + note.
+                        // tap expands the full text.
                         ResolvedAsk(
                             id: "demo-qa-long",
                             questions: [
@@ -477,8 +476,7 @@
                                         once the error budget is intact, and \
                                         finally make the flag default-on next \
                                         Thursday if nothing regresses.
-                                        """,
-                                    note: "Keep the kill switch documented."),
+                                        """),
                             ],
                             outcome: .youAnswered,
                             questionText: "Summarize the rollout plan for the review."),

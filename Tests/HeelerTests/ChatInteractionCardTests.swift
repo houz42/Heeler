@@ -347,3 +347,99 @@ struct PendingAskQuestionShapeTests {
         #expect(!plain.allowCustom)
     }
 }
+
+// MARK: - The immediate answered flip (accepted submit → answered card)
+
+@Suite("Immediate answered flip (locallyAnswered)")
+struct ChatLocallyAnsweredFlipTests {
+    @Test("an accepted submit builds the answered card from the chosen payloads — immediate flip, no broker refresh")
+    func locallyAnsweredBuildsChosenAnswer() {
+        let interaction = PendingInteraction(
+            id: "ask-1", question: "", options: [],
+            questions: [
+                PendingAskQuestion(
+                    id: "q0", text: "Which checks run?", multi: true,
+                    options: [
+                        .init(id: "o0", label: "Unit suite"),
+                        .init(id: "o1", label: "UI smoke"),
+                        .init(id: "o2", label: "Device build"),
+                    ]),
+                PendingAskQuestion(
+                    id: "q1", text: "Who reviews?", options: [
+                        .init(id: "o0", label: "You"),
+                        .init(id: "o1", label: "Me"),
+                    ]),
+            ])
+        // What the user chose in the card: multi on q0, single on q1.
+        let payloads = [
+            ChatInteractionAnswerPayload(
+                questionId: "q0", optionIds: ["o2", "o0"]),
+            ChatInteractionAnswerPayload(
+                questionId: "q1", optionIds: ["o1"]),
+        ]
+        let ask = ResolvedAsk.locallyAnswered(
+            interaction: interaction, payloads: payloads)
+        #expect(ask.id == "ask-1")
+        #expect(ask.outcome == .youAnswered)
+        #expect(ask.questionText == "Which checks run?")
+        #expect(ask.questions.count == 2)
+        // Producer order on q0 (the payload lists o2 first — the
+        // card's answer must still render o0 then o2).
+        #expect(
+            ask.questions[0].selectedOptions.map(\.label)
+                == ["Unit suite", "Device build"])
+        #expect(
+            ask.questions[1].selectedOptions.map(\.label) == ["Me"])
+    }
+
+    @Test("custom text rides the flip; the optional note never does (removed from the product)")
+    func locallyAnsweredCarriesCustomTextNotNote() {
+        let interaction = PendingInteraction(
+            id: "ask-2", question: "", options: [],
+            questions: [
+                PendingAskQuestion(
+                    id: "q0", text: "Who reviews?", options: [
+                        .init(id: "o0", label: "You"),
+                    ], allowCustom: true),
+            ])
+        let payloads = [
+            ChatInteractionAnswerPayload(
+                questionId: "q0", optionIds: [],
+                customText: "I'll take it after lunch"),
+        ]
+        let ask = ResolvedAsk.locallyAnswered(
+            interaction: interaction, payloads: payloads)
+        #expect(
+            ask.questions[0].customAnswerText == "I'll take it after lunch")
+        #expect(ask.questions[0].selectedOptions.isEmpty)
+        #expect(ask.questions[0].note == nil)
+    }
+
+    @Test("an unanswered question in the accepted payload renders no fabricated pair data")
+    func locallyAnsweredOmitsUnanswered() {
+        let interaction = PendingInteraction(
+            id: "ask-3", question: "", options: [],
+            questions: [
+                PendingAskQuestion(
+                    id: "q0", text: "One?", options: [
+                        .init(id: "o0", label: "Yes"),
+                    ]),
+                PendingAskQuestion(
+                    id: "q1", text: "Two?", options: [
+                        .init(id: "o0", label: "Also yes"),
+                    ]),
+            ])
+        // Only q0 was answered (the card's validation prevents this,
+        // but the factory is honest anyway).
+        let payloads = [
+            ChatInteractionAnswerPayload(
+                questionId: "q0", optionIds: ["o0"]),
+        ]
+        let ask = ResolvedAsk.locallyAnswered(
+            interaction: interaction, payloads: payloads)
+        #expect(
+            ask.questions[0].selectedOptions.map(\.label) == ["Yes"])
+        #expect(ask.questions[1].selectedOptions.isEmpty)
+        #expect(ask.questions[1].customAnswerText == nil)
+    }
+}

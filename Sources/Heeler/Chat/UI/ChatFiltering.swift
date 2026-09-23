@@ -267,6 +267,40 @@ extension ResolvedAsk {
     }
 }
 
+extension ResolvedAsk {
+    /// The IMMEDIATE answered record for an accepted submit: the
+    /// user's JUST-SUBMITTED choices rendered as the Q/A card (Q the
+    /// producer's question, A the chosen labels in producer order /
+    /// the custom text) — the card flips to answered without waiting
+    /// for a broker refresh. Same id as the store's eventual
+    /// authoritative record, so when that lands it replaces this by
+    /// identity (same resolved# row id; SwiftUI updates in place,
+    /// never a double card).
+    static func locallyAnswered(
+        interaction: PendingInteraction,
+        payloads: [ChatInteractionAnswerPayload]
+    ) -> ResolvedAsk {
+        ResolvedAsk(
+            id: interaction.id,
+            questions: interaction.effectiveQuestions.map { question in
+                let payload = payloads.first {
+                    $0.questionId == question.id
+                }
+                return ResolvedAskQuestion(
+                    id: question.id,
+                    question: question.text,
+                    selectedOptions: question.options.compactMap { option in
+                        (payload?.optionIds.contains(option.id) ?? false)
+                            ? .init(id: option.id, label: option.label)
+                            : nil
+                    },
+                    customAnswerText: payload?.customText)
+            },
+            outcome: .youAnswered,
+            questionText: interaction.effectiveQuestions.first?.text)
+    }
+}
+
 extension ResolvedAsk.Outcome {
     /// The store's durable kind maps 1:1 onto the UI outcome.
     init(_ kind: AgentChatInteractionResolution.Kind) {

@@ -565,50 +565,73 @@ struct ChatScreen: View {
     /// The ask card's external question navigation (keyboard arrows
     /// / a11y next-previous route through the same state as swipe).
     @State private var askNavigation = ChatInteractionQuestionNavigation()
-    /// Interactions with a submission in flight: the card swaps to
-    /// the honest "Submitting answers" state until the store's
-    /// authoritative acceptance replaces it with the resolved card.
+    /// Interactions with a submission in flight: the card reads
+    /// "Submitting answers" and disables duplicate submissions.
     @State private var askSubmittingByRequest: Set<String> = []
-    /// The last ask seam failure, rendered on the card; choices stay.
+    /// The accepted payloads per interaction id: the submit seam
+    /// returned WITHOUT throwing, so the pending slot flips to the
+    /// ANSWERED card immediately (the user's chosen answer, collapsed
+    /// one-line) — never waiting for a broker refresh. The store's
+    /// authoritative resolution record then replaces it by identity
+    /// (same requestId → same resolved# row id; SwiftUI updates in
+    /// place, no double card).
+    @State private var askAcceptedAnswersByRequest:
+        [String: [ChatInteractionAnswerPayload]] = [:]
+    /// The last ask seam failure per request, rendered on the card;
+    /// choices stay for retry.
     @State private var askErrorByRequest: [String: String] = [:]
 
     /// The v3 Q/A card: ONE card per ask interaction — unanswered and
     /// answered share the same family. The card owns its own draft
-    /// state (step, selections, custom texts, notes); this wiring
-    /// supplies only the seams and the acceptance-driven flags.
+    /// state (step, selections, custom texts); this wiring supplies
+    /// only the seams and the acceptance-driven flip. An ACCEPTED
+    /// submit flips the pending slot to the ANSWERED card IMMEDIATELY
+    /// (the chosen answer, collapsed one-line) — never waiting for a
+    /// broker refresh; the store's authoritative record replaces it
+    /// by identity when it lands.
     @ViewBuilder
     private func askCard(_ interaction: PendingInteraction) -> some View {
-        ChatInteractionCard(
-            interaction: interaction,
-            isSubmitting: askSubmittingByRequest.contains(interaction.id),
-            errorMessage: askErrorByRequest[interaction.id],
-            submit: { payloads in
-                guard let onAskAnswer else { return }
-                askSubmittingByRequest.insert(interaction.id)
-                askErrorByRequest[interaction.id] = nil
-                do {
-                    try await onAskAnswer(interaction, payloads)
-                    // Authoritative acceptance: the store's
-                    // resolution record replaces the card; the
-                    // submitting flag clears with the card itself.
-                } catch {
-                    // Retain every choice; the user re-submits.
-                    askSubmittingByRequest.remove(interaction.id)
-                    askErrorByRequest[interaction.id] =
-                        Self.askErrorText(error, prefix: "Answer failed")
-                }
-            },
-            errorText: { error in
-                if case AgentChatError.wire(_, let message, _) = error {
-                    return message
-                }
-                return nil
-            },
-            cancel: onAskCancel.map { cancel in
-                { try await cancel(interaction) }
-            },
-            navigation: askNavigation)
+        if let accepted = askAcceptedAnswersByRequest[interaction.id] {
+            ChatResolvedAskCard(
+                ask: .locallyAnswered(
+                    interaction: interaction, payloads: accepted))
+        } else {
+            ChatInteractionCard(
+                interaction: interaction,
+                isSubmitting: askSubmittingByRequest.contains(interaction.id),
+                errorMessage: askErrorByRequest[interaction.id],
+                submit: { payloads in
+                    guard let onAskAnswer else { return }
+                    askSubmittingByRequest.insert(interaction.id)
+                    askErrorByRequest[interaction.id] = nil
+                    do {
+                        try await onAskAnswer(interaction, payloads)
+                        // Accepted (no throw): flip to the answered
+                        // card NOW; the submitting flag retires with
+                        // the unanswered render.
+                        askSubmittingByRequest.remove(interaction.id)
+                        askAcceptedAnswersByRequest[interaction.id] =
+                            payloads
+                    } catch {
+                        // Retain every choice; the user re-submits.
+                        askSubmittingByRequest.remove(interaction.id)
+                        askErrorByRequest[interaction.id] =
+                            Self.askErrorText(error, prefix: "Answer failed")
+                    }
+                },
+                errorText: { error in
+                    if case AgentChatError.wire(_, let message, _) = error {
+                        return message
+                    }
+                    return nil
+                },
+                cancel: onAskCancel.map { cancel in
+                    { try await cancel(interaction) }
+                },
+                navigation: askNavigation)
+        }
     }
+
 
     /// An ask error's honest copy: the wire message when present (the
     /// raw localizedDescription renders 'AgentChatError error 0' —
