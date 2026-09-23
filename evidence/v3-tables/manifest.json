@@ -1,0 +1,24 @@
+{
+  "slice": "v3 tables: phone-width wrapped cells (feat/v3-tables f756c4c3)",
+  "captures": [
+    {
+      "file": "chat-tables-phone.png",
+      "surface": "--demo-chat-tables on heeler-v3-tables sim (iPhone 17 class, E1F90CFE…)",
+      "verified": "Vision model: all three tables wrap long cells onto multiple lines; no horizontal scrollbar; no content past the screen edge; header fill, zebra striping, and all cell text visible."
+    },
+    {
+      "file": "chat-tables-wide.png",
+      "surface": "--demo-chat-tables on heeler-v3-tables-wide sim (iPad Pro 13-inch class, A204B29F…)",
+      "verified": "Vision model: same tables readable at wide layout — cells fit on single lines at the larger width, nothing overflows the viewport, headers and all content visible."
+    },
+    {
+      "file": "chat-tables-large-type.png",
+      "surface": "--demo-chat-tables at UICTContentSizeCategoryAccessibilityXL (heeler-v3-tables sim)",
+      "verified": "Vision model: cells wrap and rows grow taller (code span stacks across lines, link wraps); no clipping mid-line, nothing past the right edge, no row overlap."
+    }
+  ],
+  "test_evidence": {
+    "unit_pins": "HeelerTests/ChatTableStylingTests — longCellTableStaysInsideTheProposedPhoneWidth, longCellContentWrapsToMultipleLinesNotClip (all 7 suite tests green on sim E1F90CFE…)",
+    "ui_proofs": "HeelerUITests/TableWidthProofTests — testLongCellContentStaysFullyReachable, testLongCellsWrapInsideThePhoneWidth, testNoTableContentOverflowsThePage (green on BOTH the phone-class and iPad-class sims)"
+  }
+}

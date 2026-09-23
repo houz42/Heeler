@@ -103,36 +103,23 @@ extension ChatMarkdownTheme {
         row == 0 ? .semibold : .regular
     }
 
-    /// One table cell: chat body size, padded; the header row carries
-    /// `tableCellWeight`'s heavier weight. Cells wrap vertically; in
-    /// WIDE mode (a table whose natural width exceeds the chat width,
-    /// laid out inside its horizontal scroll) the cell also takes its
-    /// natural width — one line per cell, whole columns as the reader
-    /// scrolls.
+    /// One table cell: chat body size, wrapped, padded; the header row
+    /// carries `tableCellWeight`'s heavier weight. The cell always
+    /// WRAPS (never takes its natural single-line width): the v3
+    /// phone-width contract constrains every table to the chat's
+    /// available width, so a long cell folds onto more lines instead
+    /// of pushing the table past the readable width.
     @MainActor
     static func tableCell(
         _ row: Int, label: MarkdownUI.TableCellConfiguration.Label
     ) -> some View {
-        ChatTableCell(row: row, label: label)
-    }
-}
-
-/// The theme's table cell, split into a view so it can read the
-/// wide-table environment flag (a static closure has no view context).
-private struct ChatTableCell: View {
-    let row: Int
-    let label: MarkdownUI.TableCellConfiguration.Label
-
-    @Environment(\.chatWideTableMode) private var wideMode
-
-    var body: some View {
         label
-            .fixedSize(horizontal: wideMode, vertical: true)
+            .fixedSize(horizontal: false, vertical: true)
             .lineSpacing(2)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .font(SwiftUI.Font.subheadline.weight(
-                ChatMarkdownTheme.tableCellWeight(forRow: row)))
+                tableCellWeight(forRow: row)))
     }
 }
 
@@ -240,14 +227,16 @@ struct ChatCodeBlock: View {
 /// One chat table: header row with a filled background, zebra striping,
 /// and thin row separators.
 ///
-/// WIDTH-ADAPTIVE (v2): a table that fits the chat width wraps its
-/// cells exactly as v1 did; a WIDE table (natural column widths exceed
-/// the proposed width) instead scrolls horizontally with cells at
-/// their natural one-line width — the reader sees whole columns instead
-/// of a tall stripe of over-wrapped slivers. The mode rides an
-/// environment flag so `ChatMarkdownTheme.tableCell` (MarkdownUI
-/// applies it to every cell, no per-cell view hook) can stop wrapping
-/// inside the scroll.
+/// PHONE-WIDTH (v3): the table is CONSTRAINED to the chat's available
+/// width and every cell WRAPS — long cell content folds onto more
+/// lines and the row grows to keep all content inside its borders.
+/// No horizontal scroll and no single-line unfolding: the v2
+/// width-adaptive adaptor (measure the natural one-line width, pan it
+/// in a horizontal ScrollView when it exceeded the chat width) tripped
+/// on ANY long cell text at phone width, which is the reported
+/// regression — a table the reader must pan is a table the reader
+/// cannot read on a phone. Wide layouts get the same wrapping at a
+/// larger width, so one table reads identically everywhere.
 ///
 /// Striping + row separators read better on a phone than column
 /// borders: columns are implied by cell spacing, and extra vertical
@@ -259,91 +248,27 @@ struct ChatCodeBlock: View {
 struct ChatTableBlock<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
-    @State private var naturalWidth: CGFloat?
-
     var body: some View {
-        // The visible table IS the layout: wrapped cells when it fits
-        // (v1 behaviour), or one horizontal ScrollView with natural-
-        // width cells when the measured natural width exceeds the chat
-        // width. The switch needs the CHAT width only — proposed via
-        // onGeometryChange on the visible content itself, so the row
-        // keeps its intrinsic height (no GeometryReader row body: in a
-        // LazyVStack that collapses the row to zero height and rows
-        // draw over each other).
-        ChatTableAdaptiveTable(content: content, naturalWidth: $naturalWidth)
+        // The table fits the proposed chat width and its cells wrap —
+        // no ScrollView (it proposes infinite width, which unfolds
+        // every cell onto one line), no measuring pass, no environment
+        // mode switch. The MarkdownUI Grid the theme receives divides
+        // the proposed width across columns and `tableCell` wraps
+        // each cell, so the table is readable at ANY width.
+        content()
+            .markdownTableBackgroundStyle(
+                .alternatingRows(
+                    Color.primary.opacity(0.045),
+                    Color.clear,
+                    header: Color.primary.opacity(0.10))
+            )
+            .markdownTableBorderStyle(
+                TableBorderStyle(
+                    .insideHorizontalBorders,
+                    color: Color.primary.opacity(0.10),
+                    width: 0.5))
+            .padding(.bottom, 8)
     }
-
-    private struct ChatTableAdaptiveTable<Inner: View>: View {
-        @ViewBuilder let content: () -> Inner
-        @Binding var naturalWidth: CGFloat?
-
-        @State private var chatWidth: CGFloat?
-
-        private var isWide: Bool {
-            guard let natural = naturalWidth, let chat = chatWidth else {
-                return false
-            }
-            return natural > chat + 1
-        }
-
-        var body: some View {
-            Group {
-                if isWide {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        framed
-                            .environment(\.chatWideTableMode, true)
-                            .fixedSize(horizontal: true, vertical: false)
-                    }
-                } else {
-                    framed
-                }
-            }
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { _, w in
-                if w > 0 { chatWidth = w }
-            }
-            .background {
-                // Hidden measuring pass, present ONLY until it reports:
-                // the copy carries MarkdownUI's cell anchor preferences,
-                // and a standing duplicate would corrupt the visible
-                // table's decoration bounds (TableCellBoundsPreference
-                // merges last-writer-wins). Once the natural width
-                // lands, the copy leaves the tree entirely.
-                if naturalWidth == nil {
-                    content()
-                        .environment(\.chatWideTableMode, true)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .hidden()
-                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { _, w in
-                            if w > 0 { naturalWidth = w }
-                        }
-                }
-            }
-        }
-
-        private var framed: some View {
-            content()
-                .markdownTableBackgroundStyle(
-                    .alternatingRows(
-                        Color.primary.opacity(0.045),
-                        Color.clear,
-                        header: Color.primary.opacity(0.10))
-                )
-                .markdownTableBorderStyle(
-                    TableBorderStyle(
-                        .insideHorizontalBorders,
-                        color: Color.primary.opacity(0.10),
-                        width: 0.5))
-                .padding(.bottom, 8)
-        }
-    }
-}
-
-
-/// Whether the chat table theme's cell style renders cells at natural
-/// (single-line) width — set inside a wide table's horizontal scroll
-/// and its measuring pass, so wrapped-cell and wide-cell metrics agree.
-private struct ChatWideTableModeKey: EnvironmentKey {
-    static let defaultValue = false
 }
 
 /// HUG-CONTENT mode (v3 own-message bubbles): the markdown's BLOCK
@@ -358,10 +283,6 @@ struct ChatMarkdownHugModeKey: EnvironmentKey {
 }
 
 extension EnvironmentValues {
-    var chatWideTableMode: Bool {
-        get { self[ChatWideTableModeKey.self] }
-        set { self[ChatWideTableModeKey.self] = newValue }
-    }
     /// True inside a hug-content markdown render (own-message
     /// bubbles): block chrome sizes to content, not the proposal.
     var chatMarkdownHugMode: Bool {

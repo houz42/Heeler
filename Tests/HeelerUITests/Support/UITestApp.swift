@@ -53,7 +53,10 @@ enum UITestApp {
         /// (one-word / emoji / multiline / long prose / fenced code
         /// cases) — the bubble width capture surface.
         case chatBubbles
-
+        /// The chat surface with v3 wrapped-cell markdown tables
+        /// (long multi-column cells, code spans, links) — the
+        /// phone-width table capture surface.
+        case chatTables
 
 
         var launchArguments: [String] {
@@ -73,9 +76,11 @@ enum UITestApp {
                 return ["--demo-screenshots", "--demo-chat-pending-ask"]
             case .chatBubbles:
                 return ["--demo-screenshots", "--demo-chat-bubbles"]
+            case .chatTables:
+                return ["--demo-screenshots", "--demo-chat-tables"]
             case .chatSpecialSections:
                 return ["--demo-screenshots", "--demo-chat-special-sections"]
-            }
+        }
         }
     }
 

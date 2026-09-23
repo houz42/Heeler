@@ -56,11 +56,17 @@
             /// wrap, fenced code) — the content-sized bubble capture
             /// surface (v3 width proofs).
             case chatBubbles
+            /// The chat surface with markdown tables that stress the
+            /// phone-width contract (long multi-column cells, code
+            /// spans, links) — the wrapped-cell table capture
+            /// surface (v3 table proofs).
+            case chatTables
 
 
             static func fromArguments() -> Route {
                 let arguments = ProcessInfo.processInfo.arguments
                 if arguments.contains(chatBubblesLaunchArgument) { return .chatBubbles }
+                if arguments.contains(chatTablesLaunchArgument) { return .chatTables }
                 if arguments.contains(chatSpecialSectionsLaunchArgument) { return .chatSpecialSections }
                 if arguments.contains(hostListConsoleLaunchArgument) { return .hostListConsole }
                 if arguments.contains(chatPendingAskLaunchArgument) { return .chatPendingAsk }
@@ -79,6 +85,7 @@
         static let chatSpecialSectionsLaunchArgument = "--demo-chat-special-sections"
         static let hostDetailPickLaunchArgument = "--demo-host-detail-pick"
         static let chatBubblesLaunchArgument = "--demo-chat-bubbles"
+        static let chatTablesLaunchArgument = "--demo-chat-tables"
 
         /// The multi-path demo Host: the same machine over LAN and VPN.
         static let multipathHost = Host(
@@ -177,6 +184,8 @@
                 multipathDetail(midProbe: true)
             case .chatBubbles:
                 chatBubblesSurface
+            case .chatTables:
+                chatTablesSurface
             case .hostDetailPick:
                 multipathDetail(midProbe: false)
             case .chatPendingAsk:
@@ -367,6 +376,74 @@
                                 failed payment attempt end to end. Ready to \
                                 commit when you are.
                                 """),
+                        ]),
+                    ]),
+                initialLevel: .l2,
+                changeLevel: { _, _ in },
+                deliver: { _ in },
+                authorLabel: "Meadow · omp")
+        }
+
+        /// The v3 wrapped-table capture surface: a transcript of agent
+        /// turns whose markdown tables stress the phone-width
+        /// contract — a three-column table with long wrapping cells
+        /// (the reported regression case), a compact two-column table
+        /// that fits without folding, and a table carrying code spans
+        /// and a link inside cells. Read-only (no deliver) so the
+        /// captures are purely visual; every long cell must WRAP and
+        /// the whole table must stay inside the reading width.
+        private var chatTablesSurface: some View {
+            ChatScreen(
+                paneID: "demo:tables",
+                agentName: "omp",
+                state: .idle,
+                content: ChatContent(
+                    messages: [
+                        ChatMessage(role: .assistant, blocks: [
+                            .text(
+                                """
+                                Here is the retry matrix for the release \
+                                blocks — every row keeps its full text \
+                                inside the phone's reading width:
+
+                                | Stage | Owner | Notes |
+                                | --- | --- | --- |
+                                | build | platform | Full clean build with \
+                                the new linker flags; green on both runners |
+                                | unit tests | payments | The 34-case suite \
+                                passes and the retry regression stays fixed |
+                                | integration | checkout | Long-path harness \
+                                needs a re-run after the cert rotation lands \
+                                later this week |
+                                """)
+                        ]),
+                        ChatMessage(role: .assistant, blocks: [
+                            .text(
+                                """
+                                Fit check — this compact table needs no \
+                                wrapping at all:
+
+                                | Stage | Files |
+                                | --- | --- |
+                                | build | 12 |
+                                | test | 34 |
+                                """)
+                        ]),
+                        ChatMessage(role: .assistant, blocks: [
+                            .text(
+                                """
+                                And the inline-markup case — code spans \
+                                and a link survive the wrap:
+
+                                | Command | Effect |
+                                | --- | --- |
+                                | `herdr agent attach` | Attaches the \
+                                interactive TUI to the agent pane over \
+                                the client bridge |
+                                | see [the guide](https://herdr.dev) | \
+                                Opens the tap-to-open link routing the \
+                                chat already uses |
+                                """)
                         ]),
                     ]),
                 initialLevel: .l2,
