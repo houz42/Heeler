@@ -126,6 +126,8 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 	let sessionId = "";
 	let sessionName: string | undefined;
 	let sessionFile: string | undefined;
+	/** True when this session is an omp task-subagent (nested session file). */
+	let isSubagent = false;
 	let seq = 0; // zero is the empty snapshot watermark; first event is one
 	/** Latest emitted event seq — the snapshot `throughSeq` watermark. */
 	let throughSeq = 0;
@@ -335,7 +337,12 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 
 	function registrationFrame(): unknown {
 		const locator: Record<string, unknown> = { pid: process.pid };
-		if (process.env.HERDR_PANE_ID !== undefined && process.env.HERDR_PANE_ID.length > 0) {
+		// Pane ownership: ONLY the pane's primary agent claims its paneId. A
+		// task-subagent inherits HERDR_PANE_ID from the parent process but its
+		// session is a nested child — claiming the parent pane would stack
+		// duplicate live pane registrations and the app's matcher correctly
+		// refuses (ambiguous). Subagents register without a pane claim.
+		if (!isSubagent && process.env.HERDR_PANE_ID !== undefined && process.env.HERDR_PANE_ID.length > 0) {
 			locator.paneId = process.env.HERDR_PANE_ID;
 		}
 		if (sessionFile !== undefined) locator.sessionFile = sessionFile;
@@ -991,6 +998,15 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 		sessionName = ctx.sessionManager.getSessionName?.();
 		const file = ctx.sessionManager.getSessionFile?.();
 		sessionFile = typeof file === "string" && file.length > 0 ? file : undefined;
+		// Subagent detection (omp): a task-subagent's session file lives
+		// INSIDE a directory named after the parent session's .jsonl file
+		// (verified live: .../<parent>.jsonl/<subagent>.jsonl with a
+		// parentSession header). Subagents inherit HERDR_PANE_ID from the
+		// parent process, so without this check each subagent would claim
+		// the PARENT'S pane and the app's pane matcher correctly refuses
+		// (ambiguous). Subagents still register (chat works) — they just
+		// never claim a pane.
+		isSubagent = sessionFile !== undefined && sessionFile.includes(".jsonl/");
 	}
 
 	/** Bump generation: clear per-generation state, reset seq, fresh socket. */
