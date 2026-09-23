@@ -8,6 +8,15 @@ Entries reference the issue that motivated them.
 ## [Unreleased]
 
 ### Added
+- iOS Local Network permission: the app now declares
+  `NSLocalNetworkUsageDescription` and triggers the system prompt on the
+  connect path — without the declaration, iOS silently blocked every SSH
+  dial to a private address (LAN and VPN alike), which is why connecting
+  a Host never worked. A denied user gets honest guidance instead of a
+  generic "unreachable": the preflight connection check, the pairing
+  ceremony, and the Host footer all name the Local Network setting, and
+  the Host detail and pairing failure surfaces offer an Open Settings
+  button.
 - Host detail: every connection route is a tappable row. Tapping a route
   makes it the Host's active route — the path the next connection dials
   first — persisted per Host and marked with a green checkmark (a live

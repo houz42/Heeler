@@ -65,6 +65,7 @@
 		1ADE76974DEBFD636189EE45 /* NotificationRelayEndpoint.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6876069E2B641D09FF1520E6 /* NotificationRelayEndpoint.swift */; };
 		1CDD70EB9994707EBD2EB699 /* AgentListFeatureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CAAF9890DAC59A98E91CE59 /* AgentListFeatureView.swift */; };
 		1CF0CDEFC1C46433C1F4CF06 /* IBMPlexMono-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 6FF0DA87C092E176838C1EF7 /* IBMPlexMono-Bold.ttf */; };
+		1DBE27E496240C3E70F117FA /* LocalNetworkPermission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60C9427571D36DEA98265065 /* LocalNetworkPermission.swift */; };
 		1EDDD0227C94C6B7C2586A68 /* ImagePreparerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4889F56EFEFCC5004A55B4C /* ImagePreparerTests.swift */; };
 		1F1E82042C6ED570A2DE463B /* PreferredAddressStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DD90DCB811C1C5A330B4397 /* PreferredAddressStore.swift */; };
 		1F8A8D2B33929C8271E8EB7B /* NavigationRedesignProofTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A84C02F943B7B61C1DE5AED7 /* NavigationRedesignProofTests.swift */; };
@@ -311,6 +312,7 @@
 		8F9D8B11EB35747E767118CB /* TerminalTitleGlyphs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 651D511E8A282C4CB0214098 /* TerminalTitleGlyphs.swift */; };
 		90AFA0D89F777E64C60FEA23 /* ChatModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 798DC761EAF3462C2161F92F /* ChatModels.swift */; };
 		91BF879F537B1B0DD0B5E78B /* HostConsoleProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88E1434C9C39A6419A3A0D79 /* HostConsoleProjection.swift */; };
+		921F69E375C5163202FC57A0 /* LocalNetworkPermissionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74E4FF51B2364558C8B396A5 /* LocalNetworkPermissionTests.swift */; };
 		9271ADB70DD9860389821A92 /* AgentDetailStatusChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1AA33CB009DE705AC691967 /* AgentDetailStatusChrome.swift */; };
 		94545D0497AD7AC234C37D67 /* AppModelActivityDriverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9F961651EBA7FE1BEE00647 /* AppModelActivityDriverTests.swift */; };
 		9470EE9B9EB5D39E246AD01E /* HostMultiPathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7CA03A7CE9C42D576671992 /* HostMultiPathTests.swift */; };
@@ -775,6 +777,7 @@
 		5E8A1BCBBB2322E297472810 /* ConsoleCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsoleCommands.swift; sourceTree = "<group>"; };
 		6056108BDA8023BCEC2D7AA7 /* AgentControlKeyboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentControlKeyboard.swift; sourceTree = "<group>"; };
 		60A3266F97C243598703DB0A /* JSONValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONValue.swift; sourceTree = "<group>"; };
+		60C9427571D36DEA98265065 /* LocalNetworkPermission.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalNetworkPermission.swift; sourceTree = "<group>"; };
 		6137F891C34AE9E7951804F7 /* SolvingOrbView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SolvingOrbView.swift; sourceTree = "<group>"; };
 		61DA61C2FD4220803AE6D533 /* PairingCode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingCode.swift; sourceTree = "<group>"; };
 		62675065132FC6F703D98CBE /* Typing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Typing.swift; sourceTree = "<group>"; };
@@ -809,6 +812,7 @@
 		7461B7A0FD2A4CDF34352D45 /* PairingCodeVectorFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingCodeVectorFile.swift; sourceTree = "<group>"; };
 		747773ABBBA6ECEDAD7786DE /* TerminalGridReportPhaseRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalGridReportPhaseRecorder.swift; sourceTree = "<group>"; };
 		74AFDC1E8F521930C56E82FA /* BubbleWidthProofTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BubbleWidthProofTests.swift; sourceTree = "<group>"; };
+		74E4FF51B2364558C8B396A5 /* LocalNetworkPermissionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalNetworkPermissionTests.swift; sourceTree = "<group>"; };
 		7625958E48639DCE4F5A8391 /* EventsSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventsSession.swift; sourceTree = "<group>"; };
 		764EB7D298185F64BA26C8B2 /* HerdrEvents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HerdrEvents.swift; sourceTree = "<group>"; };
 		768235F2FBD7790800281BC3 /* PinnedAgentsStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinnedAgentsStoreTests.swift; sourceTree = "<group>"; };
@@ -1269,6 +1273,7 @@
 				AACC0F2C9582DE0932380D35 /* KnownHostsStoreTests.swift */,
 				0882D4EC9985979DA989F01B /* LicenseNoticeTests.swift */,
 				126DE4AA09228412D12EE4E6 /* LiveInAnotherWindowPresentationTests.swift */,
+				74E4FF51B2364558C8B396A5 /* LocalNetworkPermissionTests.swift */,
 				57F16E07E567548DAD7F2A9A /* MessageJumpControlTests.swift */,
 				365757614D9876F58A48CEDA /* NotificationConfigFileTests.swift */,
 				A7103745D02C07787E49AC70 /* NotificationEnvelopeTests.swift */,
@@ -1751,6 +1756,7 @@
 				03E19BDF2824DC34B28A765C /* HostKeyPolicy.swift */,
 				60A3266F97C243598703DB0A /* JSONValue.swift */,
 				89A4121CF3A5722FE9B3C1E8 /* KnownHostsStore.swift */,
+				60C9427571D36DEA98265065 /* LocalNetworkPermission.swift */,
 				55D2BCB4E4038F510852F71C /* SecretStore.swift */,
 				A058322630CB1827F69DBF53 /* SharedAsyncOperation.swift */,
 				86642A7BA9C1F1E3456D64E3 /* SSHChannelAdmission.swift */,
@@ -2366,6 +2372,7 @@
 				405A7A8AE730C7ABD606DAD7 /* LiveActivityControlling.swift in Sources */,
 				5299E363C0B099498E45E78A /* LiveActivityPreferences.swift in Sources */,
 				2CCF49CE1A3D34AEC4D53469 /* LiveInAnotherWindowPresentation.swift in Sources */,
+				1DBE27E496240C3E70F117FA /* LocalNetworkPermission.swift in Sources */,
 				FD0AC1F668ACDFC38B2D1DD7 /* LongPressChordLayer.swift in Sources */,
 				FD08521CD53670B72176C3EC /* LongPressChordOverlay.swift in Sources */,
 				2919B56BA0DACB65CA4DC910 /* MacroKeyStore.swift in Sources */,
@@ -2640,6 +2647,7 @@
 				29BCAD9E51F92125461CC37F /* LicenseNoticeTests.swift in Sources */,
 				FF96BFEF61D9D20912230256 /* LiveActivityVectorFile.swift in Sources */,
 				009E08E800D5353526656786 /* LiveInAnotherWindowPresentationTests.swift in Sources */,
+				921F69E375C5163202FC57A0 /* LocalNetworkPermissionTests.swift in Sources */,
 				C9F1C6CFE1F09E58CD9B3948 /* LocalSSHTestEnvironment.swift in Sources */,
 				237011C7C496B88BB774D525 /* MessageJumpControlTests.swift in Sources */,
 				6AD4E067F02196A9935D1171 /* NotificationConfigFileTests.swift in Sources */,
@@ -2849,6 +2857,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Meadow;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Meadow uses the camera to scan the Pairing Code shown on your computer, so you can add that machine without typing anything.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Meadow connects to your machines on your local network to reach your agents.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -3031,6 +3040,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Meadow;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Meadow uses the camera to scan the Pairing Code shown on your computer, so you can add that machine without typing anything.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Meadow connects to your machines on your local network to reach your agents.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

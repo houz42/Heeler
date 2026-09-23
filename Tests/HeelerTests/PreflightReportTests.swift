@@ -60,6 +60,7 @@ struct PreflightReportTests {
         (.deviceKeyCorrupt, .connection),
         (.hostKeyRejected(
             presented: HostKeyFingerprint(publicKeyBlob: Data("blob-a".utf8))), .connection),
+        (.localNetworkDenied, .connection),
         (.timedOut, .connection),
         (.cancelled, .connection),
         (.channelFailed(detail: "boom"), .connection),
@@ -139,6 +140,24 @@ struct PreflightReportTests {
         }
         #expect(hint.contains("16"))
         #expect(hint.contains("17"))
+    }
+
+    @Test func localNetworkDenialHintPointsAtSettingsNotTheHost() {
+        let report = PreflightReport.failure(.localNetworkDenied, authMethod: .deviceKey)
+        guard case .failed(let hint) = report[.connection] else {
+            Issue.record("connection check should fail")
+            return
+        }
+        #expect(hint.contains("Local Network"))
+        #expect(hint.contains("Settings"))
+        #expect(report.isLocalNetworkFailure)
+    }
+
+    @Test func onlyTheLocalNetworkDenialCarriesTheSettingsFlag() {
+        #expect(
+            !PreflightReport.failure(.sshUnreachable(detail: "refused"), authMethod: .deviceKey)
+                .isLocalNetworkFailure)
+        #expect(!PreflightReport.allPassed.isLocalNetworkFailure)
     }
 
     @Test func plainFailureAttachesTheGivenHintToTheGivenCheck() {

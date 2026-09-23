@@ -43,6 +43,7 @@ struct PreflightReport: Equatable, Sendable {
     private struct Failure: Equatable, Sendable {
         let check: PreflightCheck
         let hint: String
+        var isLocalNetworkDenial = false
     }
 
     static let allPassed = PreflightReport(failure: nil)
@@ -59,6 +60,12 @@ struct PreflightReport: Equatable, Sendable {
         let check: PreflightCheck
         let hint: String
         switch error {
+        case .localNetworkDenied:
+            check = .connection
+            hint =
+                "Local Network access is off for Meadow, so the Host cannot be "
+                + "reached at all. Allow Local Network for Meadow in Settings › "
+                + "Privacy & Security › Local Network, then run the checks again."
         case .sshUnreachable(let detail):
             check = .connection
             hint = "Could not reach the Host over SSH. Check the address and port. (\(detail))"
@@ -148,7 +155,10 @@ struct PreflightReport: Equatable, Sendable {
             check = .connection
             hint = Self.jumpHostHint(underlying, authMethod: authMethod)
         }
-        return PreflightReport(failure: Failure(check: check, hint: hint))
+        return PreflightReport(
+            failure: Failure(
+                check: check, hint: hint,
+                isLocalNetworkDenial: error.isLocalNetworkDenial))
     }
 
     /// Guidance for a first-hop failure. Deliberately not a recursive call
@@ -198,6 +208,13 @@ struct PreflightReport: Equatable, Sendable {
         if index < failedIndex { return .passed }
         if index == failedIndex { return .failed(hint: failure.hint) }
         return .blocked
+    }
+
+    /// Whether this failure is the iOS Local Network permission being off —
+    /// the one failure whose fix lives in this device's Settings rather
+    /// than on the Host.
+    var isLocalNetworkFailure: Bool {
+        failure?.isLocalNetworkDenial ?? false
     }
 
     var isFullyPassed: Bool {

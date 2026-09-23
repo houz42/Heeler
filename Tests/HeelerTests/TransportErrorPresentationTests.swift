@@ -129,6 +129,31 @@ struct TransportErrorPresentationTests {
         }
     }
 
+    // MARK: Local Network permission
+
+    @Test func localNetworkDeniedNamesTheDeviceSetting() {
+        let presentation = TransportError.localNetworkDenied.presentation
+        #expect(presentation.summary == "Local Network access is off for Meadow")
+        #expect(presentation.detail == nil)
+        #expect(presentation.recoverySuggestion == "Turn it on in Settings › Privacy & Security › Local Network, then reconnect.")
+        #expect(
+            presentation.message
+                == "Local Network access is off for Meadow. "
+                    + "Turn it on in Settings › Privacy & Security › Local Network, then reconnect.")
+    }
+
+    @Test func localNetworkDeniedIsNotRetryableAndFlagsItself() {
+        #expect(!TransportError.localNetworkDenied.isRetryable)
+        #expect(TransportError.localNetworkDenied.isLocalNetworkDenial)
+        #expect(!TransportError.sshUnreachable(detail: "down").isLocalNetworkDenial)
+        // A denied VPN first hop keeps the same guidance: the permission is
+        // a device setting, whichever hop reported it.
+        #expect(TransportError.jumpHostFailed(.localNetworkDenied).isLocalNetworkDenial)
+        #expect(
+            TransportError.jumpHostFailed(.localNetworkDenied).presentation.message
+                == TransportError.localNetworkDenied.presentation.message)
+    }
+
     // MARK: Jump Host
 
     @Test func jumpHostMappingIsTargetAware() {

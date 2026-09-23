@@ -199,6 +199,11 @@ private struct PairingCeremonyView: View {
             if let failure = store.failure {
                 Section {
                     Text(failure.message)
+                    if failure.step == .reach && failure.isLocalNetwork {
+                        Button("Open Settings", systemImage: "gear") {
+                            openSettings()
+                        }
+                    }
                     if failure.canRetry {
                         Button("Try Again", systemImage: "arrow.clockwise") {
                             attempt += 1
@@ -211,6 +216,11 @@ private struct PairingCeremonyView: View {
             }
         }
         .task(id: attempt) { await store.pair() }
+    }
+
+    private func openSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
     }
 
     /// The steps this code's ceremony performs. A config-only code carries no

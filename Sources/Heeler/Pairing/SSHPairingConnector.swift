@@ -23,6 +23,14 @@ struct SSHPairingConnector: PairingConnector {
         deviceKey: DeviceKey,
         onStep: @escaping @Sendable (PairingStep) -> Void
     ) async throws -> PairingResult {
+        // The iOS Local Network permission gates the Pairing Code's
+        // addresses before any socket exists; probe before the sweep so
+        // the prompt fires with the ceremony, not after silent timeouts.
+        if code.addresses.contains(where: LocalNetworkPermission.isRequired),
+            await !LocalNetworkPermission.isGranted()
+        {
+            throw PairingCeremonyError.localNetworkDenied
+        }
         guard let bootstrap = code.bootstrap else {
             onStep(.reach)
             let reached = try await reach(
