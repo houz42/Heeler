@@ -56,11 +56,15 @@ struct ChatScrollCoordinatorTests {
     @Test("initial blank (window off every row) is repaired once, bounded")
     func initialBlankIsRepaired() {
         // The device blank on open: the restored layout lands the
-        // visible window in the padding above the first row.
+        // visible window in the padding above the first row. The
+        // repair targets the LAST ROW bottom-anchored (never the bare
+        // document edge — edge positions overshoot past the last row
+        // into unmaterialized lazy space).
         let (coordinator, _) = makeCoordinator(
             document: 500, viewport: 700, contentTop: 200,
             intersects: false)
-        #expect(coordinator.position?.edge == .bottom)
+        #expect(
+            coordinator.position?.viewID(type: String.self) == "row-z")
         #expect(coordinator.repairAttempts == 1)
 
         // The repair lands (rows intersect again): re-arms.
@@ -102,27 +106,32 @@ struct ChatScrollCoordinatorTests {
         #expect(coordinator.repairAttempts <= 3)
     }
 
-    // MARK: Keyboard/geometry preservation
-
-
     @Test("keyboard shrink while following latest keeps the bottom edge")
     func keyboardShrinkFollowsLatest() {
         let (coordinator, _) = makeCoordinator(
             document: 4000, viewport: 700, contentTop: 0, intersects: true)
         coordinator.scrollPhaseChanged(.idle)
-        // Keyboard shows: viewport shrinks, still intersecting.
-        let shrunk = ChatViewportGeometry(
+        // Keyboard shows: the viewport shrinks (geometry) and the
+        // bottom sentinel is pushed offscreen (not a scroll up — the
+        // shrink flag keeps following). The hold fires on the LAST
+        // ROW (never the bare edge).
+        coordinator.geometryChanged(ChatViewportGeometry(
             documentHeight: 4000, viewportHeight: 400,
-            contentTop: 0, rowsIntersectViewport: true)
-        coordinator.geometryChanged(shrunk)
-        #expect(coordinator.position?.edge == .bottom)
+            contentTop: 0, rowsIntersectViewport: true))
+        coordinator.bottomEdgeVisibleChanged(false)
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 4000, viewportHeight: 400,
+            contentTop: 10, rowsIntersectViewport: true))
+        #expect(
+            coordinator.position?.viewID(type: String.self) == "row-z")
 
-        // Keyboard hides: viewport grows back.
-        let grown = ChatViewportGeometry(
+        // Keyboard hides: the viewport grows back, the sentinel
+        // returns, the hold settles — no further commands.
+        coordinator.bottomEdgeVisibleChanged(true)
+        coordinator.geometryChanged(ChatViewportGeometry(
             documentHeight: 4000, viewportHeight: 700,
-            contentTop: 0, rowsIntersectViewport: true)
-        coordinator.geometryChanged(grown)
-        #expect(coordinator.position?.edge == .bottom)
+            contentTop: 0, rowsIntersectViewport: true))
+        #expect(coordinator.position == nil)
     }
 
     @Test("keyboard change while reading mid-history: NO scroll command")
@@ -175,6 +184,73 @@ struct ChatScrollCoordinatorTests {
             contentTop: 0, rowsIntersectViewport: true)
         coordinator.geometryChanged(shrunk)
         #expect(coordinator.position == nil)
+    }
+
+    @Test("jump-to-bottom that lands blank takes ONE center-anchored correction")
+    func jumpToBottomBlankLandingIsCorrected() {
+        let (coordinator, _) = makeCoordinator(
+            document: 4000, viewport: 700, contentTop: 0, intersects: true,
+            following: false)
+        // Mid-history: the bottom edge is offscreen.
+        coordinator.bottomEdgeVisibleChanged(false)
+        // The user jumps to the bottom (the last row, bottom-anchored).
+        coordinator.userJumped(to: "row-z", anchor: .bottom)
+        #expect(
+            coordinator.position?.viewID(type: String.self) == "row-z")
+
+        // The landing OVERSHOOTS (the LazyVStack estimate on the
+        // unmaterialized region): the scroll settles with NO row
+        // intersecting — the reported blank page.
+        coordinator.scrollPhaseChanged(.animating)
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 4000, viewportHeight: 700,
+            contentTop: 4000, rowsIntersectViewport: false))
+        coordinator.scrollPhaseChanged(.idle)
+
+        // ONE center-anchored correction on the SAME target: a center
+        // anchor can never place the target outside its own extent,
+        // so the real message is on screen.
+        #expect(
+            coordinator.position?.viewID(type: String.self) == "row-z")
+
+        // The correction lands: rows intersect, the reader is back at
+        // the bottom edge (the sentinel reports visible) — settled, no
+        // further commands.
+        coordinator.bottomEdgeVisibleChanged(true)
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 4000, viewportHeight: 700,
+            contentTop: 3200, rowsIntersectViewport: true))
+        #expect(coordinator.position == nil)
+    }
+
+    @Test("send growth while following latest: the hold targets the NEW last row, revealed at the bottom")
+    func sendGrowthFollowsNewLastRow() {
+        let (coordinator, _) = makeCoordinator(
+            document: 4000, viewport: 700, contentTop: 0, intersects: true)
+        // The reader is following latest, at the bottom edge.
+        coordinator.scrollPhaseChanged(.idle)
+
+        // The just-sent message lands: content GROWS, the bottom
+        // sentinel is pushed offscreen (the edge is lost). The
+        // coordinator holds the bottom edge on the NEW last row — the
+        // just-sent message is revealed ("a bit"), never an overscroll
+        // past it into blank.
+        coordinator.itemsChanged(first: "row-a", last: "row-new")
+        coordinator.bottomEdgeVisibleChanged(false)
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 4200, viewportHeight: 700,
+            contentTop: 0, rowsIntersectViewport: true))
+        #expect(
+            coordinator.position?.viewID(type: String.self) == "row-new")
+
+        // The landing verification follows the same (new) target.
+        coordinator.scrollPhaseChanged(.animating)
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 4200, viewportHeight: 700,
+            contentTop: 4200, rowsIntersectViewport: false))
+        coordinator.scrollPhaseChanged(.idle)
+        #expect(
+            coordinator.position?.viewID(type: String.self) == "row-new")
     }
 
     @Test("settlement: rows intersecting again clears the decision")

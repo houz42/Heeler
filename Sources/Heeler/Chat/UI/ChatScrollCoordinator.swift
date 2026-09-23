@@ -93,15 +93,41 @@ final class ChatScrollCoordinator {
     // MARK: Input ports
 
     /// The bottom sentinel's presence: true = the latest edge is on
-    /// screen = the reader is following the live bottom.
+    /// screen (no command needed to hold it). false = either the
+    /// reader scrolled up (stop following) or content GREW while
+    /// following (keep following — the sentinel was pushed offscreen
+    /// by the new records, not by the reader).
+    private(set) var bottomEdgeVisible = true
+    /// Set when the last record id changed while the reader was
+    /// following latest (content growth at the edge): the sentinel's
+    /// NEXT departure keeps followsLatest (growth ≠ reading history).
+    private var edgeGrewWhileFollowing = false
+    /// Same flag for the viewport SHRINK path (the keyboard appearing
+    /// while at the edge).
+    private var viewportShrankWhileFollowing = false
+
+
     func bottomEdgeVisibleChanged(_ visible: Bool) {
-        guard followsLatest != visible || visible else {
-            // No-op except the rising edge after a mid-history read.
-            return
+        guard bottomEdgeVisible != visible else { return }
+        bottomEdgeVisible = visible
+        if visible {
+            followsLatest = true
+            edgeGrewWhileFollowing = false
+            viewportShrankWhileFollowing = false
+        } else if edgeGrewWhileFollowing || viewportShrankWhileFollowing {
+            // The sentinel left because content grew or the viewport
+            // shrank (the keyboard) while the reader was following —
+            // NOT a scroll up. Keep following; the hold re-reveals
+            // the edge.
+            edgeGrewWhileFollowing = false
+            viewportShrankWhileFollowing = false
+        } else {
+            // The reader left the bottom edge by scrolling up: they
+            // are reading history now.
+            followsLatest = false
         }
-        followsLatest = visible
         ChatViewportLog.shared.record(
-            .anchor, visible ? "following latest" : "reading history")
+            .anchor, visible ? "at latest edge" : "left latest edge")
     }
 
     func topSentinelVisibleChanged(_ visible: Bool) {
@@ -121,6 +147,13 @@ final class ChatScrollCoordinator {
     func geometryChanged(_ new: ChatViewportGeometry) {
         guard new != geometry else { return }
         let old = geometry
+        // A viewport SHRINK while following latest (the keyboard
+        // appearing) may push the bottom sentinel offscreen without
+        // the reader scrolling — the sentinel's next departure must
+        // not stop the following.
+        if followsLatest, let old, new.viewportHeight < old.viewportHeight {
+            viewportShrankWhileFollowing = true
+        }
         geometry = new
         ChatViewportLog.shared.record(
             .geometry,
@@ -136,12 +169,29 @@ final class ChatScrollCoordinator {
         guard itemBounds?.first != first || itemBounds?.last != last
         else { return }
         let hadItems = itemBounds != nil
+        // Growth at the edge: the LAST record id changed while the
+        // reader was following latest (a just-sent message, a stream
+        // tail) — capture it BEFORE the bounds update.
+        if followsLatest, let oldLast = itemBounds?.last,
+            oldLast != last, !last.isEmpty
+        {
+            edgeGrewWhileFollowing = true
+        }
         itemBounds = (first, last)
         ChatViewportLog.shared.record(.records, "first=\(first) last=\(last)")
         if !hadItems, geometry != nil, !didInitialAnchor {
             // Content arrived after the first measurement: the initial
             // anchor decision runs now.
             decideInitialAnchor()
+        }
+        // Content growth at the latest edge (a just-sent message): a
+        // pending bottom-targeted landing follows the NEW last row so
+        // the verification targets what actually needs to be on
+        // screen, not the row that was last when the jump fired.
+        if followsLatest, let pending = pendingLandingTargetID,
+            pending != last, !last.isEmpty
+        {
+            pendingLandingTargetID = last
         }
         // A viewport whose rows intersect again re-arms repairs.
         if geometry?.rowsIntersectViewport == true {
@@ -150,6 +200,7 @@ final class ChatScrollCoordinator {
     }
 
     // MARK: Decisions
+
 
     /// The initial open is owned by the stock defaultScrollAnchor
     /// (latest-edge for long history; top-aligned short content). The
@@ -166,9 +217,11 @@ final class ChatScrollCoordinator {
         guard geometry.rowsIntersectViewport else {
             repairAttempts += 1
             if followsLatest {
-                issuePosition(ScrollPosition(edge: .bottom))
+                issuePosition(
+                    ScrollPosition(id: bounds.last, anchor: .bottom))
+                pendingLandingTargetID = bounds.last
                 ChatViewportLog.shared.record(
-                    .anchor, "initial: REPAIR blank → latest edge")
+                    .anchor, "initial: REPAIR blank → last row \(bounds.last)")
             } else {
                 issuePosition(ScrollPosition(id: bounds.first, anchor: .top))
                 ChatViewportLog.shared.record(
@@ -194,26 +247,43 @@ final class ChatScrollCoordinator {
 
         // The blank-viewport repair (content exists, NO row intersects
         // the visible window, no scroll in flight): one corrective
-        // position, bounded.
+        // position, bounded. NEVER the bare document edge — edge
+        // positions scroll past the last row into unmaterialized lazy
+        // space (the reported send/jump blank): the target is the
+        // LAST ROW, and the landing is verified (verifyBlankLanding).
         if !geometry.rowsIntersectViewport, scrollIdle,
             repairAttempts < Self.maxRepairAttempts
         {
             repairAttempts += 1
             if followsLatest {
-                issuePosition(ScrollPosition(edge: .bottom))
+                issuePosition(
+                    ScrollPosition(id: bounds.last, anchor: .bottom))
+                pendingLandingTargetID = bounds.last
             } else {
                 issuePosition(ScrollPosition(id: bounds.first, anchor: .top))
             }
             ChatViewportLog.shared.record(
                 .anchor,
-                "REPAIR blank viewport (#\(repairAttempts)) → \(followsLatest ? "latest edge" : "top row \(bounds.first)")")
+                "REPAIR blank viewport (#\(repairAttempts)) → \(followsLatest ? "last row \(bounds.last)" : "top row \(bounds.first)")")
             return
         }
-        // Following latest on overflow: keep the bottom edge through
-        // keyboard/refresh cycles (new content stays visible).
-        if followsLatest, geometry.overflows, scrollIdle {
-            issuePosition(ScrollPosition(edge: .bottom))
-            ChatViewportLog.shared.record(.anchor, "follow-latest: keep bottom edge")
+        // Following latest on overflow: hold the bottom edge through
+        // keyboard/refresh/SEND cycles — but ONLY when the edge is
+        // actually LOST (the bottom sentinel left the screen). A
+        // settled viewport at the bottom edge needs NO command; an
+        // unconditional re-issue here fought every settlement and
+        // churned commands on each geometry pass (the send/jump
+        // blank class). The target is the LAST ROW (bottom-anchored —
+        // its bottom pinned to the viewport's bottom, so growth
+        // reveals the new message "a bit"), never the bare document
+        // edge; the landing is verified.
+        if followsLatest, !bottomEdgeVisible, geometry.overflows,
+            scrollIdle
+        {
+            issuePosition(ScrollPosition(id: bounds.last, anchor: .bottom))
+            pendingLandingTargetID = bounds.last
+            ChatViewportLog.shared.record(
+                .anchor, "follow-latest: hold bottom edge (last row)")
         }
         // Reading mid-history: NO programmatic command. The reader's
         // anchor row stays visible (LazyVStack preserves it across
@@ -233,12 +303,29 @@ final class ChatScrollCoordinator {
     }
 
     /// The jump pill's explicit navigations — routed through the
-    /// coordinator so they can never interleave with a repair.
+    /// coordinator so they can never interleave with a repair. A
+    /// bottom-anchored jump onto an UNMATERIALIZED lazy region rides
+    /// SwiftUI's position ESTIMATE, which can overshoot past the last
+    /// row into blank space (the reported jump-to-bottom blank). The
+    /// landing is therefore VERIFIED: if the scroll settles with no
+    /// row intersecting the viewport, ONE corrective position lands
+    /// the same id CENTER-anchored — a center anchor can never place
+    /// the target outside its own extent, so the real message is on
+    /// screen, never blank.
     func userJumped(to id: String, anchor: UnitPoint) {
         issuePosition(ScrollPosition(id: id, anchor: anchor))
         followsLatest = anchor == .bottom
+        if anchor == .bottom {
+            pendingLandingTargetID = id
+            landingCorrections = 0
+        }
         ChatViewportLog.shared.record(.anchor, "user jump → \(id)")
     }
+
+    /// A bottom-targeted landing that settled blank gets at most ONE
+    /// center-anchored correction (then the bounded repair budget).
+    private var pendingLandingTargetID: String?
+    private var landingCorrections = 0
 
     // MARK: Settlement
 
@@ -249,13 +336,56 @@ final class ChatScrollCoordinator {
     /// A live decision clears once the geometry shows a row
     /// intersecting the viewport and no scroll is in flight —
     /// one-shot semantics, so the user's own scrolls always win after.
+    /// A bottom-targeted landing that settled with NO row intersecting
+    /// (the LazyVStack estimate overshot into blank) takes ONE
+    /// center-anchored correction on the same target before the
+    /// generic repair budget.
     private func settleIfSatisfied() {
-        guard position != nil, let geometry,
-            geometry.rowsIntersectViewport, scrollIdle
+        guard position != nil, let geometry, scrollIdle else { return }
+        if geometry.rowsIntersectViewport {
+            position = nil
+            repairAttempts = 0
+            pendingLandingTargetID = nil
+            ChatViewportLog.shared.record(
+                .anchor, "settled — rows intersect viewport")
+        } else {
+            verifyBlankLanding()
+        }
+    }
+
+    /// The landing verification: a live scroll decision went idle with
+    /// NO row intersecting the viewport — the blank-viewport failure
+    /// shape. For a bottom-targeted landing (jump-to-bottom,
+    /// send-follow), ONE center-anchored correction on the same target
+    /// id (a center anchor can never place the target outside its own
+    /// extent); otherwise the bounded generic repair, also last-row
+    /// targeted (never the bare document edge).
+    private func verifyBlankLanding() {
+        guard let geometry, !geometry.rowsIntersectViewport, scrollIdle
         else { return }
-        position = nil
-        repairAttempts = 0
-        ChatViewportLog.shared.record(.anchor, "settled — rows intersect viewport")
+        if let target = pendingLandingTargetID, landingCorrections == 0 {
+            landingCorrections += 1
+            issuePosition(ScrollPosition(id: target, anchor: .center))
+            ChatViewportLog.shared.record(
+                .anchor, "landing correction → \(target) centered")
+            return
+        }
+        // The generic bounded repair (initial/refresh blanks).
+        if repairAttempts < Self.maxRepairAttempts,
+            let bounds = itemBounds, !bounds.first.isEmpty
+        {
+            repairAttempts += 1
+            if followsLatest {
+                issuePosition(
+                    ScrollPosition(id: bounds.last, anchor: .bottom))
+                pendingLandingTargetID = bounds.last
+            } else {
+                issuePosition(ScrollPosition(id: bounds.first, anchor: .top))
+            }
+            ChatViewportLog.shared.record(
+                .anchor,
+                "REPAIR blank viewport (#\(repairAttempts)) → \(followsLatest ? "last row \(bounds.last)" : "top row \(bounds.first)")")
+        }
     }
 
 

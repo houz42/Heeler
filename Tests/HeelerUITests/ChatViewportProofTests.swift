@@ -208,4 +208,76 @@ final class ChatViewportProofTests: XCTestCase {
         assertVisibleMessage("Message -1 from the user", in: app)
         captureScreenshot(app, "lifecycle-after-older-page-anchor-held")
     }
+
+    // MARK: Jump-to-bottom from mid-list (the overshoot bug)
+
+    func testJumpToBottomFromMidListLandsOnLastMessageNotBlank() {
+        let app = launchLifecycleChat()
+        assertVisibleMessage("Message 39 from the agent", in: app)
+
+        // Walk to a mid-history position first (jump to oldest, which
+        // also loads the older page — the reader is now FAR from the
+        // bottom, the unmaterialized region at its maximum).
+        let oldestButton = app.buttons["Oldest message"]
+        XCTAssertTrue(
+            oldestButton.waitForExistence(timeout: UITestTimeouts.standard))
+        oldestButton.tap()
+        XCTAssertTrue(
+            message("Message -1 from the user", in: app).waitForExistence(
+                timeout: UITestTimeouts.standard),
+            "the older page never loaded")
+
+        // THE TRANSITION: jump to bottom from deep mid-history. The
+        // pre-fix behavior: the scroll's position ESTIMATE overshoots
+        // past the last message into blank space (a blank page until
+        // the user scrolls). The invariant: the LAST REAL MESSAGE is
+        // on screen, intersecting the viewport.
+        let newestButton = app.buttons["Latest message"]
+        XCTAssertTrue(
+            newestButton.waitForExistence(timeout: UITestTimeouts.standard),
+            "the jump-to-latest control never appeared")
+        newestButton.tap()
+
+        assertVisibleMessage("Message 39 from the agent", in: app)
+        captureScreenshot(app, "lifecycle-jump-to-bottom-lands-on-last")
+    }
+
+    // MARK: Send while at the bottom (the follow-latest-on-send bug)
+
+    func testSendWhileAtBottomRevealsJustSentMessageNoBlank() {
+        let app = launchLifecycleChat()
+        assertVisibleMessage("Message 39 from the agent", in: app)
+
+        // THE TRANSITION: send while following latest. The content
+        // grows (optimistic echo → confirmed record → streamed
+        // reply). The pre-fix behavior: the follow-latest command
+        // targeted the bare document edge and jumped past the new
+        // message into blank. The invariant: the JUST-SENT message is
+        // revealed at the bottom (a bit of growth), never a blank.
+        app.buttons["Send"].tap()
+
+        let sent = message("Sent message 1 from the user", in: app)
+        let appeared = sent.waitForExistence(timeout: UITestTimeouts.standard)
+        if !appeared {
+            captureScreenshot(app, "send-proof-failure-diagnostic")
+        }
+        XCTAssertTrue(
+            appeared,
+            "the just-sent message never rendered")
+        let window = app.windows.firstMatch
+        XCTAssertTrue(
+            window.frame.intersects(sent.frame),
+            "the just-sent message is mounted but NOT intersecting the viewport — the send blank-jump failure shape")
+
+        // The streamed reply lands too — still no blank.
+        let reply = message("The demo agent's reply lands here", in: app)
+        XCTAssertTrue(
+            reply.waitForExistence(timeout: UITestTimeouts.standard),
+            "the streamed reply never rendered")
+        XCTAssertTrue(
+            window.frame.intersects(reply.frame),
+            "the streamed reply is mounted but NOT intersecting the viewport")
+
+        captureScreenshot(app, "lifecycle-send-at-bottom-reveals-message")
+    }
 }
