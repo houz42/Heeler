@@ -105,3 +105,36 @@ struct TerminalSurfaceOrphanLayerTests {
         #expect(ghosttyContentLayers(of: preview).count == 1)
     }
 }
+
+// MARK: - Retained surface reflows on remount (#device half-height)
+
+@MainActor
+@Test func retainedSurfaceReturnsTheSameViewAndCanReflow() {
+    let retention = TerminalSurfaceRetention()
+    let feed = TerminalByteFeed()
+
+    let makeView = {
+        let view = HeelerTerminalView(
+            frame: CGRect(x: 0, y: 0, width: 402, height: 400),
+            onSizeChanged: nil, onViewportTextChanged: nil, onSend: nil,
+            onScroll: nil, onPaste: nil, theme: .default,
+            fontSize: TerminalZoomSettings.defaultFontSize,
+            fontFamily: nil, clipboard: TerminalClipboard(
+                string: { nil }, hasStrings: { false }))
+        view.installKeyboardSwitcher()
+        return view
+    }
+
+    let first = retention.surface(for: feed, make: makeView)
+    #expect(retention.hasSurface(for: feed))
+    let second = retention.surface(for: feed, make: makeView)
+    #expect(second === first, "retention must return the same UIKit surface")
+
+    second.setNeedsLayout()
+    second.layoutIfNeeded()
+
+    let other = TerminalByteFeed()
+    let third = retention.surface(for: other, make: makeView)
+    #expect(third !== first)
+    #expect(!retention.hasSurface(for: feed))
+}

@@ -178,6 +178,12 @@ final class TerminalSurfaceRetention {
     private var feed: TerminalByteFeed?
     private var surface: HeelerTerminalView?
 
+    /// True when the next `surface(for:make:)` will RETURN a retained
+    /// surface (same feed) rather than make a fresh one.
+    func hasSurface(for feed: TerminalByteFeed) -> Bool {
+        self.feed === feed && surface != nil
+    }
+
     func surface(for feed: TerminalByteFeed, make: () -> HeelerTerminalView) -> HeelerTerminalView {
         if self.feed === feed, let surface { return surface }
         clear()
@@ -272,7 +278,12 @@ struct TerminalScreenView: UIViewRepresentable {
             theme: theme,
             fontSize: fontSize,
             fontFamily: fontFamily) }
+        let isRetained = retention?.hasSurface(for: feed) == true
         let view = retention?.surface(for: feed, make: make) ?? make()
+        if isRetained {
+            view.setNeedsLayout()
+            view.layoutIfNeeded()
+        }
         // A retained surface returns with its previous callbacks and
         // settings; re-point everything at THIS pipeline before use.
         view.updateCallbacks(
