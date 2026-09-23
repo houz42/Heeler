@@ -71,6 +71,10 @@ enum UITestApp {
         /// always-mounted paste entry — the remote-pairing paste path
         /// proof surface.
         case pairingPaste
+        /// The v3 work inspector: the read-only Tasks/Subagents
+        /// surface over the demo fixture transcript — the
+        /// tasks-inspector proof surface.
+        case tasksInspector
 
         /// The chat surface driven by the REAL AgentChatStore over a
         /// scripted in-memory broker pipe — the blank-viewport slice's
@@ -109,6 +113,8 @@ enum UITestApp {
                     "--demo-screenshots", "--demo-pairing-paste",
                     "--uitest-pairing-authorized-camera",
                 ]
+            case .tasksInspector:
+                return ["--demo-screenshots", "--demo-tasks-inspector"]
             }
         }
     }

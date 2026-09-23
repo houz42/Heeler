@@ -1,0 +1,20 @@
+{
+  "slice": "v3 read-only hierarchical Tasks inspector (feat/v3-tasks-inspector)",
+  "captures": [
+    {
+      "file": "tasks-inspector-tasks.png",
+      "surface": "--demo-tasks-inspector on heeler-v3-tasks sim (iPhone 17 class, A6779814…), Tasks tab",
+      "verified": "Vision model: 'Work inspector' title, Tasks|Subagents segmented tabs with Tasks selected; leaf-only progress line '2 of 5 completed · 1 blocked · 1 in progress' whose counts match the visible row icons; producer-order hierarchy (Research group → 2 completed leaves, Delivery group → in-progress/blocked/pending leaves); left state icons only (question mark on the non-active group — honest Unknown parent state; check/dash/exclamation/square on leaves); collapse chevrons on group rows only; blocked reason 'awaiting user pick' as the blocked leaf's subtitle; no clipped, truncated or overlapping text anywhere."
+    },
+    {
+      "file": "tasks-inspector-subagents.png",
+      "surface": "--demo-tasks-inspector on heeler-v3-tasks sim, Subagents tab",
+      "verified": "Vision model: four compact two-line identity rows in spawn order (DroverInternals, HeelerInternals, WhipInternals, MultiplexInternals), each with a 26pt rounded left icon (question mark — honest Unknown runtime state), a 'scout' kind chip, and the assignment subtitle fully rendered; NO right-side text-state badge and NO row claims running/completed/failed — the runtime state is honestly unobservable from the transcript; no clipping, truncation or overlap."
+    }
+  ],
+  "test_evidence": {
+    "unit_pins": "HeelerTests/TasksInspectorTests.swift — 5 suites: TodoChecklistParserTests (producer-order hierarchy, Remaining-items duplicate never parsed, leaf state mapping, blocked reason as detail, active phase producer-reported and never inferred from child completion, cleared-list snapshot, unrecognized-format honesty, position-keyed stable IDs, per-call ID scopes), WorkInspectorSnapshotBuilderTests (latest todo result wins, honest unsupported, not-loaded vs empty, subagent identity from structured spawn args, runtime-state/verdict separation, hub prose never becomes rows, unacknowledged spawn flag, same-name distinctness, leaf-only totals), WorkVisibleRowsTests (depth-first producer-order walk, collapsed group hides its subtree, sibling groups independent, cycle guard, orphan handling, expansion prune), WorkInspectorStateNamingTests (accessible state names + the design's exact glyph mapping), WorkInspectorFixtureTranscriptTests (round-trip over the real checked-in omp agent-management fixture transcript: 4 scouts, honest unknowns, latest 7/8 state).",
+    "ui_proofs": "HeelerUITests/TasksInspectorProofTests — 6 tests, all green on the heeler-v3-tasks sim: producer-order hierarchy renders, collapsing hides the subtree while the tally stays, accessible labels name states (Completed/Blocked + reason), subagent identity rows in spawn order with 'runtime state: Unknown', tab switching, and the two vision-verified captures."
+  },
+  "data_reality": "Sourced from the agent's own task/tool-call records visible to the app: the todo tool's rendered checklist (producer's own format — census of 180 live omp todo results, 179 sharing the exact 'Active phase' phase-section shape) and the task spawn call's structured {name, task, agent} arguments with the paired spawn result. Child-run observation is NOT available in the transcript: a task tool-call ID is not a child-run identity, runtime state and result verdict render honestly Unknown/Not reported with the unsupported note, and later `hub` prose is never scraped."
+}
