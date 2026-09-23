@@ -50,7 +50,7 @@ private func makeDependencies(
         tagFilter: { tags?.append($0) },
         workspaces: { ["iOS App"] },
         statuses: { ["blocked", "working", "done", "idle"] },
-        agents: { ["docs-review", "accessibility"] }))
+        agents: { ["docs-review", "accessibility"] })
 }
 
 @MainActor
@@ -114,6 +114,7 @@ struct ChatComposerChooserTests {
     /// Opening a chooser records the mode; cancel clears it without
     /// touching draft, caret, or focus (the design doc: Cancel
     /// returns to exactly the original draft/caret).
+    @MainActor
     @Test func chooserOpenAndCancelCycle() {
         let store = ComposerRouterStore(
             dependencies: makeDependencies(levelDefaults: freshDefaults()))
@@ -128,6 +129,7 @@ struct ChatComposerChooserTests {
     /// filters: agent commands first (catalog IDs `omp:<name>`),
     /// client-local last (`local:<name>`) — a + menu selection is a
     /// resolved catalog identity.
+    @MainActor
     @Test func catalogCarriesResolvedIDsAgentsFirstLocalsLast() {
         let store = ComposerRouterStore(
             dependencies: makeDependencies(levelDefaults: freshDefaults()))
@@ -136,12 +138,13 @@ struct ChatComposerChooserTests {
         #expect(catalog.prefix(ompNames.count).map(\.id)
             == ompNames.map { "omp:\($0)" })
         #expect(catalog.suffix(ComposerLocalCommand.all.count).map(\.id)
-            == ComposerLocalCommand.all.map { "local:\($0)" })
+            == ComposerLocalCommand.all.map { "local:\($0.name)" })
     }
 
     /// Executing a resolved selection routes through the SAME path a
     /// typed draft takes: a client-local /level with arguments
     /// persists the level and reports `.handled`; the chooser clears.
+    @MainActor
     @Test func runCommandSelectionRoutesLikeTypedText() async {
         let defaults = freshDefaults()
         let store = ComposerRouterStore(
@@ -159,6 +162,7 @@ struct ChatComposerChooserTests {
 
     /// A rejected selection (bad arguments) keeps the chooser OPEN and
     /// carries the user-facing reason — never a silent no-op.
+    @MainActor
     @Test func rejectedSelectionKeepsChooserOpenWithError() async {
         let store = ComposerRouterStore(
             dependencies: makeDependencies(levelDefaults: freshDefaults()))
@@ -173,6 +177,7 @@ struct ChatComposerChooserTests {
 
     /// A mention selection resolves + delivers like a typed mention;
     /// an unresolved name rejects with the chooser still open.
+    @MainActor
     @Test func mentionSelectionDeliversOrRejectsLikeTypedText() async {
         let store = ComposerRouterStore(
             dependencies: makeDependencies(levelDefaults: freshDefaults()))
@@ -190,6 +195,7 @@ struct ChatComposerChooserTests {
     /// A shell selection routes to the scratch shell (never the agent
     /// prompt): an empty command is rejected with guidance, the
     /// chooser stays open; a real one is handled and clears it.
+    @MainActor
     @Test func shellSelectionRoutesToTheScratchShell() async {
         let store = ComposerRouterStore(
             dependencies: makeDependencies(levelDefaults: freshDefaults()))
@@ -210,6 +216,7 @@ struct ChatComposerChooserTests {
     /// typed `#` menu filters, and a chosen tag applies the SAME
     /// structured TagFilter the typed path builds — client-side,
     /// never agent-bound.
+    @MainActor
     @Test func tagCatalogAndApplyShareTheTypedParse() {
         let tags = Recorder<TagFilter>()
         let store = ComposerRouterStore(
@@ -229,6 +236,7 @@ struct ChatComposerChooserTests {
 
     /// The agent roster for the Mention chooser is the SAME list the
     /// typed `@` menu suggests.
+    @MainActor
     @Test func agentRosterMirrorsTheTypedSuggestions() {
         let store = ComposerRouterStore(
             dependencies: makeDependencies(levelDefaults: freshDefaults()))
@@ -283,6 +291,7 @@ struct ChatComposerSendEnablementTests {
             items: items, draft: "  look at this  ")
         #expect(text == """
             > earlier line
+
 
             look at this
             @/tmp/spec.md
