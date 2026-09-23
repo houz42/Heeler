@@ -428,37 +428,42 @@ struct AgentDetailView: View {
                 loadOlder: { [weak store] in await store?.loadOlder() },
                 router: chatRouter,
                 deliver: { text in
-                    try await store.send(text)
+                    // v3 submitted-draft stack: submit durably enqueues
+                    // (the composer clears on LOCAL enqueue) — the wire
+                    // outcome lands on the outbox entry as an honest
+                    // status, never thrown at the composer. Only a
+                    // failed LOCAL enqueue throws (the draft stays).
+                    try await store.submit(text)
                 },
                 deliverStructured: { text, images in
-                    // Review gap 7: the attachment-bearing send — the
-                    // text AND its real image content reach the broker
-                    // as one structured prompt.send.
-                    try await store.send(text, images: images)
-                },
-                retrySend: { echoID in
-                    // Re-review round 3, findings 1+3: the row's
-                    // messageID IS the original echo UUID. The STORE
-                    // routes by the echo's own state: .failed → the
-                    // duplicate-safe retry (same key); .ambiguous →
-                    // the explicit may-duplicate resend (fresh key,
-                    // user decision).
-                    guard let store = brokerChat else { return }
-                    if let echo = store.outgoing.first(where: {
-                        $0.id == echoID
-                    }) {
-                        switch echo.state {
-                        case .failed:
-                            try await store.retry(echoID: echoID)
-                        case .ambiguous:
-                            try await store
-                                .resendAcknowledgingPossibleDuplicate(echoID: echoID)
-                        case .sending, .sent:
-                            break
-                        }
-                    }
+                    // The attachment-bearing submission: text AND real
+                    // image content ride one durable outbox entry.
+                    try await store.submit(text, images: images)
                 },
                 pendingUnsupported: !store.askSupported,
+                pendingMessages: store.outbox.map(ChatPendingEntry.init),
+                onPendingRetry: { entryID in
+                    Task { @MainActor in await store.retry(entryID: entryID) }
+                },
+                onPendingResend: { entryID in
+                    Task {
+                        @MainActor in await store
+                            .resendAcknowledgingPossibleDuplicate(entryID: entryID)
+                    }
+                },
+                onPendingHide: { entryID in
+                    store.hideOutboxEntry(entryID: entryID)
+                },
+                onPendingShowHidden: {
+                    store.showHiddenOutboxEntries()
+                },
+                onPendingEdit: { entry in
+                    // The entry's text returns to the composer via
+                    // ChatScreen's own draft edit; nothing store-side
+                    // to mutate (the rejected entry stays for its own
+                    // retry/copy/hide decision).
+                    _ = entry
+                },
                 authorLabel: "Meadow · \(agent.agent.kind.lowercased())",
                 attachments: chatAttachments,
                 onAskAnswer: { interaction, payloads in
@@ -552,70 +557,22 @@ struct AgentDetailView: View {
         }
     }
 
-    /// The agent-chat store's content projection: outgoing echoes at
-    /// the tail FIRST, then provisional stream tails (review gap 4 —
-    /// the agent's streaming reply must render BELOW the user message
-    /// it answers, never above), then the pending surface.
+    /// The agent-chat store's content projection: the committed page's
+    /// messages, then provisional stream tails (review gap 4 — the
+    /// agent's streaming reply must render BELOW the user message it
+    /// answers, never above), then the pending surface. The v3
+    /// submitted-draft stack moved just-sent messages OUT of this
+    /// projection: they render in the separate ChatPendingRegionView
+    /// (between history and the composer), keyed by the outbox — one
+    /// canonical display record per requestKey/recordId (no double
+    /// bubble: the entry drops when its record lands in the page).
     private var brokerContent: ChatContent {
         var content = brokerChat?.content ?? ChatContent()
-        // Outgoing echoes (items 1/11): each just-sent user message
-        // renders IMMEDIATELY as its own user bubble — the optimistic
-        // local echo. Deterministic "echo:" ids keep the row's identity
-        // stable across delivery-state transitions (sending →
-        // sent/failed re-renders in place, never a churn). A confirmed
-        // echo drops the moment the committed page carries the real
-        // record (AgentChatStore.reconcileOutgoing), so the echo and
-        // its confirmed twin never render together.
-        for echo in brokerChat?.outgoing ?? [] {
-            var blocks: [ChatBlock] = [.text(echo.text)]
-            // Structured images ride the echo too (review gap 7): the
-            // sent image previews as a real image block on the user's
-            // own bubble. Projection lives in
-            // AgentChatMapper.echoImageBlocks (re-review round 5,
-            // inline-ref finding): an inline-sent image carries its
-            // REAL BYTES (the renderer draws them directly; no
-            // fabricated fetchable id), and each image gets its OWN
-            // "inline:\(echoID)-\(index)" ref so multiple images in
-            // one echo stay DISTINCT rows.
-            blocks.append(
-                contentsOf: AgentChatMapper.echoImageBlocks(
-                    echoID: echo.id, images: echo.images))
-            switch echo.state {
-            case .failed:
-                // The broker answered NO: a replay is duplicate-SAFE
-                // (same key within the registration — the broker
-                // dedups).
-                if let message = echo.failureMessage {
-                    blocks.append(.notice(
-                        text: "\(message) Tap to retry.",
-                        level: "error"))
-                }
-            case .ambiguous:
-                // Re-review round 4, finding 3: acceptance UNKNOWN —
-                // the re-send MAY DUPLICATE. Distinct "resend" level
-                // so the AX hint names the risk, never "retry".
-                if let message = echo.failureMessage {
-                    blocks.append(.notice(
-                        text: "\(message) Send again — may duplicate.",
-                        level: "resend"))
-                }
-            case .sending, .sent:
-                break
-            }
-            // Re-review round 3, finding 1: the message id IS the
-            // ORIGINAL outgoing UUID — no derivation (a derived id
-            // broke the retry lookup: stableID("echo:"+id) ≠ id).
-            // The echo id is already a unique UUID; using it directly
-            // makes the retry row's messageID exactly store.echo.id.
-            content.messages.append(
-                ChatMessage(
-                    id: echo.id,
-                    role: .user, blocks: blocks, timestamp: echo.sentAt))
-        }
-        // Provisional stream tails AFTER the echoes: the reply follows
-        // the question. Deterministic per-stream ids (a fresh UUID per
-        // delta would churn the bubble's identity every chunk and
-        // flicker the whole row, item 20).
+        // Provisional stream tails: the reply follows the user's
+        // message (the pending region above or the committed record).
+        // Deterministic per-stream ids (a fresh UUID per delta would
+        // churn the bubble's identity every chunk and flicker the
+        // whole row, item 20).
         for tail in brokerChat?.streamTails ?? [] where !tail.text.isEmpty {
             content.messages.append(
                 ChatMessage(

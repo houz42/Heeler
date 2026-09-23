@@ -72,6 +72,19 @@ struct ChatScreen: View {
     /// Review gap 7: the structured deliver — text + real image
     /// content. Nil degrades to the text-only deliver.
     var deliverStructured: ((_ text: String, _ images: [AgentChatOutgoingImage]) async throws -> Void)? = nil
+    /// The v3 pending-messages region's entries (the durable outbox's
+    /// visible projection), in local submission order. Empty = the
+    /// region does not mount at all. The region renders BETWEEN the
+    /// transcript and the composer — never interleaved with history.
+    var pendingMessages: [ChatPendingEntry] = []
+    /// The region's action seams. Nil keeps the affordances visible
+    /// but inert (previews, unwired surfaces).
+    var onPendingRetry: ((UUID) -> Void)? = nil
+    var onPendingResend: ((UUID) -> Void)? = nil
+    var onPendingHide: ((UUID) -> Void)? = nil
+    var onPendingShowHidden: (() -> Void)? = nil
+    /// Returns a rejected entry's text to the composer for editing.
+    var onPendingEdit: ((ChatPendingEntry) -> Void)? = nil
     /// True when the pending (ask) rows must render as an honest
     /// unsupported state — the broker backend has no verified answering
     /// API in v1. False keeps the JSONL backend's interactive rows.
@@ -107,6 +120,14 @@ struct ChatScreen: View {
         /// visible but inert.
         retrySend: ((UUID) async throws -> Void)? = nil,
         pendingUnsupported: Bool = false,
+        /// The v3 pending-messages region (the durable outbox's
+        /// projection) + its action seams.
+        pendingMessages: [ChatPendingEntry] = [],
+        onPendingRetry: ((UUID) -> Void)? = nil,
+        onPendingResend: ((UUID) -> Void)? = nil,
+        onPendingHide: ((UUID) -> Void)? = nil,
+        onPendingShowHidden: (() -> Void)? = nil,
+        onPendingEdit: ((ChatPendingEntry) -> Void)? = nil,
         authorLabel: String = "",
         attachments: ChatAttachments? = nil,
         onAskAnswer: ((PendingInteraction, [ChatInteractionAnswerPayload]) async throws -> Void)? = nil,
@@ -129,6 +150,12 @@ struct ChatScreen: View {
         self.stripAccessory = stripAccessory
         self.router = router
         self.pendingUnsupported = pendingUnsupported
+        self.pendingMessages = pendingMessages
+        self.onPendingRetry = onPendingRetry
+        self.onPendingResend = onPendingResend
+        self.onPendingHide = onPendingHide
+        self.onPendingShowHidden = onPendingShowHidden
+        self.onPendingEdit = onPendingEdit
         self.authorLabel = authorLabel
         self.attachments = attachments
         self.onAskAnswer = onAskAnswer
@@ -198,6 +225,7 @@ struct ChatScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             transcriptScrollView
+            pendingRegion
             // The composer is a LAYOUT SIBLING (not a safe-area inset):
             // stock SwiftUI keyboard avoidance follows the two-stage
             // UIKit notifications an accessory-bearing responder
@@ -819,6 +847,37 @@ struct ChatScreen: View {
     private func toggleHelpful(_ id: String) {
         helpfulReactions.toggle(id)
         helpfulRefresh += 1
+    }
+    /// The v3 pending-messages region (submitted-draft stack): a
+    /// separate, labeled region AFTER loaded history and BEFORE the
+    /// composer — never interleaved with the committed transcript.
+    /// Extracted from body so the region's closure wiring stays out
+    /// of the body's type-check budget. Mounts only when something
+    /// is pending (or hidden, for the recovery row).
+    @ViewBuilder
+    private var pendingRegion: some View {
+        let editAction: ((ChatPendingEntry) -> Void)? = { entry in
+            onPendingEdit?(entry)
+            editPendingDraft(entry)
+        }
+        ChatPendingRegionView(
+            entries: pendingMessages,
+            retry: onPendingRetry,
+            resend: onPendingResend,
+            hide: onPendingHide,
+            showHidden: onPendingShowHidden,
+            edit: editAction)
+    }
+
+    /// A rejected pending entry's Edit: returns the entry's text to
+    /// the composer verbatim and focuses it, caret at the end. The
+    /// user edits and re-submits as a NEW submission (the rejected
+    /// entry stays until its own retry/copy/hide decision).
+    private func editPendingDraft(_ entry: ChatPendingEntry) {
+        draft = entry.text
+        draftCaret = entry.text.utf16.count
+        caretRequest = ChatCaretRequest(location: draftCaret)
+        inputFocused = true
     }
 
     /// Prefills the composer with the quoted draft and opens the input,
