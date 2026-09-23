@@ -159,7 +159,7 @@ final class QACardProofTests: XCTestCase {
             exportCard.waitForExistence(timeout: UITestTimeouts.standard))
         exportCard.tap()
         XCTAssertTrue(
-            element("Keep the first ten seconds only", in: app)
+            element("Include the first ten seconds only", in: app)
                 .waitForExistence(timeout: UITestTimeouts.standard),
             "the export card's note never rendered when expanded")
         captureScreenshot(app, "qa-card-chips-expanded", lifetime: .keepAlways)
