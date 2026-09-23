@@ -645,6 +645,31 @@ final class AgentAttachStore {
         {
             return lifecycleTask ?? Task {}
         }
+        // A preserving leave while the detail is STILL ON STAGE is surface
+        // churn, not a departure: the chat↔terminal surface swap fires the
+        // terminal surface's onDisappear in the same transaction its sibling
+        // branch appears, and SwiftUI hands out the spurious pair even when
+        // the screen never leaves the window. Tearing down here cancelled
+        // the pipeline (and its armed size-report fallback) mid-flight: on
+        // device the PTY never opened and the terminal rendered blank
+        // (#device, trace: arm_enter → attach_leave preserving=true →
+        // arm_cancelled site=stop → grace_cancelled_before_wake). The real
+        // departure keeps its teardown — a genuine leave arrives with
+        // isOnStage() false, and the terminal-handoff leave passes
+        // preserving=false so the shell can take the channel.
+        if preservingOnStageActivationRecovery,
+            lifecycleState == .active,
+            isOnStage(),
+            terminal.status == .waitingForSize || terminal.status == .connecting
+                || terminal.status == .live
+        {
+            #if DEBUG
+            terminal.restorationTrace.emitDiagnostic(
+                "attach_leave_skipped surface_churn lifecycle=\(lifecycleState) "
+                + "status=\(AttachTerminalStore.diagnosticStatusName(terminal.status))")
+            #endif
+            return lifecycleTask ?? Task {}
+        }
         #if DEBUG
         abortPendingForegroundRecoveryTrace()
         #endif
