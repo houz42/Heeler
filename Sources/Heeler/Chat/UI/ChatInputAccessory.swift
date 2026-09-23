@@ -442,6 +442,17 @@ struct ChatInputTextView: UIViewRepresentable {
         }
 
         func attachPlaceholder(to textView: UITextView, placeholder: String) {
+            // ONE placeholder layer, ever (the design doc's rule): a
+            // second attach re-uses the installed label instead of
+            // stacking another — the overlapping-layer regression
+            // this guard removes could only ever come from a future
+            // wiring mistake, but it is exactly the kind that ships
+            // silently (both labels render, twice the ink).
+            if let existing = placeholderLabel {
+                existing.text = placeholder
+                syncPlaceholderVisibility(for: textView)
+                return
+            }
             let label = UILabel()
             label.textColor = .placeholderText
             label.font = .preferredFont(forTextStyle: .body)

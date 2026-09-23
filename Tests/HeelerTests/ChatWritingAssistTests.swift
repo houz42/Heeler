@@ -128,9 +128,15 @@ struct ChatPlaceholderInvariantTests {
     @MainActor
     @Test("an external apply (suggestion accept) keeps the placeholder hidden")
     func externalApplyKeepsPlaceholderHidden() {
-        let (textView, placeholder, _) = makeWiredField()
+        // The coordinator must stay ALIVE for this test: UITextView's
+        // delegate is a weak reference, and discarding the tuple's
+        // coordinator slot deallocated it mid-test (the dangling
+        // delegate then skipped the placeholder sync silently).
+        let (textView, placeholder, coordinator) = makeWiredField()
         #expect(!placeholder.isHidden)
         textView.applyExternalDraft("/agents ", caret: 8)
+        #expect(textView.text == "/agents ")
+        #expect(textView.markedTextRange == nil)
         #expect(placeholder.isHidden)
         // Clearing through the same external path returns it.
         textView.applyExternalDraft("", caret: 0)

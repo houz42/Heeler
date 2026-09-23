@@ -37,18 +37,9 @@ final class WritingAssistProofTests: XCTestCase {
         let app = launchComposer()
         let field = composerField(app)
 
-        // Empty: the placeholder is the field's own AX label.
-        XCTAssertTrue(field.exists, "the composer must mount")
-
-        // Typed text: the placeholder must leave. The AX label stays
-        // "Message" (accessibility identity), so the visible-proof
-        // signal is the DRAFT's presence: type and assert the text
-        // landed exactly once.
-        field.tap()
-        field.typeText("hello draft")
-        XCTAssertEqual(
-            field.value as? String, "hello draft",
-            "the typed draft must land in the field")
+        // THE TYPING BAR: real keystrokes with focus retention —
+        // the typed draft lands exactly once.
+        field.typeTextWithFocusAssertion(on: app, "hello draft")
 
         // The placeholder label (a static text reading "Message") must
         // NOT be visible alongside nonempty text. The UIKit placeholder
@@ -113,9 +104,7 @@ final class WritingAssistProofTests: XCTestCase {
         // store untouched across relaunches (the reconnect analog).
         let app = launchComposer(persistDraft: true)
         let field = composerField(app)
-        field.tap()
-        field.typeText("half typed draft")
-        XCTAssertEqual(field.value as? String, "half typed draft")
+        field.typeTextWithFocusAssertion(on: app, "half typed draft")
 
         // Relaunch (terminate + relaunch): the ChatScreen remounts and
         // loads the persisted draft on appear — the reconnect analog.
