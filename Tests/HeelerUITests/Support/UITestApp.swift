@@ -58,6 +58,7 @@ enum UITestApp {
         /// fenced code) — the content-sized bubble capture surface
         /// (v3 width proofs).
         case chatBubbles
+
         /// The chat surface with markdown tables that stress the
         /// phone-width contract (long multi-column cells, code spans,
         /// links) — the wrapped-cell table capture surface (v3 table
@@ -75,11 +76,18 @@ enum UITestApp {
         /// surface over the demo fixture transcript — the
         /// tasks-inspector proof surface.
         case tasksInspector
+
         /// The v3 work inspector over the same fixture LINKED with
         /// live child-run registrations (two scouts Running, one
         /// honestly Unknown, one broker-only child) — the child-run
         /// proof surface.
         case tasksInspectorChildRun
+
+
+        /// The chat surface with an INTERACTIVE composer (v3
+        /// Messages-style composer proofs: compact row, multiline
+        /// growth, attachment tile, + menu, Send).
+        case chatComposer
         /// The chat surface driven by the REAL AgentChatStore over a
         /// scripted in-memory broker pipe — the blank-viewport slice's
         /// transition-capture fixture.
@@ -112,6 +120,7 @@ enum UITestApp {
                 return ["--demo-screenshots", "--demo-chat-lifecycle"]
             case .chatSpecialSections:
                 return ["--demo-screenshots", "--demo-chat-special-sections"]
+
             case .pairingPaste:
                 return [
                     "--demo-screenshots", "--demo-pairing-paste",
@@ -119,11 +128,16 @@ enum UITestApp {
                 ]
             case .tasksInspector:
                 return ["--demo-screenshots", "--demo-tasks-inspector"]
+
             case .tasksInspectorChildRun:
                 return [
                     "--demo-screenshots",
                     "--demo-tasks-inspector-childrun",
                 ]
+
+
+            case .chatComposer:
+                return ["--demo-screenshots", "--demo-chat-composer"]
             }
         }
     }
@@ -214,7 +228,7 @@ extension XCUIApplication {
     /// chats). Its accessibility label IS the placeholder.
     var chatInput: XCUIElement {
         descendants(matching: .any).matching(
-            NSPredicate(format: "label == %@", "Message — / # @ ! for commands")
+            NSPredicate(format: "label == %@", "Message")
         ).firstMatch
     }
 
