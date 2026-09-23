@@ -247,6 +247,12 @@ struct ChatInteractionCard: View {
                         .foregroundStyle(.red)
                 }
                 footer
+                // The footer separator + the single explicit Send
+                // (validated by the card; missing questions named).
+                Rectangle()
+                    .fill(Color.secondary.opacity(0.12))
+                    .frame(height: 0.5)
+                submitRow
             }
         }
         .modifier(ChatInteractionSwipeModifier(
@@ -640,6 +646,7 @@ struct ChatResolvedAskCard: View {
             withAnimation(.snappy) { expanded.toggle() }
         }
         .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("resolved-ask-card-\(ask.id)")
         .accessibilityLabel(accessibilitySummary)
         .accessibilityValue(expanded ? "Expanded" : "Collapsed")
         .accessibilityAction(named: "Toggle full answer") {
@@ -756,11 +763,13 @@ struct ChatResolvedAskCard: View {
             if expanded {
                 // Full detail, exact source preserved: selected labels
                 // as chips (or a list when long), the additional
-                // answer paragraph, the separately-labeled note.
+                // answer paragraph (ONLY when selection PLUS custom
+                // text — a free-text-only answer already IS the A
+                // line), the separately-labeled note.
                 if hasSelections {
                     selectedOptionsView(pair)
                 }
-                if hasCustom {
+                if hasCustom && hasSelections {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Additional answer")
                             .font(.caption2.weight(.semibold))
@@ -786,10 +795,13 @@ struct ChatResolvedAskCard: View {
         }
     }
 
-    /// The collapsed A line: selected labels joined with " · " (a
-    /// wrap-safe separator that is DISPLAY-ONLY — the stored answer
-    /// is the structured record, never this string), or the custom
-    /// text's first line.
+    /// The A line: selected labels joined with " · " (a wrap-safe
+    /// separator that is DISPLAY-ONLY — the stored answer is the
+    /// structured record, never this string), or the custom text —
+    /// ONE ellipsized line collapsed (the A row's lineLimit does the
+    /// truncation), the FULL text expanded (free-text-only answers
+    /// expand in place; selection+custom carries the custom text in
+    /// the Additional answer paragraph).
     private func answerSummaryText(
         _ pair: ResolvedAskQuestion
     ) -> Text {
@@ -797,9 +809,7 @@ struct ChatResolvedAskCard: View {
             return Text(
                 pair.selectedOptions.map(\.label).joined(separator: " · "))
         }
-        let custom = pair.customAnswerText ?? "Answer details unavailable."
-        let firstLine = custom.components(separatedBy: "\n").first ?? custom
-        return Text(firstLine)
+        return Text(pair.customAnswerText ?? "Answer details unavailable.")
     }
 
     /// Selected options in PRODUCER order: short labels flow as

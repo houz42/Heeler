@@ -56,7 +56,7 @@ final class QACardProofTests: XCTestCase {
             "the multi-select option must be tappable")
         option.tap()
 
-        captureScreenshot(app, "qa-card-unanswered-selected")
+        captureScreenshot(app, "qa-card-unanswered-selected", lifetime: .keepAlways)
     }
 
     func testSwipeMovesToSecondQuestion() {
@@ -90,7 +90,7 @@ final class QACardProofTests: XCTestCase {
                 timeout: UITestTimeouts.standard),
             "swiping right must return to the first question")
 
-        captureScreenshot(app, "qa-card-swipe-question")
+        captureScreenshot(app, "qa-card-swipe-question", lifetime: .keepAlways)
     }
 
     // MARK: the answered cards (transcript)
@@ -111,7 +111,7 @@ final class QACardProofTests: XCTestCase {
                 timeout: UITestTimeouts.standard),
             "the selected-option label never rendered")
 
-        captureScreenshot(app, "qa-card-answered-collapsed")
+        captureScreenshot(app, "qa-card-answered-collapsed", lifetime: .keepAlways)
     }
 
     func testExpandCollapseFullAnswer() {
@@ -124,11 +124,15 @@ final class QACardProofTests: XCTestCase {
         XCTAssertTrue(
             eyebrow.waitForExistence(timeout: UITestTimeouts.standard))
 
-        // Tap the long-answer card's question line to expand.
-        let longQuestion = element("Summarize the rollout plan", in: app)
+        // Tap the long-answer CARD (identifier-keyed — the question
+        // text also appears in the transcript message that posed the
+        // ask, so a text CONTAINS match is ambiguous on a scrolled
+        // view) to expand.
+        let longCard = app.descendants(matching: .any)
+            .matching(identifier: "resolved-ask-card-demo-qa-long").firstMatch
         XCTAssertTrue(
-            longQuestion.waitForExistence(timeout: UITestTimeouts.standard))
-        longQuestion.tap()
+            longCard.waitForExistence(timeout: UITestTimeouts.standard))
+        longCard.tap()
 
         // Expanded: the full answer + note render.
         XCTAssertTrue(
@@ -140,11 +144,25 @@ final class QACardProofTests: XCTestCase {
                 .waitForExistence(timeout: UITestTimeouts.standard),
             "the separately-labeled note never rendered")
 
-        captureScreenshot(app, "qa-card-answered-expanded")
+        captureScreenshot(app, "qa-card-answered-expanded", lifetime: .keepAlways)
 
         // Tap again to collapse.
-        longQuestion.tap()
-        captureScreenshot(app, "qa-card-answered-recollapsed")
+        longCard.tap()
+        captureScreenshot(app, "qa-card-answered-recollapsed", lifetime: .keepAlways)
+
+        // Expand the export card too: the multi-select answer renders
+        // its selected labels as CHIPS (producer order) with the note
+        // as a separate "Note" section.
+        let exportCard = app.descendants(matching: .any)
+            .matching(identifier: "resolved-ask-card-demo-qa-answered").firstMatch
+        XCTAssertTrue(
+            exportCard.waitForExistence(timeout: UITestTimeouts.standard))
+        exportCard.tap()
+        XCTAssertTrue(
+            element("Keep the first ten seconds only", in: app)
+                .waitForExistence(timeout: UITestTimeouts.standard),
+            "the export card's note never rendered when expanded")
+        captureScreenshot(app, "qa-card-chips-expanded", lifetime: .keepAlways)
     }
 
     func testHonestOutcomeCardsRender() {
@@ -157,6 +175,6 @@ final class QACardProofTests: XCTestCase {
                 .waitForExistence(timeout: UITestTimeouts.standard),
             "the cancelled card's honest outcome never rendered")
 
-        captureScreenshot(app, "qa-card-outcomes")
+        captureScreenshot(app, "qa-card-outcomes", lifetime: .keepAlways)
     }
 }

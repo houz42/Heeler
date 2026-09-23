@@ -71,6 +71,8 @@ enum UITestApp {
                 return ["--demo-screenshots", "--demo-host-detail-probing"]
             case .hostDetailPick:
                 return ["--demo-screenshots", "--demo-host-detail-pick"]
+            case .settings:
+                return ["--demo-screenshots", "--demo-screenshots-settings"]
             case .chatPendingAsk:
                 return ["--demo-screenshots", "--demo-chat-pending-ask"]
             case .chatQACards:
