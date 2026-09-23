@@ -913,8 +913,12 @@ private struct HugContentLayout: Layout {
 /// reachable message without the visual bubble being padded to full
 /// width.
 private struct HuggingBubble<Content: View>: View {
-    /// The cap on the VISIBLE bubble width (padding EXCLUDED):
-    /// `ChatUserBubbleSizing.maxVisibleBubbleWidth(transcriptWidth:)`.
+    /// The cap on the VISIBLE bubble's TOTAL width — content +
+    /// padding + background together, the design's
+    /// `min(0.85 × transcript, 560pt)`. NOT the inner content alone:
+    /// the padded child IS the visible bubble, so the cap applies to
+    /// it directly (no +2×padding arithmetic — that would let the
+    /// visible bubble exceed the design cap by the padding).
     var maxWidth: CGFloat
     var shape: UnevenRoundedRectangle
     var fill: AnyShapeStyle
@@ -925,10 +929,11 @@ private struct HuggingBubble<Content: View>: View {
 
     var body: some View {
         // The visible bubble: content + padding + background, sized
-        // by ONE capped proposal (HugContentLayout) — content within
+        // by ONE capped proposal (HugContentLayout) — the cap bounds
+        // the TOTAL visible bubble (padding included), content within
         // the cap keeps its intrinsic width, content that would
-        /// exceed it wraps at exactly the cap.
-        HugContentLayout(maxWidth: maxWidth + 2 * paddingH) {
+        // exceed it wraps at exactly the cap.
+        HugContentLayout(maxWidth: maxWidth) {
             content()
                 .padding(.horizontal, paddingH)
                 .padding(.vertical, paddingV)
