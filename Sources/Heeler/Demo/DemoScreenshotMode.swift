@@ -1326,7 +1326,11 @@
                     paneID: "demo:lifecycle",
                     agentName: "omp",
                     state: .idle,
-                    content: store.content,
+                    // The same projection shape AgentDetailView uses:
+                    // committed content + provisional stream TAILS
+                    // (the streamed reply renders below the user's
+                    // message before the authoritative page lands).
+                    content: demoContent(store),
                     initialLevel: .l1,
                     changeLevel: { _, _ in },
                     hasOlder: store.hasOlder,
@@ -1358,8 +1362,25 @@
             case .failed(let reason):
                 AgentChatStateBanner(
                     icon: "exclamationmark.triangle",
-                    title: "The chat broker connection failed", detail: reason)
+                    title: "The chat broker connection failed",
+                    detail: reason)
             }
+        }
+
+        /// The store's content with the provisional stream tails
+        /// appended (AgentDetailView's brokerContent shape, minimal):
+        /// the streamed reply renders below the committed records
+        /// while the authoritative page has not landed yet.
+        private func demoContent(_ store: AgentChatStore) -> ChatContent {
+            var content = store.content
+            for tail in store.streamTails where !tail.text.isEmpty {
+                content.messages.append(
+                    ChatMessage(
+                        id: AgentChatMapper.stableID(
+                            for: "stream:\(tail.streamId)"),
+                        role: .assistant, blocks: [.text(tail.text)]))
+            }
+            return content
         }
     }
 
@@ -1458,8 +1479,15 @@
                         #"{"type":"event","instanceId":"demo-instance","generation":1,"seq":\#(base + 3),"event":{"type":"message.started","streamId":"demo-stream","author":{"role":"assistant"}}}"#)
                     await self.brokerSend(
                         #"{"type":"event","instanceId":"demo-instance","generation":1,"seq":\#(base + 4),"event":{"type":"message.delta","streamId":"demo-stream","blockIndex":0,"blockType":"text","text":"The demo agent's reply lands here."}}"#)
-                    await self.brokerSend(
-                        #"{"type":"event","instanceId":"demo-instance","generation":1,"seq":\#(base + 5),"event":{"type":"message.finished","streamId":"demo-stream"}}"#)
+                    // The streamed reply COMMITS: the finished stream
+                    // appends its record to the transcript and a final
+                    // history.changed installs the page carrying it —
+                    // production's authoritative reconcile shape, so
+                    // the reply stays rendered (the provisional tail
+                    // alone is dropped the moment the stream finishes).
+                    await self.commitReply(
+                        id: "demo-reply-\(id)", seq: base + 5,
+                        text: "The demo agent's reply lands here.")
                 }
             case "history.open":
                 lastSeq = 40 + committed.count
@@ -1486,6 +1514,19 @@
                     #"{"type":"response","id":"\#(id)","result":{}}"#)
             }
         }
+
+        /// A streamed reply commits: message.finished drops the
+        /// provisional tail, so the record is appended to the
+        /// transcript and a trailing history.changed installs the page
+        /// that carries it (contiguous seq from the finished stream).
+        private func commitReply(id: String, seq: Int, text: String) async {
+            brokerSend(
+                #"{"type":"event","instanceId":"demo-instance","generation":1,"seq":\#(seq),"event":{"type":"message.finished","streamId":"demo-stream"}}"#)
+            committed.append((id: id, role: "assistant", text: text))
+            brokerSend(
+                #"{"type":"event","instanceId":"demo-instance","generation":1,"seq":\#(seq + 1),"event":{"type":"history.changed","revision":"rev-demo"}}"#)
+        }
+
 
         func read(maximumBytes: Int, timeout: Duration) async throws -> Data? {
             if !incoming.isEmpty {

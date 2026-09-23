@@ -257,8 +257,12 @@ final class ChatViewportProofTests: XCTestCase {
         app.buttons["Send"].tap()
 
         let sent = message("Sent message 1 from the user", in: app)
+        let appeared = sent.waitForExistence(timeout: UITestTimeouts.standard)
+        if !appeared {
+            captureScreenshot(app, "send-proof-failure-diagnostic")
+        }
         XCTAssertTrue(
-            sent.waitForExistence(timeout: UITestTimeouts.standard),
+            appeared,
             "the just-sent message never rendered")
         let window = app.windows.firstMatch
         XCTAssertTrue(
