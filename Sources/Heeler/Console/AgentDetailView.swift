@@ -1006,6 +1006,7 @@ struct AgentDetailView: View {
                         Task { await buildChatIfPossible() }
                     })
             }
+        }
         // The Agent menu's New conversation entry: the same StartAgentView
         // sheet the Composer's New Agent uses, with this agent as the
         // launch origin (its Host, workspace, and working directory), so
