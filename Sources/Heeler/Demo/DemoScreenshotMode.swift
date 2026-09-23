@@ -73,9 +73,16 @@
             /// path) — the remote-pairing reachability capture and
             /// paste→ceremony proof surface.
             case pairingPaste
+            /// The v3 work inspector: the read-only Tasks/Subagents
+            /// surface over a fixture transcript carrying a phased
+            /// todo checklist (mixed states, an active phase) and
+            /// a `task` spawn (4 scout children) — the capture and
+            /// proof surface (v3 tasks-inspector proofs).
+            case tasksInspector
 
             static func fromArguments() -> Route {
                 let arguments = ProcessInfo.processInfo.arguments
+                if arguments.contains(tasksInspectorLaunchArgument) { return .tasksInspector }
                 if arguments.contains(pairingPasteLaunchArgument) { return .pairingPaste }
                 if arguments.contains(chatQACardsLaunchArgument) { return .chatQACards }
                 if arguments.contains(chatBubblesLaunchArgument) { return .chatBubbles }
@@ -102,6 +109,7 @@
         static let chatBubblesLaunchArgument = "--demo-chat-bubbles"
         static let chatTablesLaunchArgument = "--demo-chat-tables"
         static let pairingPasteLaunchArgument = "--demo-pairing-paste"
+        static let tasksInspectorLaunchArgument = "--demo-tasks-inspector"
 
         /// The multi-path demo Host: the same machine over LAN and VPN.
         static let multipathHost = Host(
@@ -212,6 +220,8 @@
                 chatQACardsSurface
             case .chatSpecialSections:
                 chatSpecialSectionsSurface
+            case .tasksInspector:
+                tasksInspectorSurface
             }
         }
 
@@ -652,6 +662,84 @@
                 changeLevel: { _, _ in },
                 deliver: { _ in },
                 authorLabel: "Meadow · omp")
+        }
+
+        /// The v3 work-inspector capture surface: the SAME sheet the
+        /// header menu will open, presented full-screen over a
+        /// fixture transcript (a real-shaped phased todo checklist
+        /// with mixed leaf states + a blocked reason, and a `task`
+        /// spawn of 4 scouts in the arguments' order). Read-only —
+        /// the demo never queries or changes live agents.
+        private var tasksInspectorSurface: some View {
+            WorkInspectorSheet(
+                content: tasksInspectorFixtureContent)
+        }
+
+        /// The fixture transcript the inspector derives its snapshot
+        /// from — a ChatContent shaped exactly like the production
+        /// one (todo call + result pair; task spawn call + result
+        /// pair), so the capture exercises the REAL data mapping,
+        /// not a hand-built snapshot.
+        private var tasksInspectorFixtureContent: ChatContent {
+            let todoCall = ToolCall(
+                id: "todo:0#demo", name: "todo",
+                arguments: .object(["op": .string("view")]))
+            let todoResult = ToolResult(
+                toolCallId: "todo:0#demo", toolName: "todo", isError: false,
+                content: """
+                    Remaining items (3):
+                      - Ship the tasks inspector slice [in_progress] (Delivery)
+                      - Blocked item sample (blocked: awaiting user pick)
+                      - Log the capture evidence [pending] (Delivery)
+                    Overall: 2/5 done, 3 open.
+                    Active phase 2/2 "Delivery" (0/3).
+                      Research:
+                        - [X] Census real todo result shapes
+                        - [X] Verify task spawn argument structure
+                      Delivery:
+                        - [ ] Ship the tasks inspector slice (in progress)
+                        - [ ] Blocked item sample (blocked: awaiting user pick)
+                        - [ ] Log the capture evidence
+                    """)
+            let spawnCall = ToolCall(
+                id: "chatcmpl-tool-demo-spawn", name: "task",
+                arguments: .object([
+                    "i": .string("Comparing four open-source herdr iOS clients"),
+                    "tasks": .array([
+                        .object([
+                            "name": .string("DroverInternals"),
+                            "task": .string("Research the Drover iOS app internals: transport, transcript, notifications"),
+                            "agent": .string("scout"),
+                        ]),
+                        .object([
+                            "name": .string("HeelerInternals"),
+                            "task": .string("Research the Heeler iOS app internals: SSH backend, chat surface, widgets"),
+                            "agent": .string("scout"),
+                        ]),
+                        .object([
+                            "name": .string("WhipInternals"),
+                            "task": .string("Research the Whip mobile app internals: Rust bridge, rendering"),
+                            "agent": .string("scout"),
+                        ]),
+                        .object([
+                            "name": .string("MultiplexInternals"),
+                            "task": .string("Research the Multiplex app internals: spatial SSH terminals"),
+                            "agent": .string("scout"),
+                        ]),
+                    ]),
+                ]))
+            let spawnResult = ToolResult(
+                toolCallId: "chatcmpl-tool-demo-spawn", toolName: "task",
+                isError: false,
+                content: "Spawned 4 background agents using scout.")
+            return ChatContent(
+                messages: [
+                    ChatMessage(role: .assistant, blocks: [
+                        .toolCall(todoCall),
+                        .toolCall(spawnCall),
+                    ]),
+                ],
+                toolResults: [todoResult, spawnResult])
         }
 
         /// The `--demo-detail-level=<n>` argument's value (0–3);

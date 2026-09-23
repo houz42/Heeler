@@ -67,6 +67,10 @@ enum UITestApp {
         /// always-mounted paste entry — the remote-pairing paste path
         /// proof surface.
         case pairingPaste
+        /// The v3 work inspector: the read-only Tasks/Subagents
+        /// surface over the demo fixture transcript — the
+        /// tasks-inspector proof surface.
+        case tasksInspector
 
         var launchArguments: [String] {
             switch self {
@@ -96,6 +100,8 @@ enum UITestApp {
                     "--demo-screenshots", "--demo-pairing-paste",
                     "--uitest-pairing-authorized-camera",
                 ]
+            case .tasksInspector:
+                return ["--demo-screenshots", "--demo-tasks-inspector"]
             }
         }
     }

@@ -8,6 +8,23 @@ Entries reference the issue that motivated them.
 ## [Unreleased]
 
 ### Added
+- Read-only work inspector (v3, Tasks & subagents): a Tasks tab
+  rendering the agent's todo checklist as a producer-ordered
+  hierarchy — collapsible phase groups (direct children first,
+  expansion keyed by stable row IDs), a left state icon per row
+  (square/dash/check/exclamation) with the state named in
+  accessible labels and details, and leaf-only progress totals
+  that never double-count groups. A Subagents tab shows spawned
+  children as compact two-line identity rows (name + assignment,
+  from the spawn call's structured arguments), with runtime state
+  and result verdict as separate fields — honestly Unknown/Not
+  reported for transcript-derived rows, never scraped from later
+  `hub` prose, and a task tool-call ID never treated as a
+  child-run identity. Tasks derive from the latest todo tool
+  result (the producer's own rendered checklist); queried-empty,
+  not-loaded and unsupported each render their own honest state.
+  Exposed today behind the header menu's planned Tasks row and the
+  `--demo-tasks-inspector` demo route until the header menu merges.
 - One paired Q/A card per ask interaction (v3): unanswered and answered
   states share the same card family — paper background, subtle green
   border, 12pt radius, accent eyebrow, thin n-of-N step segments.
