@@ -712,6 +712,131 @@ struct AgentChatOutboxE2ETests {
         #expect(store.store.outbox.allSatisfy { $0.status == .accepted })
     }
 
+    /// The lock/resume pin (device finding: the '!' on a sent message
+    /// after lock+resume). A lock/resume is a broker-channel loss +
+    /// full re-match: the store's pipeFactory hands it a FRESH pipe
+    /// (a new SSH channel), exactly like resuming from background.
+    /// Pinned end-to-end over the scripted broker with a
+    /// reconnecting-pipe bank:
+    ///   - a COMMITTED entry is monotonic — the wire's death and the
+    ///     re-match can never demote it or resurrect a failure
+    ///     affordance on a delivered message;
+    ///   - the fresh handshake's marker page settles + drops it.
+    @Test("lock/resume keeps a delivered message's state — no spurious failure affordance")
+    func reconnectPreservesDeliveryState() async throws {
+        // The reconnecting harness: every pipeFactory.open returns a
+        // FRESH ScriptedChatPipe (the broker task rotates with it).
+        let bank = ReconnectablePipeBank()
+        let historyOpens = HistoryOpenCounter()
+        let sessionFile = "/s/e2e-reconnect-\(UUID().uuidString)"
+        let broker = Task<Void, Never> {
+            // Serve whichever pipe is current; a rotate (the store's
+            // reconnect) restarts the choreography on the new wire.
+            while !Task.isCancelled {
+                let pipe = await bank.current()
+                await pipe.brokerSend(
+                    #"{"type":"welcome","protocol":1,"maxFrameBytes":1048576}"#)
+                var answered = 0
+                while !Task.isCancelled {
+                    if await bank.isRotated(from: pipe) { break }
+                    let frames = await pipe.receivedFrames
+                    guard frames.count > answered else {
+                        try? await Task.sleep(for: .milliseconds(5))
+                        continue
+                    }
+                    let frame = frames[answered]
+                    answered += 1
+                    guard let data = frame.data(using: .utf8),
+                        let object = (try? JSONSerialization.jsonObject(
+                            with: data)) as? [String: Any],
+                        let id = object["id"] as? String,
+                        let method = object["method"] as? String
+                    else { continue }
+                    let openIndex = method == "history.open"
+                        ? await historyOpens.next() : nil
+                    await Self.answer(
+                        pipe: pipe, id: id, method: method, instanceId: "inst-1",
+                        sessionFile: sessionFile,
+                        historyOpenIndex: openIndex)
+                }
+            }
+        }
+        defer { broker.cancel() }
+        let store = AgentChatStore(
+            pipeFactory: AgentChatPipeFactory(
+                open: { _ in await bank.open() },
+                hostRecord: {
+                    Host(address: "h", username: "u",
+                        brokerChatSocketPath: "/tmp/chat.sock")
+                }),
+            paneIdentity: {
+                HerdrPaneSessionIdentity(sessionFilePath: sessionFile)
+            })
+        await store.start()
+        for _ in 0..<200 where store.phase != .ready {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(store.phase == .ready)
+
+        // 1. A committed entry (the normal '!' victim): the agent
+        //    committed its record.
+        let committed = try await store.submit("committed one")
+        for _ in 0..<100
+        where store.outbox.first?.status != .accepted {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let firstPipe = await bank.current()
+        await firstPipe.brokerSend(
+            #"{"type":"event","instanceId":"inst-1","generation":1,"seq":2,"event":{"type":"send.confirmed","requestKey":"\#(committed.requestKey)","recordId":"rec-123"}}"#)
+        for _ in 0..<100
+        where store.outbox.first?.status != .committed {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(store.outbox[0].status == .committed)
+
+        // 2. The lock: the wire dies (the pipe EOFs — what a
+        //    backgrounded app's socket teardown does).
+        try await firstPipe.close(timeout: .seconds(2))
+        for _ in 0..<200 where store.phase == .ready {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(store.phase != .ready)
+
+        // 3. The resume: the full re-match over a FRESH pipe.
+        await store.start()
+        for _ in 0..<200 where store.phase != .ready {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(store.phase == .ready)
+
+        // 4. THE PIN: the committed entry was never demoted across
+        //    the death + re-match. Honest outcomes ONLY: still
+        //    .committed (no failure copy, no '!' affordance) or — the
+        //    canonical-record handoff — ALREADY DROPPED because the
+        //    fresh page's marker settled it and its committed record
+        //    renders in the transcript. NEVER rejected/unknown: the
+        //    reconnect itself flips nothing.
+        let entryAfter = store.outbox.first { $0.id == committed.id }
+        if let entry = entryAfter {
+            #expect(entry.status == .committed)
+            #expect(entry.failureMessage == nil)
+        } else {
+            // Dropped in the same pass as the page: the committed
+            // record IS the canonical display record.
+            #expect(store.content.messages.contains {
+                $0.id == AgentChatMapper.stableID(for: "rec-123")
+            })
+        }
+        // No spurious failure affordance anywhere in the outbox.
+        #expect(store.outbox.allSatisfy {
+            $0.status != .rejected && $0.status != .outcomeUnknown
+        })
+        for _ in 0..<200 where !store.outbox.isEmpty {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(store.outbox.isEmpty)
+    }
+
     private func connectedStore() async throws -> ConnectedStore {
         let pipe = ScriptedChatPipe()
         let historyOpens = HistoryOpenCounter()
@@ -840,5 +965,21 @@ actor HistoryOpenCounter {
         let value = count
         count += 1
         return value
+    }
+}
+
+/// A reconnecting scripted-pipe bank: every `open` (the store's
+/// pipeFactory on a re-match — the resume path) hands back a FRESH
+/// pipe, exactly like a new SSH channel after a backgrounded app's
+/// socket teardown. The scripted broker task serves whichever pipe is
+/// current and restarts its choreography on rotate.
+actor ReconnectablePipeBank {
+    private var live = ScriptedChatPipe()
+
+    func current() -> ScriptedChatPipe { live }
+    func isRotated(from pipe: ScriptedChatPipe) -> Bool { live !== pipe }
+    func open() -> ScriptedChatPipe {
+        live = ScriptedChatPipe()
+        return live
     }
 }
