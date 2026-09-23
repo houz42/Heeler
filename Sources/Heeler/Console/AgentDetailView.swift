@@ -43,7 +43,13 @@ struct AgentDetailView: View {
     /// The in-Agent header's layout mode + custom layout persistence.
     @State private var headerLayoutStore = HeaderLayoutSettingsStore.shared
     @State private var openTerminal: AgentOpenTerminalStore
-    /// Which window holds this Host's terminal channel; nil outside a scene
+    /// Presents the New conversation launch sheet (the Agent menu's
+    /// agent.start entry): StartAgentView with this agent as the origin.
+    @State private var isStartingConversation = false
+    /// The most recent Interrupt-turn delivery failure, surfaced on the
+    /// detail's existing alert surface.
+    @State private var interruptionFailure: String?
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     /// root, where this detail always holds it.
     @Environment(\.agentSceneRouting) private var sceneRouting
 
@@ -266,32 +272,109 @@ struct AgentDetailView: View {
         .accessibilityLabel(surface == .chat ? "Show Terminal" : "Show Chat")
     }
 
-    /// The detail header's title as the agent switcher (#A): tapping the
-    /// title opens every other Agent, current one checked, so switching
-    /// never needs a detour back to the list. The surface toggle stays
-    /// trailing; this owns the principal slot only.
+    /// The v3 Agent header menu: the header's agent identity area opens
+    /// the Agent menu (identity/context → Statistics → Actions →
+    /// Companion terminal). Back and the surface selector stay separate
+    /// controls; this owns the principal slot only. The menu also carries
+    /// agent switching — the title's pre-v3 meaning — under its own
+    /// "Switch to" section, so the header's one tap still reaches every
+    /// other Agent without a detour back to the list.
     private var agentTitleMenu: some View {
         Menu {
-            ForEach(console.agents) { candidate in
-                Button {
-                    onSwitch(candidate.id)
-                } label: {
-                    if candidate.id == agent.id {
-                        Label(candidate.agent.displayName, systemImage: "checkmark")
-                    } else {
-                        Text(candidate.agent.displayName)
+            AgentHeaderMenuContent(
+                model: headerMenuModel,
+                agentDisplayName: agent.agent.displayName,
+                interruptTurn: {
+                    Task { await interruptTurn() }
+                },
+                startNewConversation: { isStartingConversation = true },
+                companionTerminal: companionTerminalEntry)
+            if console.agents.count > 1 {
+                Section("Switch to") {
+                    ForEach(console.agents) { candidate in
+                        Button {
+                            onSwitch(candidate.id)
+                        } label: {
+                            if candidate.id == agent.id {
+                                Label(candidate.agent.displayName, systemImage: "checkmark")
+                            } else {
+                                Text(candidate.agent.displayName)
+                            }
+                        }
+                        .disabled(candidate.id == agent.id)
                     }
                 }
             }
         } label: {
-            headerTokens
+            HStack(spacing: 4) {
+                headerTokens
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+            }
         }
         // The plain button style keeps the compact header typography —
         // no menu-chrome background behind the agent's title.
         .buttonStyle(.plain)
-        .accessibilityLabel("\(agent.agent.displayName), switch agent")
+        // Minimum 44pt target: the plain-style menu label must still be
+        // a comfortably tappable identity area, not a hairline title.
+        .frame(minHeight: 44)
+        .accessibilityLabel("Agent menu, \(agent.agent.displayName)")
         .accessibilityAddTraits(.isButton)
-        .accessibilityHint("Opens the list of Agents to switch to.")
+        .accessibilityHint(
+            "Opens the Agent menu: context, statistics, actions, and agent switching.")
+    }
+
+    /// The header menu's model, projected live from the console's row and
+    /// the Host's connection state so a status change or reconnect
+    /// re-renders the menu in place.
+    private var headerMenuModel: AgentHeaderMenuModel {
+        AgentHeaderMenuModel(
+            agent: agent,
+            hostIsConnected: console.hostStatuses[agent.hostID] == .connected)
+    }
+
+    /// Interrupt stops only the current turn (herdr's `agent.send_keys`
+    /// with the canonical Esc key) — never guaranteed reversible, so the
+    /// action is presented as interrupt, not stop. Failures surface on
+    /// the same failure banner the detail already owns.
+    private func interruptTurn() async {
+        do {
+            try await console.sendAgentKeys(
+                agent.agent.paneID, key: "esc", on: agent.hostID)
+        } catch let error as TransportError {
+            interruptionFailure = error.presentation.message
+        } catch {
+            interruptionFailure = error.localizedDescription
+        }
+    }
+
+    /// The Companion terminal entry: availability mirrors the detail's
+    /// open-terminal store, which already refuses a missing working
+    /// directory and another window's terminal channel.
+    private var companionTerminalEntry: AgentHeaderCompanionTerminal? {
+        guard agent.shellTerminalCreationRequest != nil else {
+            return AgentHeaderCompanionTerminal(
+                canOpen: false,
+                isOpening: false,
+                unavailableReason:
+                    "No reported working directory — herdr cannot open a shell here.",
+                open: {})
+        }
+        guard terminalAccess == .holds else {
+            return AgentHeaderCompanionTerminal(
+                canOpen: false,
+                isOpening: false,
+                unavailableReason:
+                    "Another window holds this Host's terminal channel.",
+                open: {})
+        }
+        return AgentHeaderCompanionTerminal(
+            canOpen: openTerminal.canOpen,
+            isOpening: openTerminal.isOpening,
+            unavailableReason: nil,
+            open: { openTerminal.open() })
     }
 
     /// The graceful empty state for an agent whose chat surface has no
@@ -806,8 +889,40 @@ struct AgentDetailView: View {
         } message: {
             Text(openTerminal.closeFailureMessage ?? "")
         }
+        // The Agent menu's New conversation entry: the same StartAgentView
+        // sheet the Composer's New Agent uses, with this agent as the
+        // launch origin (its Host, workspace, and working directory), so
+        // the new conversation lands beside this one in the same place.
+        .sheet(isPresented: $isStartingConversation) {
+            StartAgentView(
+                hosts: hosts,
+                console: console,
+                origin: StartAgentStore.LaunchOrigin(
+                    hostID: agent.hostID,
+                    workspaceID: agent.agent.workspaceID,
+                    cwd: agent.agent.cwd),
+                onStarted: { id in
+                    isStartingConversation = false
+                    onSwitch(id)
+                })
+            .modifier(ConsoleSheetPresentationModifier(
+                presentation: ConsoleSheetPresentation(
+                    horizontalSizeClass: horizontalSizeClass)))
+        }
+        .alert(
+            "Couldn't Interrupt Turn",
+            isPresented: Binding(
+                get: { interruptionFailure != nil },
+                set: { if !$0 { interruptionFailure = nil } })
+        ) {
+            Button("OK", role: .cancel) { interruptionFailure = nil }
+        } message: {
+            Text(interruptionFailure ?? "")
+        }
         .modifier(ConsoleDetailPresentationRegistration(
             agentID: agent.id,
-            isPresenting: openTerminal.failure != nil || openTerminal.closeFailureMessage != nil))
+            isPresenting: openTerminal.failure != nil
+                || openTerminal.closeFailureMessage != nil
+                || interruptionFailure != nil))
     }
 }
