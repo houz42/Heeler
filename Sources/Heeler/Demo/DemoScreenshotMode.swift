@@ -51,10 +51,16 @@
             /// v2 special-sections capture surface. The initial detail
             /// level rides `--demo-detail-level=<n>`.
             case chatSpecialSections
+            /// The chat surface with own-message bubbles of every v3
+            /// sizing case (one-word, emoji, multiline, long-prose
+            /// wrap, fenced code) — the content-sized bubble capture
+            /// surface (v3 width proofs).
+            case chatBubbles
 
 
             static func fromArguments() -> Route {
                 let arguments = ProcessInfo.processInfo.arguments
+                if arguments.contains(chatBubblesLaunchArgument) { return .chatBubbles }
                 if arguments.contains(chatSpecialSectionsLaunchArgument) { return .chatSpecialSections }
                 if arguments.contains(hostListConsoleLaunchArgument) { return .hostListConsole }
                 if arguments.contains(chatPendingAskLaunchArgument) { return .chatPendingAsk }
@@ -72,6 +78,7 @@
         static let chatPendingAskLaunchArgument = "--demo-chat-pending-ask"
         static let chatSpecialSectionsLaunchArgument = "--demo-chat-special-sections"
         static let hostDetailPickLaunchArgument = "--demo-host-detail-pick"
+        static let chatBubblesLaunchArgument = "--demo-chat-bubbles"
 
         /// The multi-path demo Host: the same machine over LAN and VPN.
         static let multipathHost = Host(
@@ -168,6 +175,8 @@
                 hostListConsoleSurface
             case .hostDetailProbing:
                 multipathDetail(midProbe: true)
+            case .chatBubbles:
+                chatBubblesSurface
             case .hostDetailPick:
                 multipathDetail(midProbe: false)
             case .chatPendingAsk:
@@ -309,6 +318,58 @@
                         ]),
                     ]),
                 initialLevel: Self.demoDetailLevel,
+                changeLevel: { _, _ in },
+                deliver: { _ in },
+                authorLabel: "Meadow · omp")
+        }
+
+        /// The v3 content-sized-bubble capture surface: a transcript of
+        /// OWN messages covering every sizing case the design doc
+        /// names — one-word, emoji, multiline (soft breaks), long
+        /// prose (wraps at the 0.85×/560pt cap), and fenced code —
+        /// plus an agent turn (unchanged fill presentation) for
+        /// contrast. Read-only (no deliver) so the captures are
+        /// purely visual.
+        private var chatBubblesSurface: some View {
+            ChatScreen(
+                paneID: "demo:bubbles",
+                agentName: "omp",
+                state: .idle,
+                content: ChatContent(
+                    messages: [
+                        ChatMessage(role: .user, blocks: [
+                            .text("Ship it."),
+                        ]),
+                        ChatMessage(role: .user, blocks: [
+                            .text("🚀"),
+                        ]),
+                        ChatMessage(role: .user, blocks: [
+                            .text("line one\nline two\nline three"),
+                        ]),
+                        ChatMessage(role: .user, blocks: [
+                            .text("```\nfunc greet() {\n    print(\"hi\")\n}\n```"),
+                        ]),
+                        ChatMessage(role: .user, blocks: [
+                            .text(
+                                """
+                                Before you commit the checkout fix, please \
+                                re-run the targeted suite and paste the summary — \
+                                I want to confirm the retry regression is \
+                                actually gone and that the cart survives a \
+                                failed payment attempt end to end.
+                                """),
+                        ]),
+                        ChatMessage(role: .assistant, blocks: [
+                            .text(
+                                """
+                                All 18 targeted tests pass and the retry \
+                                regression is gone — the cart now survives a \
+                                failed payment attempt end to end. Ready to \
+                                commit when you are.
+                                """),
+                        ]),
+                    ]),
+                initialLevel: .l2,
                 changeLevel: { _, _ in },
                 deliver: { _ in },
                 authorLabel: "Meadow · omp")
