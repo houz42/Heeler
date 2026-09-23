@@ -144,6 +144,23 @@ final class AttachRestorationTrace {
             "%{public}s trace_id=%{public}s", note, traceID)
     }
 
+    /// DIAGNOSTIC (throwaway, not for commit): the terminal's geometry
+    /// measurements — the GeometryReader proposal, the mounted surface's
+    /// frame/bounds, and the superview chain — written to the same
+    /// container file as the other device diagnostics so the user can
+    /// pull one trace. One line per measurement; NOT deduped.
+    static func emitGeometry(_ note: String) {
+        let line = "[attach-trace] geometry \(note)\n"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("attach-trace.log")
+        if let data = line.data(using: .utf8) {
+            if let h = try? FileHandle(forWritingTo: url) {
+                h.seekToEndOfFile(); h.write(data); try? h.close()
+            } else {
+                try? data.write(to: url)
+            }
+        }
+    }
+
     var recordedPhases: Set<Phase> { state.emittedPhases }
 }
 

@@ -170,6 +170,11 @@ struct AgentTerminalView: View {
     /// same reason as the handoff: a switch that inherits a raised keyboard
     /// must lay the terminal out at the right height on its first frame.
     private let keyboardInset: TerminalKeyboardInset
+    #if DEBUG
+    /// DIAGNOSTIC (throwaway): the last logged GeometryReader proposal —
+    /// one trace line per distinct proposal, not per body evaluation.
+    @State private var lastLoggedProposal = ""
+    #endif
     /// Router truth used to distinguish a real navigation from SwiftUI's
     /// same-screen disappear/appear churn.
     private let isOnStage: () -> Bool
@@ -455,6 +460,15 @@ struct AgentTerminalView: View {
 
     var body: some View {
         GeometryReader { proxy in
+            #if DEBUG
+            let _ = {
+                let key = "\(Int(proxy.size.width))x\(Int(proxy.size.height))"
+                guard lastLoggedProposal != key else { return }
+                lastLoggedProposal = key
+                AttachRestorationTrace.emitGeometry(
+                    "proposal \(key) safe=\(Int(proxy.safeAreaInsets.bottom))")
+            }()
+            #endif
             lifecycleSurface
                 .frame(
                     width: proxy.size.width,
