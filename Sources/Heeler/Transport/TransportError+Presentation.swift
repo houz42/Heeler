@@ -37,6 +37,13 @@ extension TransportError {
                 detail: detail,
                 recoverySuggestion:
                     "Check that the Host is awake and reachable, then verify its address and port.")
+        case .localNetworkDenied:
+            TransportErrorPresentation(
+                summary: "Local Network access is off for Meadow",
+                detail: nil,
+                recoverySuggestion:
+                    "Turn it on in Settings › Privacy & Security › Local Network, "
+                    + "then reconnect.")
         case .jumpHostFailed(let underlying):
             Self.jumpHostPresentation(underlying)
         case .tcpForwardingUnavailable:
@@ -146,6 +153,10 @@ extension TransportError {
     ) -> TransportErrorPresentation {
         switch underlying {
         case .jumpHostFailed:
+            underlying.presentation
+        case .localNetworkDenied:
+            // The permission is a device-level setting: the same
+            // Settings guidance is correct whichever hop reported it.
             underlying.presentation
         case .sshUnreachable(let detail):
             TransportErrorPresentation(

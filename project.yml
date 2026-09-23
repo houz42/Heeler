@@ -98,6 +98,11 @@ targets:
         CURRENT_PROJECT_VERSION: "20"
         # Scan to Pair (#62) reads the Pairing Code QR from the computer screen.
         INFOPLIST_KEY_NSCameraUsageDescription: "Meadow uses the camera to scan the Pairing Code shown on your computer, so you can add that machine without typing anything."
+        # iOS 14+ silently blocks connections to private addresses — the
+        # LAN and VPN paths every Host dials — until the Local Network
+        # permission is granted, and never prompts without this declaration
+        # (it is the prompt's body).
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: "Meadow connects to your machines on your local network to reach your agents."
         # Only exempt encryption is used (standard SSH algorithms via the
         # HeelerSSH package's libssh2/OpenSSL, OS-provided CryptoKit);
         # declaring it here keeps every TestFlight upload from stalling on the

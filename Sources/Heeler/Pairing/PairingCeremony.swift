@@ -24,6 +24,10 @@ enum PairingCeremonyError: Error, Sendable, Equatable {
     /// key within the per-address timeout. Carries one line per attempted
     /// address for diagnostics.
     case hostUnreachable(detail: String)
+    /// The iOS Local Network permission was denied, so no address in the
+    /// Pairing Code could even be dialed. The user must grant it in
+    /// Settings; the same code can then be retried.
+    case localNetworkDenied
     /// The Host is there — its key matched the pinned fingerprint — but it
     /// rejected the Bootstrap Key: the code was already used, its line
     /// expired and was swept, or the popup was closed.
@@ -41,6 +45,7 @@ enum PairingCeremonyError: Error, Sendable, Equatable {
     /// The Pairing step this failure is attributed to.
     var step: PairingStep {
         switch self {
+        case .localNetworkDenied: .reach
         case .hostUnreachable: .reach
         case .bootstrapRejected: .authenticate
         case .enrollmentRefused, .enrollmentFailed: .enroll

@@ -15,6 +15,10 @@ struct PairingFailure: Equatable, Sendable {
     /// succeed; false means the user needs a fresh Pairing Code or the
     /// manual form.
     let canRetry: Bool
+    /// Whether this failure is the iOS Local Network permission being off:
+    /// the one failure whose fix is in this device's Settings rather than
+    /// on the Host or the computer.
+    var isLocalNetwork = false
 }
 
 /// Drives Scan to Pair (#62, #66, #204): turns strings recognized by the QR
@@ -205,6 +209,14 @@ final class PairingScanStore {
         for error: PairingCeremonyError, isConfigOnly: Bool
     ) -> PairingFailure {
         switch error {
+        case .localNetworkDenied:
+            PairingFailure(
+                step: .reach,
+                message: "Local Network access is off for Meadow, so the Host cannot be "
+                    + "reached. Allow Local Network for Meadow in Settings › Privacy & "
+                    + "Security › Local Network, then try again with the code.",
+                canRetry: true,
+                isLocalNetwork: true)
         case .hostUnreachable:
             PairingFailure(
                 step: .reach,

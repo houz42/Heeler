@@ -767,6 +767,10 @@ indirect enum TransportError: Error, Sendable, Equatable {
     /// The Jump Host accepted SSH authentication but its server or key policy
     /// prohibits the direct-tcpip channel required to reach the Host.
     case tcpForwardingUnavailable
+    /// The iOS Local Network permission was denied, so no private address —
+    /// LAN or VPN — can be dialed at all until the user grants it in
+    /// Settings. Not retryable: no reconnect loop can recover it.
+    case localNetworkDenied
     /// The Host rejected our credentials (key not authorized, wrong
     /// password, or the offered auth method is unavailable).
     case authenticationFailed
@@ -832,6 +836,7 @@ indirect enum TransportError: Error, Sendable, Equatable {
     /// forwarding — resolves without the user acting on the Host (ADR 0011).
     var isRetryable: Bool {
         switch self {
+        case .localNetworkDenied: false
         // A rejection is retryable because herdr's error codes are open-ended
         // and most of them describe a target that moved, not a broken setup.
         case .sshUnreachable, .timedOut, .cancelled, .channelFailed,
@@ -849,6 +854,16 @@ indirect enum TransportError: Error, Sendable, Equatable {
         // rebooting VPS should reconnect on its own, a rejected key should not.
         case .jumpHostFailed(let underlying):
             underlying.isRetryable
+        }
+    }
+    /// Whether the failed dial was blocked by the Local Network permission,
+    /// nested Jump Host failure included, so any surface can offer the
+    /// Settings action on this exact condition.
+    var isLocalNetworkDenial: Bool {
+        switch self {
+        case .localNetworkDenied: true
+        case .jumpHostFailed(let underlying): underlying.isLocalNetworkDenial
+        default: false
         }
     }
 }

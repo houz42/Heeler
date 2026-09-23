@@ -59,7 +59,17 @@ struct SSHTransportConnector: TransportConnector {
         settings: SSHTransportSettings,
         onCandidate: (@Sendable (CandidateDialResult) -> Void)?
     ) async throws -> any Transport {
-        try await Self.dialFirstReachable(
+        // The iOS Local Network permission gates private addresses before
+        // any socket exists: probe it once per process so the prompt fires
+        // with the connect, not after a silent four-second timeout. A
+        // denied user gets the Settings guidance, not a generic
+        // unreachable; loopback and global targets skip the probe entirely.
+        if LocalNetworkPermission.isRequired(for: settings.host),
+            await !LocalNetworkPermission.isGranted()
+        {
+            throw TransportError.localNetworkDenied
+        }
+        return try await Self.dialFirstReachable(
             settings: settings,
             perCandidateTimeout: perCandidateTimeout,
             dialOne: { try await HeelerSSHTransport.connect(settings: $0) },
@@ -123,7 +133,7 @@ extension TransportError {
     /// address of the same machine cannot change the answer.
     var isReachFailure: Bool {
         switch self {
-        case .sshUnreachable, .timedOut:
+        case .sshUnreachable, .timedOut, .localNetworkDenied:
             return true
         case .jumpHostFailed(let underlying):
             // The Jump Host is part of the path; an unreachable first hop
@@ -142,6 +152,8 @@ extension TransportError {
             return detail
         case .timedOut:
             return "did not answer within the per-address budget"
+        case .localNetworkDenied:
+            return "Local Network access for Meadow is off"
         case .jumpHostFailed(let underlying):
             return "jump host: \(underlying.dialFailureDetail)"
         default:

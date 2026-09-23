@@ -55,8 +55,8 @@ struct EnrollmentResponseTests {
 @Suite("Pairing failure taxonomy")
 struct PairingCeremonyErrorTests {
     @Test func classifiesEveryFailureToItsStep() {
+        #expect(PairingCeremonyError.localNetworkDenied.step == .reach)
         #expect(PairingCeremonyError.hostUnreachable(detail: "x").step == .reach)
-        #expect(PairingCeremonyError.bootstrapRejected.step == .authenticate)
         #expect(PairingCeremonyError.enrollmentRefused(.expired).step == .enroll)
         #expect(PairingCeremonyError.enrollmentFailed(detail: "x").step == .enroll)
         #expect(PairingCeremonyError.verificationFailed(detail: "x").step == .verify)

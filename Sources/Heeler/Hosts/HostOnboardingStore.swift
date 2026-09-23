@@ -230,6 +230,20 @@ final class HostOnboardingStore {
         availableSessions = []
         sessionDiscoveryError = nil
         pendingHostKeyReplacement = nil
+        // The iOS Local Network permission gates every private address at
+        // once: a denial is not per-address reachability but one device
+        // setting, so say that instead of sweeping to a generic "none
+        // answered". The single-address path surfaces the same error from
+        // the connector's own gate.
+        if candidates.contains(where: LocalNetworkPermission.isRequired),
+            await !LocalNetworkPermission.isGranted()
+        {
+            candidateStates = Dictionary(
+                uniqueKeysWithValues: candidates.map { ($0, .unreachable) })
+            report = .failure(TransportError.localNetworkDenied, authMethod: host.authMethod)
+            phase = .finished
+            return
+        }
         candidateStates = Dictionary(
             uniqueKeysWithValues: candidates.map { ($0, CandidateProbeState.unknown) })
 

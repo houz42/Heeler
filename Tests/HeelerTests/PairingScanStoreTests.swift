@@ -286,8 +286,8 @@ struct PairingScanStoreTests {
     // MARK: Ceremony failures
 
     @Test(arguments: [
+        PairingCeremonyError.localNetworkDenied,
         PairingCeremonyError.hostUnreachable(detail: "x"),
-        .bootstrapRejected,
         .enrollmentRefused(.unknownPairing),
         .enrollmentRefused(.expired),
         .enrollmentRefused(.invalidKey),
@@ -313,8 +313,8 @@ struct PairingScanStoreTests {
     }
 
     @Test(arguments: [
+        (PairingCeremonyError.localNetworkDenied, true, "Local Network"),
         (PairingCeremonyError.hostUnreachable(detail: "x"), true, "same network"),
-        (.bootstrapRejected, false, "Generate a new Pairing Code"),
         (.enrollmentRefused(.unknownPairing), false, "Generate a new Pairing Code"),
         (.enrollmentRefused(.expired), false, "expired"),
         (.enrollmentRefused(.invalidKey), true, "Try again"),

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Per-Host onboarding (#14): the preflight checklist with fix-it hints,
 /// plus the TOFU fingerprint confirmation. Checks run automatically on
@@ -29,6 +30,7 @@ struct HostOnboardingView: View {
     @State private var isEditing = false
     @State private var isConfirmingHostKeyReplacement = false
     @State private var sessionSelectionError: String?
+    @Environment(\.openURL) private var openURL
 
     init(
         host: Host,
@@ -172,6 +174,13 @@ struct HostOnboardingView: View {
             availableSessionsSection
 
             Section {
+                if store.report?.isLocalNetworkFailure == true {
+                    Button("Open Settings", systemImage: "gear") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) {
+                            openURL(url)
+                        }
+                    }
+                }
                 Button {
                     Task { await store.runChecks() }
                 } label: {
