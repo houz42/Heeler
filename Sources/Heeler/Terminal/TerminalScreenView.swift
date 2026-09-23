@@ -165,11 +165,11 @@ enum TerminalKeyboardHandoffOutcome: Equatable {
 
 struct TerminalScreenView: UIViewRepresentable {
     let feed: TerminalByteFeed
-    #if DEBUG
     /// Reports creation and feed attachment of the concrete UIKit surface.
-    /// It does not claim that Ghostty presented a frame.
+    /// It does not claim that Ghostty presented a frame. Available in every
+    /// build: the surface-attach is the pipeline's appearance signal — the
+    /// bounded default-geometry fallback hangs off it (#device).
     var onSurfaceAttached: (() -> Void)?
-    #endif
     var onSizeChanged: ((_ cols: Int, _ rows: Int) -> Void)?
     var onViewportTextChanged: ((String) -> Void)?
     var onSend: ((Data) -> Void)?
@@ -234,9 +234,7 @@ struct TerminalScreenView: UIViewRepresentable {
         // The feed holds the surface weakly so a replaced UIKit view cannot be
         // kept alive by an obsolete terminal pipeline.
         feed.attach(view)
-        #if DEBUG
         onSurfaceAttached?()
-        #endif
         return view
     }
 

@@ -318,6 +318,7 @@ final class AttachTerminalStore {
             self.sizeFallbackTask = nil
             guard self.status == .waitingForSize, self.runTask == nil else { return }
             #if DEBUG
+            self.restorationTrace.emitFallbackStart()
             self.restorationTrace.emit(
                 .initialResize, generation: self.transportGeneration)
             #endif
@@ -331,6 +332,12 @@ final class AttachTerminalStore {
     /// change (rotation, split view, keyboard). The first report opens the
     /// session; later changes ride the live channel as window-change.
     func viewDidResize(cols: Int, rows: Int) {
+        #if DEBUG
+        restorationTrace.emitSizeReport(
+            cols: cols, rows: rows,
+            accepted: cols > 0 && rows > 0 && (cols != self.cols || rows != self.rows),
+            generation: transportGeneration)
+        #endif
         guard cols > 0, rows > 0, cols != self.cols || rows != self.rows else { return }
         sizeFallbackTask?.cancel()
         sizeFallbackTask = nil

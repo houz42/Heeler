@@ -340,11 +340,17 @@ struct AgentTerminalView: View {
 
     private var terminalScreen: TerminalScreenView {
         var screen = TerminalScreenView(feed: attach.terminalFeed)
-        #if DEBUG
         screen.onSurfaceAttached = {
+            // The surface REALLY mounted — arm the pipeline's bounded
+            // default-geometry fallback here, on the device-proven signal
+            // (the surface attach), so a device whose Ghostty surface never
+            // reports a grid still opens its PTY. The DEBUG trace rides the
+            // same callback.
+            attach.terminalViewDidAppear()
+            #if DEBUG
             attach.terminalSurfaceDidAttach()
+            #endif
         }
-        #endif
         screen.onSizeChanged = { cols, rows in
             attach.viewDidResize(cols: cols, rows: rows)
         }
