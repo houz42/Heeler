@@ -530,6 +530,7 @@ struct WorkObservedSubagentRow: View {
             "live child run",
             "runtime state: Running",
             "result: Not reported",
+            "assigned: not on this wire",
         ].joined(separator: ", ")
     }
 }
