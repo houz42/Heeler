@@ -1033,3 +1033,84 @@ extension AgentSurfaceReplacementTests {
             condition: { await transport.hasLiveAttachSession == false })
     }
 }
+
+// MARK: - Lazy attach: nothing attaches until the terminal icon is tapped
+
+extension AgentSurfaceReplacementTests {
+    /// The user requirement: the terminal must NOT attach until the user
+    /// taps the terminal icon. The eager path was the nil-surface first
+    /// body: `else if surface == .chat` sent the UNRESOLVED surface (nil)
+    /// to the terminal branch, mounting the UIKit surface on agent-open and
+    /// opening a PTY (the fallback's grace fired even after the surface
+    /// flipped to chat — the desktop's shared pane visibly resized). The
+    /// fix renders chat for everything that is not EXPLICITLY .terminal.
+    @MainActor
+    @Test(.timeLimit(.minutes(1)))
+    func openingAnAgentDoesNotAttachTheTerminal() async throws {
+        let transport = ScriptedTransport()
+        let composer = AgentComposerStore(target: "w1:p1") { params in
+            try await transport.promptAgent(params)
+        }
+        // A chat-default agent (a resolvable session path).
+        var base = Self.makeAgent(pane: "w1:p1")
+        base.agent = Agent(
+            terminalID: "term_w1:p1", kind: "claude", title: "",
+            status: .idle, workspaceID: "w", tabID: "w:t", paneID: "w1:p1",
+            cwd: "/work", revision: 1, name: nil,
+            agentSession: AgentSessionInfo(
+                agent: "omp", kind: .path, source: "herdr:omp",
+                value: "/home/demo/session.jsonl"))
+        let agent = base
+        // The REAL detail (chat-default on open), not the bare terminal
+        // view: the harness must exercise the detail's surface resolution.
+        let defaults = UserDefaults(suiteName: "lazy-attach-\(UUID())") ?? .standard
+        let console = ConsoleStore(snapshotRetryDelay: .seconds(30)) { _, subscriptions in
+            EventsSession(
+                subscriptions: subscriptions,
+                connect: { throw TransportError.sshUnreachable(detail: "fixture") },
+                reconnectPolicy: .default,
+                keepalive: .default)
+        }
+        let terminalSettings = TerminalSettings(
+            themes: TerminalThemeSettings(defaults: defaults),
+            zoom: TerminalZoomSettings(defaults: defaults),
+            fonts: TerminalFontSettings(defaults: defaults),
+            snippets: SnippetStore(defaults: defaults))
+        let stage = AgentDetailStage(
+            isVisible: { true },
+            terminalAccess: { .holds })
+        let controller = UIHostingController(
+            rootView: AgentDetailView(
+                agent: agent,
+                console: console,
+                terminal: terminalSettings,
+                inputMode: AgentInputModeSettings(defaults: defaults),
+                hosts: [],
+                activity: AppActivityCoordinator(),
+                keyboardHandoff: TerminalKeyboardHandoff(),
+                keyboardInset: TerminalKeyboardInset(),
+                stage: stage,
+                onSwitch: { _ in },
+                onClosed: {},
+                composerStore: composer,
+                attachStore: Self.makeAttachStore(transport: transport, composer: composer)))
+        let window = Self.makeLocalTestWindow(
+            frame: CGRect(x: 0, y: 0, width: 402, height: 874),
+            rootViewController: controller)
+        defer { window.isHidden = true }
+        // Settle: several layout passes and a wait well past the fallback's
+        // 1.5s grace. The detail resolves its initial surface (chat) and
+        // renders — but NO attach request may exist.
+        for _ in 0..<4 {
+            controller.view.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(600))
+        }
+        let requestCount = await transport.attachRequests.count
+        #expect(requestCount == 0, "the terminal attached eagerly on agent-open")
+        #expect(await transport.hasLiveAttachSession == false)
+
+        // The UIKit terminal surface is not mounted either.
+        let mounted = Self.terminals(in: controller.view)
+        #expect(mounted.isEmpty, "the terminal surface mounted on agent-open")
+    }
+}

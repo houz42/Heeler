@@ -681,9 +681,16 @@ struct AgentDetailView: View {
                     await openTerminal.returnToAgent()
                 }
                 .id(openTerminal.destination)
-            } else if surface == .chat {
-                // The surface toggle rides inside the chat's status strip
-                // (accessory slot) — never an overlay over the content.
+            } else if surface != .terminal {
+                // Everything that is not EXPLICITLY the terminal renders the
+                // chat surface — including the UNRESOLVED surface (nil) the
+                // first body evaluation carries before its onChange sets the
+                // initial value. The previous `surface == .chat` sent nil to
+                // the terminal branch, which MOUNTED the terminal surface on
+                // agent-open and eagerly attached (the fallback's grace
+                // opened a PTY 1.5s later even after the surface flipped to
+                // chat — the desktop's shared panel visibly resized). The
+                // terminal mounts ONLY on the user's explicit icon tap.
                 chatSurface
             } else {
                 AgentTerminalView(
