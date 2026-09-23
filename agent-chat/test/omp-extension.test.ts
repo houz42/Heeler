@@ -252,6 +252,63 @@ test('registration declares attachments capability', {timeout:5000}, async () =>
  }
 });
 
+// Pane ownership: ONLY the pane's primary agent claims HERDR_PANE_ID in its
+// registration. An omp task-subagent (session file nested INSIDE the parent
+// session's .jsonl directory) inherits the pane env var but must NOT claim
+// the parent pane — duplicate live pane claims make the app's matcher
+// correctly refuse (ambiguous).
+test('registration pane claim: primary agent claims the pane; subagents do not', {timeout:5000}, async () => {
+ const dir=await mkdtemp(join(tmpdir(),'chat-pane-claim-'));
+ const socketPath=join(dir,'broker.sock');
+ const oldSocket=process.env.HEELER_CHAT_SOCKET;
+ const oldPane=process.env.HERDR_PANE_ID;
+ process.env.HEELER_CHAT_SOCKET=socketPath;
+ process.env.HERDR_PANE_ID='w9:pZ';
+ const handlers=new Map();
+ const registers=[];
+ // One ctx per (fake) agent; getSessionFile feeds subagent detection.
+ const ctxFor=(sessionFile)=>({sessionManager:{getSessionId:()=> 'sess-'+registers.length,getLeafId:()=>null,getEntry:()=>undefined,getSessionFile:()=>sessionFile},abort(){}});
+ const server=net.createServer(socket=>{
+  socket.setEncoding('utf8');let buffer='';
+  socket.on('data',chunk=>{
+   buffer+=chunk;
+   for(;;){const end=buffer.indexOf('\n');if(end<0)break;
+    const frame=JSON.parse(buffer.slice(0,end));buffer=buffer.slice(end+1);
+    if(frame.type==='hello')socket.write(JSON.stringify({type:'welcome',protocol:1,maxFrameBytes:1048576})+'\n');
+    if(frame.type==='register'){registers.push(frame.registration);socket.write(JSON.stringify({type:'registered'})+'\n');}
+   }
+  });
+ });
+ // Per-adapter handler maps keyed by EVENT NAME (one map per agent, exactly
+ // how omp dispatches); a single shared map would let later on() calls
+ // overwrite earlier events' handlers. Declared before try so the finally
+ // can shut both adapters down.
+ const hPrimary=new Map(); const hSub=new Map();
+ try {
+  server.listen(socketPath);await once(server,'listening');
+  extension({on:(name,fn)=>hPrimary.set(name,fn),sendUserMessage(){},getCommands:()=>[]});
+  hPrimary.get('session_start')({},ctxFor('/sessions/2026-01-01_primary.jsonl'));
+  extension({on:(name,fn)=>hSub.set(name,fn),sendUserMessage(){},getCommands:()=>[]});
+  hSub.get('session_start')({},ctxFor('/sessions/2026-01-01_primary.jsonl/TaskSub.jsonl'));
+  await new Promise(r=>setTimeout(r,400));
+  assert.equal(registers.length,2,'both the primary and the subagent register');
+  const bySession=Object.fromEntries(registers.map(r=>[r.locator?.sessionFile,r]));
+  assert.equal(bySession['/sessions/2026-01-01_primary.jsonl']?.locator?.paneId,'w9:pZ','primary agent claims its pane');
+  assert.equal(bySession['/sessions/2026-01-01_primary.jsonl/TaskSub.jsonl']?.locator?.paneId,undefined,'subagent must NOT claim the parent pane');
+  assert.ok(bySession['/sessions/2026-01-01_primary.jsonl/TaskSub.jsonl']?.locator?.pid,'subagent still registers (pid + sessionFile, no pane)');
+ } finally {
+  // Shutdown BOTH adapters (their reconnect timers otherwise keep the
+  // process alive) before closing the server.
+  hPrimary.get('session_shutdown')?.({},ctxFor('/sessions/2026-01-01_primary.jsonl'));
+  hSub.get('session_shutdown')?.({},ctxFor('/sessions/2026-01-01_primary.jsonl/TaskSub.jsonl'));
+  await new Promise(r=>setTimeout(r,100));
+  const closed=Promise.withResolvers();server.close(closed.resolve);await closed.promise;
+  if(oldSocket===undefined)delete process.env.HEELER_CHAT_SOCKET;else process.env.HEELER_CHAT_SOCKET=oldSocket;
+  if(oldPane===undefined)delete process.env.HERDR_PANE_ID;else process.env.HERDR_PANE_ID=oldPane;
+  await rm(dir,{recursive:true,force:true});
+ }
+});
+
 // Send correlation: prompt.send(requestKey) must produce a send.confirmed
 // event whose recordId IS the committed user record's id (not a marker id).
 // Origin is proven by the ATTRIBUTION TOKEN omp echoes into the committed
