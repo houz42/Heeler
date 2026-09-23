@@ -3231,3 +3231,60 @@ extension AttachTerminalStoreTests {
         }
     }
 }
+
+// MARK: - Device regression: the fallback re-arms once after a failed open
+
+extension AttachTerminalStoreTests {
+    /// The device's grace-moment transport state can fail the first
+    /// fallback open (the run ends .ended without ever going live). The
+    /// fallback re-arms ONCE: the second grace re-runs the attach, and the
+    /// pipeline goes live once the transport is available.
+    @Test(.timeLimit(.minutes(1)))
+    func fallbackReArmsOnceAfterAFailedOpen() async throws {
+        let transport = ScriptedTransport()
+        let captured = Captured()
+        // A runner that throws on the FIRST attempt (the transport was not
+        // ready at the grace moment) and attaches on the second.
+        let box = FailOnceBox()
+        let store = AttachTerminalStore(target: "w1:p1") { request, handler in
+            if await box.consumeFailure() {
+                throw TransportError.sshUnreachable(detail: "not ready at grace")
+            }
+            let session = try await transport.attachTerminal(request)
+            try await handler.runEndingSession(session)
+        }
+        store.feed.attach(captured)
+
+        store.terminalViewDidAppear()
+        // First grace: the fallback opens and the run fails immediately —
+        // the pipeline lands .ended without ever going live.
+        try await waitUntil("the failed open lands .ended") {
+            if case .ended = store.status { return true }
+            return false
+        }
+        // The re-armed second grace re-runs the attach — the transport is
+        // available now — and the pipeline goes live on the remote paint.
+        try await waitUntil("re-armed attach opens") {
+            await transport.hasLiveAttachSession
+        }
+        try await paint(transport, Data("\u{1B}[2Jreborn".utf8))
+        try await waitUntil("store should go live on the re-armed attach") {
+            store.status == .live
+        }
+        try await waitUntil("feed should carry the paint") {
+            await captured.text.contains("reborn")
+        }
+        let requestCount = await transport.attachRequests.count
+        #expect(requestCount == 1)
+    }
+}
+
+/// One-shot failure gate for the re-arm test.
+actor FailOnceBox {
+    private var failed = false
+    func consumeFailure() -> Bool {
+        if failed { return false }
+        failed = true
+        return true
+    }
+}

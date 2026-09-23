@@ -259,6 +259,13 @@ final class AttachTerminalStore {
     /// corrects it in-band.
     private static let fallbackColumns = 80
     private static let fallbackRows = 24
+    /// True while the current pipeline was opened by the fallback (no
+    /// genuine size report ever arrived). A run that ends without ever
+    /// going live on such a pipeline re-arms the fallback once — a
+    /// transport that was momentarily unavailable at the grace moment
+    /// must not strand the surface blank forever.
+    private var fallbackOpenedThisPipeline = false
+    private var fallbackReArmedOnce = false
     #if DEBUG
     private(set) var restorationTrace = AttachRestorationTrace()
 
@@ -357,6 +364,7 @@ final class AttachTerminalStore {
             #endif
             self.cols = Self.fallbackColumns
             self.rows = Self.fallbackRows
+            self.fallbackOpenedThisPipeline = true
             self.start()
         }
     }
@@ -500,11 +508,51 @@ final class AttachTerminalStore {
             try await runTerminal(request, handler)
         } catch {
             guard !stopRequested else { return }
-            status = .ended(Self.message(for: error))
+            let message = Self.message(for: error)
+            #if DEBUG
+            restorationTrace.emitDiagnostic("run_failed message=\(message)")
+            #endif
+            status = .ended(message)
+            reArmFallbackAfterFailedOpen()
             return
         }
         guard !stopRequested else { return }
+        #if DEBUG
+        restorationTrace.emitDiagnostic("run_ended_without_failure")
+        #endif
         status = .ended("The session ended.")
+        reArmFallbackAfterFailedOpen()
+    }
+
+    /// A fallback-opened pipeline that ended without ever going live gets
+    /// ONE fallback re-arm: the most probable cause is a transport that was
+    /// not ready at the grace moment (the device's very condition that kept
+    /// the size report away too). The re-arm re-runs the same bounded grace;
+    /// a genuine size report arriving meanwhile cancels it as usual.
+    private func reArmFallbackAfterFailedOpen() {
+        guard fallbackOpenedThisPipeline, !fallbackReArmedOnce,
+            cols != nil, rows != nil
+        else { return }
+        fallbackReArmedOnce = true
+        #if DEBUG
+        restorationTrace.emitDiagnostic("fallback_rearmed_after_failed_open")
+        #endif
+        sizeFallbackTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.sizeReportGrace)
+            if Task.isCancelled, let self {
+                #if DEBUG
+                self.restorationTrace.emitDiagnostic("grace_cancelled_before_wake")
+                #endif
+            }
+            guard !Task.isCancelled, let self else { return }
+            self.sizeFallbackTask = nil
+            guard case .ended = self.status, self.runTask == nil else { return }
+            #if DEBUG
+            self.restorationTrace.emitDiagnostic(
+                "rearm_grace_fired status=\(Self.diagnosticStatusName(self.status))")
+            #endif
+            self.start()
+        }
     }
 
     private func consume(
