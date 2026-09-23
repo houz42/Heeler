@@ -3,20 +3,22 @@ import UIKit
 
 // SPDX-License-Identifier: Apache-2.0
 //
-// The chat input's UIKit text view + its representable (v2: the
-// prefix-key accessory bar — the `/ # @ !` quick-insert row above the
-// keyboard — is REMOVED per user decision; the composer is
-// Messages-clean. Command modes still work from TYPED text: the
-// ComposerRouterStore classifies a leading / # @ ! from the draft as
-// before. Autocorrection and spell-check stay off on the input's text
-// view, so no prediction row competes with the keys either.
+// The chat input's UIKit text view + its representable (v3: the
+// composer is Messages-clean — no accessory bar; the OS keyboard's
+// own language/globe + dismissal controls, never replaced keys).
+// Command modes work from TYPED text (the ComposerRouterStore
+// classifies a leading / # @ ! from the draft as before) and from
+// the + menu (v3). Writing assistance follows the chat
+// writing-assistance policy: ordinary chat defaults to the system
+// keyboard's own correction/prediction; an explicit Off disables it
+// — see `applyChatInputConfiguration(writingAssistance:)`.
 
-/// The chat input's UIKit text view (v2: the prefix-key accessory bar
-/// is GONE — no inputAccessoryView; the keyboard presents clean).
-/// Autocorrection/spell-check stay off (set by the representable) so
-/// no prediction row competes with the keys. Reports externally-applied
-/// drafts (suggestion accepts) through ``onExternalDraft`` so the
-/// owner's draft binding and the router's suggestion pass see them.
+/// The chat input's UIKit text view (v3: no inputAccessoryView;
+/// the keyboard presents clean, exactly as the OS provides it).
+/// Writing assistance is a configuration on the representable.
+/// Reports externally-applied drafts (suggestion accepts) through
+/// ``onExternalDraft`` so the owner's draft binding and the
+/// router's suggestion pass see them.
 @MainActor
 final class ChatInputUITextView: UITextView {
     /// Reports an externally-applied draft (a suggestion accept) the
@@ -187,22 +189,41 @@ final class ChatInputUITextView: UITextView {
         onExternalDraft?(newDraft, selectedRange.location)
     }
 
-    /// The chat-input text configuration, in one place: the one-bar
-    /// contract (autocorrection/spell-check off hides QuickType), literal
-    /// ASCII typing, and the composer's return-key arbitration. `makeUIView`
+    /// The chat-input text configuration, in one place. `makeUIView`
     /// applies it; tests apply the same method so they measure the
     /// production configuration, not UIKit defaults.
-    func applyChatInputConfiguration() {
+    ///
+    /// Writing assistance (v3 design doc, "Writing assistance"):
+    /// ordinary chat DEFAULTS to the system keyboard's own
+    /// correction/prediction (`.default` traits + the user's language
+    /// keyboard); an explicit Off disables it. The keyboard itself is
+    /// never replaced — this only configures text traits.
+    func applyChatInputConfiguration(
+        writingAssistance: Bool = false
+    ) {
         backgroundColor = .clear
         font = .preferredFont(forTextStyle: .body)
         adjustsFontForContentSizeCategory = true
-        autocorrectionType = .no
-        spellCheckingType = .no
-        smartQuotesType = .no
-        smartDashesType = .no
+        if writingAssistance {
+            autocorrectionType = .default
+            spellCheckingType = .default
+            smartQuotesType = .default
+            smartDashesType = .default
+        } else {
+            autocorrectionType = .no
+            spellCheckingType = .no
+            smartQuotesType = .no
+            smartDashesType = .no
+        }
         textContainerInset = UIEdgeInsets()
         textContainer.lineFragmentPadding = 0
-        keyboardType = .asciiCapable
+        // The DEFAULT OS keyboard with its language/globe + dismissal
+        // controls as the device provides them (v3: never replace
+        // system keys). Ordinary chat (assistance on) uses the
+        // standard multilingual keyboard; the literal/command mode
+        // pins asciiCapable (a freeform field cannot reliably disable
+        // corrections for inline code spans — the design doc's rule).
+        keyboardType = writingAssistance ? .default : .asciiCapable
         returnKeyType = .default
         // Hug measured content (sizeThatFits) instead of fighting the
         // proposal; scrolling switches off/on per the 5-line cap.
@@ -240,6 +261,14 @@ struct ChatInputTextView: UIViewRepresentable {
     var collapsed: Bool = false
     /// The draft placeholder (the frame's hint line).
     let placeholder: String
+    /// Ordinary chat follows the system keyboard's own
+    /// correction/prediction by default (the v3 writing-assistance
+    /// policy): `true` applies `.default` text traits so QuickType
+    /// and the user's language keyboard work; `false` disables
+    /// correction entirely (the literal/command mode). The keyboard
+    /// itself is ALWAYS the OS default — no custom input view, no
+    /// replaced system keys.
+    var writingAssistance: Bool = false
     /// Reports every draft/selection change, including the prefix-key
     /// inserts and the suggestion accepts below. The owner updates its
     /// binding and re-runs the router's suggestion pass.
@@ -279,7 +308,7 @@ struct ChatInputTextView: UIViewRepresentable {
     func makeUIView(context: Context) -> ChatInputUITextView {
         let textView = ChatInputUITextView()
         textView.delegate = context.coordinator
-        textView.applyChatInputConfiguration()
+        textView.applyChatInputConfiguration(writingAssistance: writingAssistance)
         textView.accessibilityLabel = placeholder
         context.coordinator.attachPlaceholder(
             to: textView, placeholder: placeholder)
@@ -289,6 +318,10 @@ struct ChatInputTextView: UIViewRepresentable {
 
     func updateUIView(_ textView: ChatInputUITextView, context: Context) {
         context.coordinator.onEdit = onEdit
+        // The writing-assistance trait is re-applied every pass: the
+        // user can flip Settings → Chat → Writing assistance
+        // mid-session and the live field follows without a rebuild.
+        textView.applyChatInputConfiguration(writingAssistance: writingAssistance)
         // A new representable value carries a new onEdit closure; the
         // text view's external-draft path must keep reporting through
         // the current one.

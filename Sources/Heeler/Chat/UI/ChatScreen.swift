@@ -237,6 +237,12 @@ struct ChatScreen: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.appReadingTextSize) private var readingTextSize
 
+    /// The chat writing-assistance choice (v3): the ordinary chat
+    /// field follows it (default System); dedicated editors stay
+    /// literal. Observed so a Settings flip mid-session re-applies
+    /// the text traits on the next representable update pass.
+    @State private var writingAssistance = WritingAssistanceSettings.shared
+
     var body: some View {
         VStack(spacing: 0) {
             transcriptScrollView
@@ -1146,10 +1152,18 @@ struct ChatScreen: View {
         if let router {
             ChatInputTextView(
                 text: draft,
-                // Composer collapse (conversation redesign): empty OR
-                // unfocused = single row; focused with text grows to
-                // the 3-line cap. The draft survives blur untouched.
-                placeholder: "Message — / # @ ! for commands",
+                // v3: the resting compact row only when the draft is
+                // empty; a HELD draft keeps its content visible
+                // (bounded by the 3-line cap), so returning to the
+                // chat shows what was typed without re-focusing.
+                collapsed: isResting,
+                placeholder: "Message",
+                // v3 writing assistance: the ordinary chat field
+                // follows the persisted System/Off choice (default
+                // System — the OS keyboard's own correction and
+                // prediction). Dedicated command/path/shell editors
+                // are always literal and never read this.
+                writingAssistance: writingAssistance.isEnabled,
                 onEdit: { [self] newText, caret in
                     self.applyComposerEdit(newText, caret: caret)
                 },
@@ -1186,66 +1200,130 @@ struct ChatScreen: View {
         return result.consumedKey
     }
 
-    /// The composer row: close chevron, the + (add attachment) menu,
-    /// the growing/collapsing text field, and Send. Split out of
-    /// inputFrame so neither expression overloads the type-checker.
+    /// The v3 composer row (Messages-style, design doc "Compact
+    /// composer"): a separate circular **+** button on the LEFT, a
+    /// slim rounded text capsule, and a small circular up-arrow Send
+    /// control INSIDE the capsule's right edge. Green accent (Meadow,
+    /// not iMessage blue). One compact row empty; multiline grows
+    /// bounded. NO keyboard-dismiss chrome — the OS keyboard's own
+    /// dismissal control is the only one (v3: never replace system
+    /// keys).
+    ///
+    /// ATTACHMENT TILES (current design): the draft rail rides INSIDE
+    /// the upward-extended capsule — the capsule grows upward to hold
+    /// the tile row above the field, one capsule, no separate rail
+    /// bar. When attachments exist the + control MOVES to the END of
+    /// the capsule's tile row (only one + is ever visible).
     @ViewBuilder
     private var composerRow: some View {
         if let router {
-        HStack(spacing: 8) {
-            if keyboardInset.height > 0 {
-                // Keyboard-dismiss chevron (v2 device note): ONLY when
-                // the keyboard is actually up — a dead dismiss control
-                // on the collapsed resting row (keyboard down) is
-                // misleading chrome. Tapping focuses the field instead
-                // via the field's own tap.
-                Button {
-                    // Collapse to the resting row: keyboard down, focus
-                    // off — the draft and the frame PERSIST.
-                    inputFocused = false
-                } label: {
-                    Image(systemName: "chevron.down")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 28, height: 28)
-                        .contentShape(Rectangle())
+            HStack(alignment: .bottom, spacing: 8) {
+                // No attachments: the + sits LEFT of the capsule (the
+                /// compact one-row state). With attachments held, the
+                /// + moves into the capsule's tile row (below) and
+                /// the leading slot stays empty — only one + exists.
+                if draftItems.isEmpty { plusMenu }
+                // The capsule: tiles (when held) + field + inline
+                /// Send. One rounded background over all of it so the
+                /// Send circle and tile row both sit INSIDE the
+                /// capsule (the current design's extended capsule).
+                VStack(alignment: .leading, spacing: 6) {
+                    if !draftItems.isEmpty {
+                        HStack(spacing: 8) {
+                            ChatDraftTileRail(
+                                items: draftItems,
+                                failedItemID: failedAttachmentItemID,
+                                removeItem: { id in removeDraftItem(id) },
+                                openPreview: { item in
+                                    previewedDraftItem = item
+                                },
+                                openCollection: {
+                                    showsDraftCollection = true
+                                })
+                            plusMenu
+                        }
+                        .padding(.leading, 8)
+                    }
+                    HStack(alignment: .bottom, spacing: 2) {
+                        composerField
+                        sendButton
+                    }
                 }
-                .accessibilityLabel("Collapse input")
+                .padding(.leading, 12)
+                .padding(.trailing, 4)
+                .padding(.vertical, 4)
+                .background(
+                    Color(uiColor: .secondarySystemFill).opacity(0.55),
+                    in: Capsule())
             }
-            if router != nil && deliver != nil {
-                Menu {
-                    AgentActionMenuContent(
-                        actions: attachmentActions,
-                        sections: AgentActionMenuPolicy.composerAddSections)
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 15, weight: .semibold))
-                        .frame(width: 18, height: 18)
+            .padding(.horizontal, 12)
+            .padding(.vertical, isResting ? 4 : 6)
+        }
+    }
+
+    /// The + menu (v3): the four prefix modes — Agent command (/),
+    /// Filter/tag (#), Mention (@), Shell command (!) — THEN image
+    /// and file. Selecting a prefix mode opens that mode's chooser
+    /// via the router (structured intent, per the design doc); typed
+    /// prefixes keep working unchanged.
+    private var plusMenu: some View {
+        Menu {
+            Section {
+                ForEach(ComposerPrefixMode.allCases) { mode in
+                    Button {
+                        router?.openChooser(for: mode)
+                    } label: {
+                        Label(
+                            "\(mode.menuTitle) (\(mode.prefixCharacter))",
+                            systemImage: mode.systemImage)
+                    }
                 }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.circle)
-                .tint(Color(uiColor: .label).opacity(0.72))
-                .frame(minWidth: 28, minHeight: 28)
-                .accessibilityLabel("Add")
-                .accessibilityHint("Adds an image or file to the draft")
             }
-            composerField
-            Button {
-                sendDraft()
-            } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.title2)
+            Section {
+                AgentActionMenuContent(
+                    actions: attachmentActions,
+                    sections: AgentActionMenuPolicy.composerAddSections)
             }
-            .disabled(!canSend || isSending)
-            .accessibilityLabel("Send")
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 17, weight: .semibold))
+                .frame(width: 30, height: 30)
+                .contentShape(Circle())
         }
-        .padding(.horizontal, 12)
-        // Compact resting state (v2 device note): empty/unfocused draft
-        // AND keyboard down — the composer shrinks to the tightest row
-        // so the transcript keeps maximum content area. Keyboard up
-        // keeps the full working padding.
-        .padding(.vertical, isResting ? 4 : 8)
+        .buttonStyle(.plain)
+        .frame(width: 36, height: 36)
+        .background(
+            Color(uiColor: .secondarySystemFill).opacity(0.55),
+            in: Circle())
+        .accessibilityLabel("Add")
+        .accessibilityHint(
+            "Commands, filters, mentions, or an image or file for the draft")
+    }
+
+    /// The Send control: a small circular up-arrow INSIDE the
+    /// capsule's right edge, Meadow's GREEN accent when sendable
+    /// (not iMessage blue). Sendability is the ONE shared predicate
+    /// (`canSend`), which the submit guard also uses — the button and
+    /// the guard can never drift apart.
+    private var sendButton: some View {
+        Button {
+            sendDraft()
+        } label: {
+            Image(systemName: "arrow.up")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(
+                    Color(uiColor: canSend && !isSending
+                        ? .systemBackground : .secondaryLabel))
+                .frame(width: 28, height: 28)
+                .background(
+                    canSend && !isSending
+                        ? Color.accentColor
+                        : Color(uiColor: .secondarySystemFill),
+                    in: Circle())
         }
+        .buttonStyle(.plain)
+        .disabled(!canSend || isSending)
+        .accessibilityLabel("Send")
     }
 
     /// The composer's most compact state: an empty (or unfocused) draft
@@ -1300,20 +1378,6 @@ struct ChatScreen: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.top, 6)
-                }
-                // The draft tile rail (§D): every draft item (images,
-                // files, quotes) as a small square tile, corner-x
-                // removes; +N (only on real overflow) opens the
-                // collection sheet. Preserved across blur.
-                if !draftItems.isEmpty {
-                    ChatDraftTileRail(
-                        items: draftItems,
-                        failedItemID: failedAttachmentItemID,
-                        removeItem: { id in removeDraftItem(id) },
-                        openPreview: { item in previewedDraftItem = item },
-                        openCollection: { showsDraftCollection = true })
                         .padding(.horizontal, 12)
                         .padding(.top, 6)
                 }
@@ -1387,6 +1451,21 @@ struct ChatScreen: View {
             }
             .onChange(of: attachments?.staging.state) { _, newState in
                 syncAttachmentUploadState(newState)
+            }
+            // The + menu's prefix-mode chooser (v3): presented when
+            // the router holds an active mode. The composer field is
+            // untouched for the sheet's whole lifetime — Cancel
+            // returns to exactly the original draft/caret/keyboard.
+            .sheet(item: Binding(
+                get: { router.activeChooser },
+                set: { mode in
+                    if mode == nil { router.cancelChooser() }
+                }
+            )) { mode in
+                ComposerChooserSheet(
+                    router: router,
+                    mode: mode,
+                    onDismiss: { router.cancelChooser() })
             }
         }
     }

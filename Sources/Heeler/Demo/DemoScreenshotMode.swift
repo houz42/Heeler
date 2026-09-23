@@ -63,6 +63,7 @@
             /// wrap, fenced code) — the content-sized bubble capture
             /// surface (v3 width proofs).
             case chatBubbles
+
             /// The chat surface with markdown tables that stress the
             /// phone-width contract (long multi-column cells, code
             /// spans, links) — the wrapped-cell table capture
@@ -92,6 +93,7 @@
             /// a `task` spawn (4 scout children) — the capture and
             /// proof surface (v3 tasks-inspector proofs).
             case tasksInspector
+
             /// The v3 work inspector's child-run proof surface: the
             /// SAME fixture transcript LINKED with a real-shaped
             /// live registration list (two scouts Running live, one
@@ -99,6 +101,12 @@
             /// child-run capture and proof surface (v3 child-run
             /// proofs).
             case tasksInspectorChildRun
+
+            /// The chat surface with an INTERACTIVE composer (live
+            /// router + deliver + attachments stub) — the v3
+            /// Messages-style composer capture surface (compact row /
+            /// multiline / attachment tile / + menu proofs).
+            case chatComposer
 
             static func fromArguments() -> Route {
                 let arguments = ProcessInfo.processInfo.arguments
@@ -109,7 +117,9 @@
                 if arguments.contains(chatQACardsLaunchArgument) { return .chatQACards }
                 if arguments.contains(chatLifecycleLaunchArgument) { return .chatLifecycle }
                 if arguments.contains(chatBubblesLaunchArgument) { return .chatBubbles }
+
                 if arguments.contains(chatTablesLaunchArgument) { return .chatTables }
+                if arguments.contains(chatComposerLaunchArgument) { return .chatComposer }
                 if arguments.contains(chatSpecialSectionsLaunchArgument) { return .chatSpecialSections }
                 if arguments.contains(hostListConsoleLaunchArgument) { return .hostListConsole }
                 if arguments.contains(chatPendingAskLaunchArgument) { return .chatPendingAsk }
@@ -127,6 +137,7 @@
         static let hostDetailProbingLaunchArgument = "--demo-host-detail-probing"
         static let chatPendingAskLaunchArgument = "--demo-chat-pending-ask"
         static let chatSpecialSectionsLaunchArgument = "--demo-chat-special-sections"
+        static let chatComposerLaunchArgument = "--demo-chat-composer"
         static let hostDetailPickLaunchArgument = "--demo-host-detail-pick"
         static let chatQACardsLaunchArgument = "--demo-chat-qa-cards"
         static let chatLifecycleLaunchArgument = "--demo-chat-lifecycle"
@@ -249,10 +260,15 @@
                 chatLiveWorkSurface
             case .chatSpecialSections:
                 chatSpecialSectionsSurface
+
             case .tasksInspector:
                 tasksInspectorSurface
+
             case .tasksInspectorChildRun:
                 tasksInspectorChildRunSurface
+
+            case .chatComposer:
+                ChatComposerDemoSurface()
             }
         }
 

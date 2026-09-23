@@ -99,6 +99,104 @@ struct ComposerLocalCommand: Equatable, Sendable {
     static let all = [level, follow]
 }
 
+/// The + menu's four prefix modes (v3): the menu exposes Agent
+/// command (/), Filter/tag (#), Mention (@), Shell command (!) ahead
+/// of the image/file actions. The MODE is what the menu selects;
+/// what happens next is mode-specific and design-doc-governed:
+///
+/// - empty draft → the mode's chooser/editor opens with keyboard
+///   focus;
+/// - nonempty draft → the draft/selection are preserved and the
+///   chooser opens as a separate operation (no mid-sentence prefix
+///   insertion, no prose reinterpretation);
+/// - cancel returns to exactly the original draft/caret/keyboard.
+///
+/// Selection ALWAYS resolves to a structured intent — a chosen agent
+/// command is a catalog ID + arguments (``ComposerCommandSelection``),
+/// never a literal "/" text another layer re-guesses.
+enum ComposerPrefixMode: String, Equatable, Sendable, CaseIterable, Identifiable {
+    case slash
+    case tag
+    case mention
+    case bash
+
+    var id: Self { self }
+
+    /// The + menu row's title (design-doc naming).
+    var menuTitle: String {
+        switch self {
+        case .slash: "Agent command"
+        case .tag: "Filter / tag"
+        case .mention: "Mention"
+        case .bash: "Shell command"
+        }
+    }
+
+    /// The literal prefix character the mode corresponds to (typed
+    /// entry remains fully supported; this is the hint, not the
+    /// mechanism).
+    var prefixCharacter: String {
+        switch self {
+        case .slash: "/"
+        case .tag: "#"
+        case .mention: "@"
+        case .bash: "!"
+        }
+    }
+
+    /// The + menu row's SF Symbol.
+    var systemImage: String {
+        switch self {
+        case .slash: "slash.circle"
+        case .tag: "number.circle"
+        case .mention: "at.circle"
+        case .bash: "chevron.left.forwardslash.chevron.right"
+        }
+    }
+}
+
+/// A + menu / chooser selection that RESOLVED to structured intent.
+/// A chosen agent command is a catalog ID with its arguments — the
+/// consumer never re-parses a literal "/" (the design doc's
+/// selection-resolves-to-intent rule). Delivery follows the same
+/// paths typed prefixes use (omp commands pass through verbatim as
+/// `agent.prompt`; client-local commands route through the store).
+struct ComposerCommandSelection: Equatable, Sendable {
+    /// The command's catalog identity: `omp:<name>` for agent
+    /// commands, `local:<name>` for client-local ones — the same IDs
+    /// the suggestion menu carries.
+    let catalogID: String
+    /// The command's bare name (the catalog entry's title).
+    let name: String
+    /// The arguments the user supplied in the mode's editor; empty
+    /// when the command takes none.
+    let arguments: String
+
+    /// The delivery-ready text for this selection: the SAME wire form
+    /// a typed `/name args` would have submitted, assembled here
+    /// once from the resolved intent — never guessed from prose.
+    var deliveryText: String {
+        let trimmed = arguments.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "/\(name)" : "/\(name) \(trimmed)"
+    }
+}
+
+/// A resolved mention selection (from the + menu's Mention mode or a
+/// typed `@`): the AGENT TARGET as structured identity plus the
+/// message to deliver — delivery resolves the agent once, it never
+/// re-guesses a name.
+struct ComposerMentionSelection: Equatable, Sendable {
+    let agentName: String
+    let message: String
+}
+
+/// A resolved shell-command selection (from the + menu's Shell mode
+/// or a typed `!`): the command goes to the Host's companion scratch
+/// terminal, never into the agent prompt.
+struct ComposerShellSelection: Equatable, Sendable {
+    let command: String
+}
+
 /// The token inside the draft the suggestion menu is currently filtering.
 /// Detection is deliberately per-prefix: a `#` filter and an `!` command
 /// take the whole rest of the draft, an `@` mention takes the agent name

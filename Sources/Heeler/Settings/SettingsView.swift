@@ -191,6 +191,14 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    NavigationLink(value: "settings.writingAssistance") {
+                        Label("Writing Assistance", systemImage: "character.cursor.ibeam")
+                    }
+                } header: {
+                    Text("Chat")
+                }
+
+                Section {
                     NavigationLink(value: "settings.notifications") {
                         Label("Notifications", systemImage: "bell.badge")
                     }
@@ -223,6 +231,9 @@ struct SettingsView: View {
                     ReadingTextSizeSettingsView(settings: readingTextSize)
                 case "settings.defaultDetail":
                     DefaultDetailLevelSettingsView(settings: defaultDetailLevel)
+                case "settings.writingAssistance":
+                    WritingAssistanceSettingsView(
+                        settings: WritingAssistanceSettings.shared)
                 case SettingsAboutDestination.acknowledgements.rawValue:
                     // The Acknowledgements route resolves through the same
                     // enum the row builds its link from — identity by case.

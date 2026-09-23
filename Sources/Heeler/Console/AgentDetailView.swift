@@ -592,7 +592,29 @@ struct AgentDetailView: View {
                             paneID, lines: 200, on: hostID).text
                     }),
                 commandFileIO: AgentCommandFileIO.console(
-                    console, hostID: agent.hostID)))
+                    console, hostID: agent.hostID),
+                // v3 structured command delivery (review r2): a
+                // + menu/chooser agent-command selection invokes
+                // STRUCTURALLY over the broker's command.invoke,
+                // never slash text through prompt.send. The seam
+                // resolves the catalog entry's NAME to the broker
+                // command id (the catalog is name-keyed today;
+                // commands.list ids travel unchanged once it feeds
+                // the catalog). A missing store or a registration
+                // without the commands capability surfaces as the
+                // router's honest rejection in the chooser.
+                deliverCommand: { _, name, arguments in
+                    guard let store = await MainActor.run(
+                        body: { brokerChat })
+                    else {
+                        throw AgentChatError.wire(
+                            code: "unsupported_capability",
+                            message: "This agent cannot run commands.",
+                            retryable: false)
+                    }
+                    _ = try await store.sendCommand(
+                        commandId: name, arguments: arguments)
+                }))
         // No JSONL ChatStore.start: the lane is deprecated (see above).
     }
 
