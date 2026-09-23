@@ -203,10 +203,14 @@ enum AgentListLayout {
         // the input — the flatten's catalog order — as its rank. A
         // structural key, never a name/UUID comparison: the sort is not
         // stable in general, so cross-block pairs need a real key.
-        var herdrBlockRanks: [(Host.ID, String): Int] = [:]
+        struct HerdrBlockKey: Hashable {
+            let hostID: Host.ID
+            let session: String
+        }
+        var herdrBlockRanks: [HerdrBlockKey: Int] = [:]
         if order == .herdr {
             for agent in agents {
-                let key = (agent.hostID, agent.hostSessionName)
+                let key = HerdrBlockKey(hostID: agent.hostID, session: agent.hostSessionName)
                 if herdrBlockRanks[key] == nil { herdrBlockRanks[key] = herdrBlockRanks.count }
             }
         }
@@ -217,8 +221,10 @@ enum AgentListLayout {
                 // (catalog) order, the producer's workspace→tab→pane
                 // ordinals inside each block, missing ordinals last in
                 // arrival order.
-                let lhsBlock = herdrBlockRanks[(lhs.element.hostID, lhs.element.hostSessionName)]!
-                let rhsBlock = herdrBlockRanks[(rhs.element.hostID, rhs.element.hostSessionName)]!
+                let lhsBlock = herdrBlockRanks[
+                    HerdrBlockKey(hostID: lhs.element.hostID, session: lhs.element.hostSessionName)]!
+                let rhsBlock = herdrBlockRanks[
+                    HerdrBlockKey(hostID: rhs.element.hostID, session: rhs.element.hostSessionName)]!
                 if lhsBlock != rhsBlock { return lhsBlock < rhsBlock }
                 let placed = herdrLadder(lhs.element, rhs.element)
                 if placed != herdrLadder(rhs.element, lhs.element) {
