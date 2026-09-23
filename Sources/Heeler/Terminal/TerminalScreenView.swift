@@ -808,6 +808,11 @@ final class HeelerTerminalView: UITerminalView, TerminalByteSink {
     /// settled grid yet. A cancelled freeze must then report it itself.
     private var windowResizeGridIsPending = false
     private var responderGate = TerminalKeyboardResponderGate()
+    #if DEBUG
+    /// DIAGNOSTIC (throwaway): the last logged layout bounds — one trace
+    /// line per distinct size.
+    private var lastLoggedLayoutBounds = ""
+    #endif
     private var viewportSnapshotTask: Task<Void, Never>?
     private(set) var isLocalInputEnabled = true
     private var textInputStyle = TerminalTextInputStyle.terminal
@@ -1506,6 +1511,27 @@ final class HeelerTerminalView: UITerminalView, TerminalByteSink {
     }
 
     override func layoutSubviews() {
+        #if DEBUG
+        let boundsKey = "\(Int(bounds.width))x\(Int(bounds.height))"
+        if lastLoggedLayoutBounds != boundsKey {
+            lastLoggedLayoutBounds = boundsKey
+            let windowBounds = window?.bounds ?? .zero
+            var chain: [String] = []
+            var current: UIView? = superview
+            var depth = 0
+            while let view = current, depth < 8 {
+                chain.append(
+                    "s\(depth)=y\(Int(view.frame.origin.y)) h\(Int(view.frame.size.height))")
+                current = view.superview
+                depth += 1
+            }
+            AttachRestorationTrace.emitGeometry(
+                "layout bounds=\(boundsKey) "
+                + "frame_y=\(Int(frame.origin.y)) "
+                + "window=\(Int(windowBounds.width))x\(Int(windowBounds.height)) "
+                + "chain[\(chain.joined(separator: " "))]")
+        }
+        #endif
         guard !defersLayoutForKeyboardTransition else { return }
         // Before Ghostty's layout, so the freeze is in force by the time the
         // pass reports its grid.
