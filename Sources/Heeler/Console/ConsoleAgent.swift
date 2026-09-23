@@ -96,6 +96,7 @@ struct ConsoleAgent: Identifiable, Sendable, Equatable {
         self.tabLabel = tabLabel
         self.paneLabel = paneLabel
         self.tabPosition = tabPosition
+        self.workspaceTabCount = workspaceTabCount
         self.snapshotOrder = snapshotOrder
         self.workspaceOrder = workspaceOrder
         self.tabOrder = tabOrder
