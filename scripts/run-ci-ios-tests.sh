@@ -1745,13 +1745,14 @@ if [[ "$password_fixture_available" == "1" ]]; then
 fi
 run_suite HeelerSSHDirectStreamLocalE2ETests 9 1 0 \
     HeelerSSHDirectStreamLocalE2ETests
-run_suite SharedFixtureE2ETests 95 6 0 \
+run_suite SharedFixtureE2ETests 103 7 0 \
     HeelerSSHPTYE2ETests \
     HeelerSSHJumpHostGateE2ETests \
     HeelerSSHTransportBehaviorE2ETests \
     ImageStagingE2ETests \
     WeakNetworkE2ETests \
-    PairingCeremonyE2ETests
+    PairingCeremonyE2ETests \
+    PortForwardE2ETests
 
 # Named behaviour assertions still identify their owning suite. Point those
 # logical names at the one serialized lane log rather than duplicating it.
@@ -1761,7 +1762,8 @@ for suite in \
     HeelerSSHTransportBehaviorE2ETests \
     ImageStagingE2ETests \
     WeakNetworkE2ETests \
-    PairingCeremonyE2ETests; do
+    PairingCeremonyE2ETests \
+    PortForwardE2ETests; do
     ln -s "SharedFixtureE2ETests.log" "$fixture_dir/$suite.log"
 done
 
@@ -1857,6 +1859,26 @@ assert_behavior "cancellation" HeelerSSHDirectStreamLocalE2ETests \
     '"cancellation closes only its channel and preserves connection reuse"'
 assert_behavior "teardown" HeelerSSHSessionE2ETests \
     '"clean channel close leaves the connection reusable"'
+# The v3 known-port forward delivery gate: a real tunnel, not protocol
+# scaffold. HTTP and WebSocket bytes must cross a real forward; the failure
+# matrix (duplicate Start, occupied port, refused target, SSH loss, Stop,
+# concurrent chat accounting) rides the same suite.
+assert_behavior "forwarded HTTP" PortForwardE2ETests \
+    "real remote loopback HTTP service through the phone's listener"
+assert_behavior "forwarded WebSocket" PortForwardE2ETests \
+    '"WebSocket traffic flows through the forward"'
+assert_behavior "forward idempotent Start" PortForwardE2ETests \
+    '"duplicate Start reuses the live tunnel against real sshd"'
+assert_behavior "forward occupied local port" PortForwardE2ETests \
+    '"occupied local port is an explicit failure against real sshd"'
+assert_behavior "forward refused target" PortForwardE2ETests \
+    '"refused remote target fails Start as targetUnreachable"'
+assert_behavior "forward SSH loss" PortForwardE2ETests \
+    '"SSH loss retires the forward and honest transport state"'
+assert_behavior "forward explicit Stop" PortForwardE2ETests \
+    '"explicit Stop releases the listener for the next Start"'
+assert_behavior "forward concurrent chat accounting" PortForwardE2ETests \
+    '"concurrent chat and forward traffic keep the connection healthy"'
 
 # The weak-network half of the stress criterion. Each of these runs the named
 # behaviour over the impairment proxy — added latency, a bandwidth cap,

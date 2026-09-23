@@ -208,6 +208,17 @@ public final class SSHConnection: Sendable {
             timeout: timeout)
     }
 
+    /// Opens one long-lived direct-tcpip channel to `endpoint` as reached from
+    /// the authenticated host. The returned handle owns only that channel;
+    /// closing it leaves this SSH connection reusable, and an idle forward
+    /// never monopolizes the session (see `SSHForwardChannel`).
+    public func openForwardChannel(
+        to endpoint: SSHEndpoint,
+        timeout: Duration
+    ) async throws -> SSHForwardChannel {
+        try await driver.openForward(endpoint: endpoint, timeout: timeout)
+    }
+
     /// Opens the package's deliberately small SFTP surface on one SSH session
     /// channel. Closing the returned client leaves this connection reusable.
     public func openSFTP(timeout: Duration) async throws -> SSHSFTPClient {

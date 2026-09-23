@@ -8,6 +8,23 @@ Entries reference the issue that motivated them.
 ## [Unreleased]
 
 ### Added
+- Known-port native SSH port forwarding (v3): one explicitly requested
+  forward per Start — the phone binds a LOOPBACK-ONLY listener (127.0.0.1,
+  never all interfaces) and forwards it over the authenticated host
+  connection's direct-tcpip channels to the SAME host's loopback target
+  port. "Active" is verified, not assumed: a Start probes the target
+  through the same channel machinery every connection uses, and sshd's
+  channel-open refusal (connect failed) surfaces as an explicit
+  target-unreachable verdict, while an occupied local port is an explicit
+  error rather than a silent remap. Start is idempotent per target port
+  (a duplicate Start joins or reuses the one operation); explicit Stop and
+  SSH connection loss release the listener and every channel; forwards
+  expire after 30 minutes idle with a user-visible extension. No listener
+  discovery, no automatic port exposure, and no PWA/Web Push or background
+  liveness promise. Proven by a real harness: HTTP and WebSocket traffic
+  through the phone's loopback listener against a real sshd, plus the
+  duplicate-Start / occupied-port / refused-target / SSH-loss / Stop /
+  concurrent-chat-accounting matrix.
 - Producer-backed live-work indicator (v3): a compact six-frame work
   spark at the transcript's live edge, shown ONLY when a fresh
   producer activity report says the agent is working. Idle and

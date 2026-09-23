@@ -79,6 +79,13 @@ actor SessionDriver {
         var teardownInProgress = false
     }
     private var streamLocalChannels: [UInt64: StreamLocalChannelState] = [:]
+    private var nextForwardChannelID: UInt64 = 0
+    private struct ForwardChannelState {
+        let channel: OpaquePointer
+        var acceptsIO = true
+        var teardownInProgress = false
+    }
+    private var forwardChannels: [UInt64: ForwardChannelState] = [:]
     private struct PTYChannelState {
         let channel: OpaquePointer
         var reachedEOF = false
@@ -113,6 +120,7 @@ actor SessionDriver {
         case oneShot(UInt64)
         case pty(UInt64)
         case streamLocal(UInt64)
+        case forward(UInt64)
     }
 
     private var nextOneShotID: UInt64 = 0
@@ -1025,6 +1033,223 @@ actor SessionDriver {
             streamLocalChannels.removeValue(forKey: id)
         } catch {
             streamLocalChannels.removeValue(forKey: id)
+            throw teardownFailure(error)
+        }
+    }
+
+    /// Opens one long-lived direct-tcpip channel to `endpoint` on the
+    /// authenticated host. Unlike the Jump-Host byte transport this channel
+    /// shares the session: it registers under the same short-turn discipline
+    /// as `openStreamLocal`, so chat RPCs, Events, PTY and SFTP keep making
+    /// progress while the forward lives.
+    ///
+    /// sshd verifies the target as part of the channel OPEN: a refused or
+    /// unreachable target port fails the OPEN itself (`.targetUnreachable`),
+    /// and a forwarding policy refusal is `.forwardingDenied`. Only a refusal
+    /// of this one channel leaves the session usable; every other failure
+    /// invalidates it, the same split `openStreamLocal` takes.
+    func openForward(
+        endpoint: SSHEndpoint,
+        timeout: Duration
+    ) async throws -> SSHForwardChannel {
+        await acquireOperation()
+        defer { releaseOperation() }
+
+        guard valid, !forwarding, authenticated, let session else {
+            throw SSHError.connectionInvalidated
+        }
+        guard !endpoint.host.isEmpty, endpoint.port > 0 else {
+            throw SSHError.channelFailed
+        }
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        var channel: OpaquePointer?
+
+        do {
+            channel = try await openForwardChannel(
+                endpoint: endpoint,
+                deadline: deadline)
+            guard let channel else { throw SSHError.channelFailed }
+            nextForwardChannelID &+= 1
+            let id = nextForwardChannelID
+            forwardChannels[id] = ForwardChannelState(channel: channel)
+            return SSHForwardChannel(id: id, driver: self)
+        } catch {
+            let normalized = normalize(error)
+            if let channel {
+                do {
+                    try await cleanChannel(
+                        channel,
+                        session: try requireSession(),
+                        deadline: ContinuousClock.now.advanced(by: .seconds(2)),
+                        cancellable: false)
+                } catch {
+                    invalidateResources()
+                }
+            } else if !(error is ChannelOpenAdmissionError),
+                normalized != .targetUnreachable,
+                normalized != .forwardingDenied
+            {
+                // The same rule `openStreamLocal` states: only a per-channel
+                // refusal (refused target, policy denial) leaves the session
+                // usable. A timeout or cancellation has an uncertain channel
+                // outcome and must not admit later work.
+                invalidateResources()
+            }
+            throw normalized
+        }
+    }
+
+    func writeForward(
+        id: UInt64,
+        data: Data,
+        timeout: Duration
+    ) async throws {
+        guard !data.isEmpty else { return }
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        var offset = 0
+        let owner = allocateTransportSendOwner()
+
+        while offset < data.count {
+            await acquireOperation()
+            let progress: (written: Int, wait: SessionWaitPlan, parkedOutbound: Bool)
+            do {
+                try await holdOwnedLoopTopForTestingIfNeeded(owner: owner)
+                try checkProgress(deadline: deadline)
+                try await waitForTransportSendAdmission(
+                    owner: owner,
+                    deadline: deadline,
+                    cancellable: true)
+                let session = try requireSession()
+                let channel = try resolveChannel(.forward(id))
+                let written = writeChannel(channel, data: data, offset: offset)
+                let disposition = notePacketProducingWrite(
+                    written,
+                    owner: owner,
+                    session: session)
+                applyTransportSendOwnerDisposition(disposition)
+                guard written >= 0 || written == Int(LIBSSH2_ERROR_EAGAIN) else {
+                    throw SSHError.channelFailed
+                }
+                progress = (
+                    written,
+                    sessionWaitPlan(session),
+                    written == Int(LIBSSH2_ERROR_EAGAIN) && transportSendOwner == owner)
+                releaseOperation()
+            } catch {
+                await finishOwnedSendIfNeeded(owner: owner) {
+                    writeChannelOnce(identity: .forward(id), data: data, offset: offset)
+                }
+                releaseOperation()
+                throw normalize(error)
+            }
+
+            if progress.written > 0 {
+                offset += progress.written
+                await Task.yield()
+            } else {
+#if DEBUG
+                if progress.parkedOutbound {
+                    await holdOutboundWriteParkForTestingIfNeeded()
+                }
+#endif
+                do {
+                    try await awaitSessionProgress(progress.wait, until: deadline)
+                } catch {
+                    await acquireOperation()
+                    await finishOwnedSendIfNeeded(owner: owner) {
+                        writeChannelOnce(identity: .forward(id), data: data, offset: offset)
+                    }
+                    releaseOperation()
+                    throw normalize(error)
+                }
+            }
+        }
+    }
+
+    func readForward(
+        id: UInt64,
+        maximumBytes: Int,
+        timeout: Duration
+    ) async throws -> Data? {
+        guard maximumBytes > 0 else { throw SSHError.channelFailed }
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        let owner = allocateTransportSendOwner()
+
+        while true {
+            await acquireOperation()
+            let progress: (data: Data, eof: Bool, wait: SessionWaitPlan)
+            do {
+                try checkProgress(deadline: deadline)
+                try await waitForTransportSendAdmission(
+                    owner: owner,
+                    deadline: deadline,
+                    cancellable: true)
+                let session = try requireSession()
+                let channel = try resolveChannel(.forward(id))
+                var buffer = [UInt8](repeating: 0, count: maximumBytes)
+                let data = try readAvailableNoting(
+                    channel: channel,
+                    stream: 0,
+                    buffer: &buffer,
+                    owner: owner,
+                    session: session)
+                progress = (
+                    data,
+                    libssh2_channel_eof(channel) == 1,
+                    sessionWaitPlan(session))
+                releaseOperation()
+            } catch {
+                await finishOwnedSendIfNeeded(owner: owner) {
+                    guard let channel = try? resolveChannel(.forward(id)) else { return nil }
+                    var scratch = [UInt8](repeating: 0, count: maximumBytes)
+                    return readOnce(channel: channel, stream: 0, buffer: &scratch)
+                }
+                releaseOperation()
+                throw normalize(error)
+            }
+
+            if !progress.data.isEmpty { return progress.data }
+            if progress.eof { return nil }
+            do {
+                try await awaitSessionProgress(progress.wait, until: deadline)
+            } catch {
+                await acquireOperation()
+                await finishOwnedSendIfNeeded(owner: owner) {
+                    guard let channel = try? resolveChannel(.forward(id)) else { return nil }
+                    var scratch = [UInt8](repeating: 0, count: maximumBytes)
+                    return readOnce(channel: channel, stream: 0, buffer: &scratch)
+                }
+                releaseOperation()
+                throw normalize(error)
+            }
+        }
+    }
+
+    func closeForward(id: UInt64, timeout: Duration) async throws {
+        await acquireOperation()
+        defer { releaseOperation() }
+
+        guard var state = forwardChannels[id] else { return }
+        guard valid, session != nil else {
+            forwardChannels.removeValue(forKey: id)
+            return
+        }
+        guard !state.teardownInProgress else { return }
+        state.acceptsIO = false
+        state.teardownInProgress = true
+        forwardChannels[id] = state
+#if DEBUG
+        await holdChannelTeardownForTestingIfNeeded()
+#endif
+        do {
+            try await cleanChannel(
+                identity: .forward(id),
+                deadline: ContinuousClock.now.advanced(by: timeout),
+                cancellable: false,
+                allowClosing: true)
+            forwardChannels.removeValue(forKey: id)
+        } catch {
+            forwardChannels.removeValue(forKey: id)
             throw teardownFailure(error)
         }
     }
@@ -3238,6 +3463,11 @@ actor SessionDriver {
                 throw SSHError.channelFailed
             }
             return state.channel
+        case .forward(let id):
+            guard let state = forwardChannels[id], allowClosing || state.acceptsIO else {
+                throw SSHError.channelFailed
+            }
+            return state.channel
         }
     }
 
@@ -3458,6 +3688,73 @@ actor SessionDriver {
             } else {
                 applyTransportSendOwnerDisposition(disposition)
                 throw Self.mappedStreamLocalOpenError(error)
+            }
+        }
+    }
+
+    /// The direct-tcpip OPEN the Jump-Host byte transport already drives
+    /// (`libssh2_channel_direct_tcpip_ex`), reused here for the shared
+    /// long-lived forward channel. The origin address is the phone's own
+    /// loopback spelling, as `openDirectTCPIPChannel` already passes it.
+    /// Classification is the existing `classifyDirectTCPIPOpenFailure`:
+    /// a refused target is `.targetUnreachable`, a policy denial is
+    /// `.forwardingDenied`, and both leave the session usable because the
+    /// server refused this one channel, not the connection.
+    private func openForwardChannel(
+        endpoint: SSHEndpoint,
+        deadline: ContinuousClock.Instant
+    ) async throws -> OpaquePointer {
+        do {
+            try await claimChannelOpenSlot(deadline: deadline, cancellable: true)
+        } catch {
+            throw ChannelOpenAdmissionError(underlying: normalize(error))
+        }
+        defer { releaseChannelOpenSlot() }
+        let owner = allocateTransportSendOwner()
+        while true {
+            try checkProgress(deadline: deadline)
+            do {
+                try await waitForTransportSendAdmission(
+                    owner: owner,
+                    deadline: deadline,
+                    cancellable: true)
+            } catch {
+                if transportSendOwner == owner { invalidateResources() }
+                throw error
+            }
+            let session = try requireSession()
+            let channel = endpoint.host.withCString { hostPointer in
+                libssh2_channel_direct_tcpip_ex(
+                    session,
+                    hostPointer,
+                    Int32(endpoint.port),
+                    "127.0.0.1",
+                    0)
+            }
+            if let channel {
+                let disposition = notePacketProducingResult(
+                    0,
+                    owner: owner,
+                    session: session)
+                applyTransportSendOwnerDisposition(disposition)
+                return channel
+            }
+
+            let error = libssh2_session_last_errno(session)
+            let disposition = notePacketProducingResult(
+                error,
+                owner: owner,
+                session: session)
+            if error == LIBSSH2_ERROR_EAGAIN {
+                do {
+                    try await waitForSession(session, deadline: deadline)
+                } catch {
+                    if transportSendOwner == owner { invalidateResources() }
+                    throw error
+                }
+            } else {
+                applyTransportSendOwnerDisposition(disposition)
+                throw classifyDirectTCPIPOpenFailure(session)
             }
         }
     }

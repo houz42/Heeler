@@ -2552,4 +2552,29 @@ actor HeelerSSHTransport: Transport {
             return try await group.next() ?? true
         }
     }
+
+    /// Opens one direct-tcpip channel to `targetPort` on the authenticated
+    /// host's loopback — the v3 known-port forward seam (PortForwardWiring).
+    /// Channel discipline mirrors Events and the broker channel: the
+    /// `.ordinaryForwarding` admission lease is held for the channel's whole
+    /// lifetime, so concurrent chat RPCs, PTY, and SFTP keep correct channel
+    /// accounting and the finite ceiling over live channels stays enforced.
+    func openForwardChannel(
+        targetPort: UInt16,
+        timeout: Duration
+    ) async throws -> any PortForwardChannel {
+        guard connected else {
+            throw PortForwardError.sshDisconnected
+        }
+        let lease = try await channelAdmission.acquire(.ordinaryForwarding)
+        do {
+            let channel = try await connection.openForwardChannel(
+                to: SSHEndpoint(host: "127.0.0.1", port: targetPort),
+                timeout: timeout)
+            return AdmissionHeldForwardChannel(channel: channel, lease: lease)
+        } catch {
+            await lease.release()
+            throw PortForwardError.map(error)
+        }
+    }
 }
