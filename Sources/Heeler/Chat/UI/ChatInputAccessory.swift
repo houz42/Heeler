@@ -342,12 +342,19 @@ struct ChatInputTextView: UIViewRepresentable {
             textView.applyExternalDraft(accept.draft, caret: accept.caret)
             pendingAccept = nil
         } else if textView.text != text {
-            // Preserve the caret when the SwiftUI side rewrote the draft
-            // (rejected-draft restore): a plain text assignment would
-            // drop it to the end.
+            // A programmatic install (restore, clear, identity
+            // switch): a `.text` assignment fires NO delegate
+            // callback, so the same state work the typed-edit path
+            // gets must run here too — ONE synchronization outcome
+            // for every draft installation (the design doc's rule:
+            // placeholder + intrinsic size update as one editor
+            // update). The caret is preserved when no explicit
+            // request follows; a caretRequest below overrides it.
             let selection = textView.selectedRange
             textView.text = text
             textView.selectedRange = selection
+            context.coordinator.syncPlaceholderVisibility(for: textView)
+            textView.invalidateIntrinsicContentSize()
         }
         // Quote's caret placement: applied once per request, after the
         // text assignment above settles, and only within the text's
@@ -527,8 +534,24 @@ struct ChatInputTextView: UIViewRepresentable {
             syncPlaceholderVisibility(for: textView)
         }
 
-        private func syncPlaceholderVisibility(for textView: UITextView) {
-            placeholderLabel?.isHidden = !textView.text.isEmpty
+        /// The ONE placeholder decision (v3 design doc, "Writing
+        /// assistance and placeholder restoration"): visible IFF the
+        /// installed editor text is empty AND there is no active
+        /// marked-text composition. Focus/reconnect/network never
+        /// show it independently — this method is the single gate
+        /// every path consults (typing, external apply, restore,
+        /// begin/end editing). During an IME's marked-text
+        /// composition `textView.text` is NOT empty (it already
+        /// holds the marked characters) and UIKit re-fires
+        /// text/selection callbacks as the composition evolves, so
+        /// the marked-text check keeps the placeholder hidden
+        /// consistently mid-composition and lets it return only
+        /// after the composition commits (or is cancelled into
+        /// nothing).
+        func syncPlaceholderVisibility(for textView: UITextView) {
+            let noText = textView.text.isEmpty
+            let noMarkedText = textView.markedTextRange == nil
+            placeholderLabel?.isHidden = !(noText && noMarkedText)
         }
     }
 }
