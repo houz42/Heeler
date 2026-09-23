@@ -231,6 +231,111 @@ struct ConsoleStoreTests {
         #expect(projection.agentsByPane["missing:p"]?.showsTabLabel == false)
     }
 
+    /// The v3 Herdr order's producer ordinals: the projection derives
+    /// workspace order (snapshot array), tab order (snapshot array), and
+    /// the host-global pane reading order (tab order, then y, then x)
+    /// from the REAL session snapshot — the verified order surface with
+    /// producer revisions.
+    @Test func snapshotProjectionDerivesHerdrOrderOrdinals() async throws {
+        func tab(
+            _ workspace: String, suffix: String, label: String, number: Int
+        ) -> TabInfo {
+            TabInfo(
+                agentStatus: .idle, focused: false, label: label, number: number,
+                paneCount: 1, tabID: "\(workspace):\(suffix)", workspaceID: workspace)
+        }
+        func pane(_ id: String, x: Int, y: Int, tab: String, workspace: String)
+            -> PaneLayoutPane {
+            PaneLayoutPane(
+                focused: false, paneID: id,
+                rect: PaneLayoutRect(height: 12, width: 40, x: x, y: y))
+        }
+        let host = Host.fixture()
+        // Workspace "zed" is enumerated FIRST; "alpha" second — the
+        // producer's arrangement deliberately disagrees with names.
+        // "zed" has two tabs (t1 then t2); "alpha" one.
+        let snapshot = SessionSnapshot(
+            agents: [
+                .fixture(paneID: "zed:pA", workspaceID: "zed"),
+                .fixture(paneID: "alpha:pB", workspaceID: "alpha"),
+                AgentInfo.fixture(paneID: "zed:pC", workspaceID: "zed", tabID: "zed:t2"),
+                .fixture(paneID: "nolayout:pD", workspaceID: "alpha"),
+            ],
+            layouts: [
+                // zed's second tab comes first in the array to prove the
+                // TAB ordinal — not the layouts array order — drives the
+                // reading sequence.
+                PaneLayoutSnapshot(
+                    area: PaneLayoutRect(height: 24, width: 80, x: 0, y: 0),
+                    focusedPaneID: "zed:pC", panes: [
+                        pane("zed:pC", x: 0, y: 0, tab: "t2", workspace: "zed"),
+                    ],
+                    splits: [], tabID: "zed:t2", workspaceID: "zed", zoomed: false),
+                PaneLayoutSnapshot(
+                    area: PaneLayoutRect(height: 24, width: 80, x: 0, y: 0),
+                    focusedPaneID: "zed:pA", panes: [
+                        // Two panes in zed's t1: LEFT one (x=0) reads
+                        // before the RIGHT one (x=40) on the same row.
+                        pane("zed:pRight", x: 40, y: 0, tab: "t1", workspace: "zed"),
+                        pane("zed:pA", x: 0, y: 0, tab: "t1", workspace: "zed"),
+                    ],
+                    splits: [], tabID: "zed:t1", workspaceID: "zed", zoomed: false),
+                PaneLayoutSnapshot(
+                    area: PaneLayoutRect(height: 24, width: 80, x: 0, y: 0),
+                    focusedPaneID: "alpha:pB", panes: [
+                        pane("alpha:pB", x: 0, y: 0, tab: "t1", workspace: "alpha"),
+                    ],
+                    splits: [], tabID: "alpha:t1", workspaceID: "alpha", zoomed: false),
+            ],
+            panes: [], protocolVersion: 20,
+            tabs: [
+                tab("zed", suffix: "t1", label: "1", number: 1),
+                tab("zed", suffix: "t2", label: "2", number: 2),
+                tab("alpha", suffix: "t1", label: "1", number: 3),
+            ],
+            version: "0.8.2-fake",
+            workspaces: [
+                .fixture(workspaceID: "zed", label: "Zed"),
+                .fixture(workspaceID: "alpha", label: "Alpha"),
+            ])
+        let transport = ScriptedTransport(snapshot: snapshot)
+        let session = EventsSession(subscriptions: [], connect: { transport }, keepalive: nil)
+        let changes = AsyncStream<Void>.makeStream()
+        let projection = HostConsoleProjection(
+            host: host, session: session, snapshotRetryDelay: .seconds(1),
+            onChange: { changes.continuation.yield(()) })
+        defer {
+            projection.end()
+            changes.continuation.finish()
+        }
+        projection.start(isActive: false)
+        await projection.resume()
+        for await _ in changes.stream {
+            if !projection.isAwaitingSnapshot { break }
+        }
+
+        let a = try #require(projection.agentsByPane["zed:pA"])
+        let b = try #require(projection.agentsByPane["alpha:pB"])
+        let c = try #require(projection.agentsByPane["zed:pC"])
+        let d = try #require(projection.agentsByPane["nolayout:pD"])
+        // Workspace ordinals: producer enumeration, not the label order.
+        #expect(a.workspaceOrder == 0 && b.workspaceOrder == 1)
+        // Tab ordinals across the window: zed t1 (0), zed t2 (1), alpha t1 (2).
+        #expect(a.tabOrder == 0 && c.tabOrder == 1 && b.tabOrder == 2)
+        // Host-global pane reading order: zed t1 left pane first, then
+        // its right sibling, then zed t2, then alpha t1.
+        #expect(a.paneOrder == 0 && c.paneOrder == 2 && b.paneOrder == 3)
+        // The pane with no layout is honestly unplaced.
+        #expect(d.paneOrder == nil && !d.hasProducerOrder)
+        // And the herdr order consumes exactly these ordinals: placed
+        // rows in producer arrangement, the unplaced row last in
+        // arrival order — never alphabetical ("alpha:pB" would win).
+        let rows = [a, b, c, d]
+        #expect(
+            AgentListLayout.ordered(rows, by: .herdr).map(\.agent.paneID)
+                == ["zed:pA", "zed:pC", "alpha:pB", "nolayout:pD"])
+    }
+
     @Test func togglePinResortsThePublishedListImmediately() async throws {
         let (defaults, cleanup) = try makePinDefaults()
         defer { cleanup() }

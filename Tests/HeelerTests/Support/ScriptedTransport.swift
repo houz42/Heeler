@@ -836,6 +836,7 @@ extension AgentInfo {
         paneID: String,
         status: AgentStatus = .idle,
         workspaceID: String = "w1",
+        tabID: String? = nil,
         kind: String = "claude",
         title: String = "Task",
         revision: Int = 1,
@@ -843,7 +844,7 @@ extension AgentInfo {
     ) -> AgentInfo {
         AgentInfo(
             agentStatus: status, focused: false, paneID: paneID, revision: revision,
-            tabID: "\(workspaceID):t1", terminalID: "term_\(paneID)",
+            tabID: tabID ?? "\(workspaceID):t1", terminalID: "term_\(paneID)",
             workspaceID: workspaceID, agent: kind, cwd: "/work/\(workspaceID)",
             name: name, terminalTitleStripped: title)
     }

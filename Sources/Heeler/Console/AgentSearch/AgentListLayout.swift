@@ -4,15 +4,17 @@ import Observation
 // SPDX-License-Identifier: Apache-2.0
 //
 // The Agents list ordering + grouping views (approved redesign, handoff §B):
-// four orders (recent activity, title A–Z, needs-attention, real pane order)
-// and six groupings (flat, host, session, workspace, tab, state), living in
-// the Agents view menu only — never Settings. Pure projection logic here;
-// persistence in `AgentListLayoutStore`.
+// the orders (herdr producer order — the v3 default — recent activity,
+// title A–Z, needs-attention, legacy pane order) and six groupings (flat,
+// host, session, workspace, tab, state), living in the Agents view menu
+// only — never Settings. Pure projection logic here; persistence in
+// `AgentListLayoutStore`.
 
 /// Row order within groups. While a search query is active, relevance
 /// outranks every one of these (the caller applies the engine's result
 /// order instead).
 enum AgentListOrder: String, CaseIterable, Identifiable, Sendable {
+    case herdr
     case recent
     case title
     case attention
@@ -22,6 +24,7 @@ enum AgentListOrder: String, CaseIterable, Identifiable, Sendable {
 
     var label: String {
         switch self {
+        case .herdr: "Herdr order"
         case .recent: "Recent activity"
         case .title: "Title A–Z"
         case .attention: "Needs attention"
@@ -31,6 +34,15 @@ enum AgentListOrder: String, CaseIterable, Identifiable, Sendable {
 
     var description: String {
         switch self {
+        // v3 "Default herdr ordering": the producer's own workspace/tab/
+        // pane arrangement — a rename never moves a row, a desktop move
+        // does. herdr sessions are independent servers with no global
+        // cross-host ordinal, so hosts/sessions stay in the catalog
+        // order the user configured. Rows whose producer ordinals are
+        // unavailable keep their last-known position at the end, never
+        // an invented alphabetical fallback.
+        case .herdr:
+            "Hosts/sessions in your order; workspaces and tabs in herdr order."
         // Review finding #5: the wire carries no cross-host timestamps —
         // herdr's state_change_seq is comparable only within a Host. The
         // order says so: newest activity first within each machine, hosts
@@ -153,11 +165,72 @@ enum AgentListLayout {
         agent.snapshotOrder ?? Int.max
     }
 
+    // MARK: Herdr order (v3 default)
+
+    /// The v3 default's tiebreak ladder inside one host block, shared by
+    /// `ordered(_:by:)` and the host-block comparison below so the two
+    /// can never disagree. Producer ordinals first (workspace → tab →
+    /// pane, each falling back to "after every placed row"); a row with
+    /// a MISSING ordinal sorts after every fully-placed row and keeps
+    /// the input (arrival) order among its kind — never a name, status,
+    /// or invented fallback key.
+    private static func herdrLadder(
+        _ lhs: ConsoleAgent, _ rhs: ConsoleAgent
+    ) -> Bool {
+        // Placed rows always beat unplaced ones: the producer's
+        // arrangement for the rows it could place, then the ones it
+        // could not ("Order unavailable"), in arrival order.
+        if lhs.hasProducerOrder != rhs.hasProducerOrder {
+            return lhs.hasProducerOrder
+        }
+        let lhsWorkspace = lhs.workspaceOrder ?? Int.max
+        let rhsWorkspace = rhs.workspaceOrder ?? Int.max
+        if lhsWorkspace != rhsWorkspace { return lhsWorkspace < rhsWorkspace }
+        let lhsTab = lhs.tabOrder ?? Int.max
+        let rhsTab = rhs.tabOrder ?? Int.max
+        if lhsTab != rhsTab { return lhsTab < rhsTab }
+        let lhsPane = lhs.paneOrder ?? Int.max
+        let rhsPane = rhs.paneOrder ?? Int.max
+        if lhsPane != rhsPane { return lhsPane < rhsPane }
+        return false
+    }
+
     /// Orders `agents` by the chosen view. Stable on the input order for
     /// every tie.
     static func ordered(_ agents: [ConsoleAgent], by order: AgentListOrder) -> [ConsoleAgent] {
-        agents.enumerated().sorted { lhs, rhs in
+        // The v3 herdr order's host/session block ranks: each distinct
+        // (host, session) keeps the position of its FIRST appearance in
+        // the input — the flatten's catalog order — as its rank. A
+        // structural key, never a name/UUID comparison: the sort is not
+        // stable in general, so cross-block pairs need a real key.
+        struct HerdrBlockKey: Hashable {
+            let hostID: Host.ID
+            let session: String
+        }
+        var herdrBlockRanks: [HerdrBlockKey: Int] = [:]
+        if order == .herdr {
+            for agent in agents {
+                let key = HerdrBlockKey(hostID: agent.hostID, session: agent.hostSessionName)
+                if herdrBlockRanks[key] == nil { herdrBlockRanks[key] = herdrBlockRanks.count }
+            }
+        }
+        return agents.enumerated().sorted { lhs, rhs in
             switch order {
+            case .herdr:
+                // The v3 default: host/session blocks in the input
+                // (catalog) order, the producer's workspace→tab→pane
+                // ordinals inside each block, missing ordinals last in
+                // arrival order.
+                let lhsBlock = herdrBlockRanks[
+                    HerdrBlockKey(hostID: lhs.element.hostID, session: lhs.element.hostSessionName)]!
+                let rhsBlock = herdrBlockRanks[
+                    HerdrBlockKey(hostID: rhs.element.hostID, session: rhs.element.hostSessionName)]!
+                if lhsBlock != rhsBlock { return lhsBlock < rhsBlock }
+                let placed = herdrLadder(lhs.element, rhs.element)
+                if placed != herdrLadder(rhs.element, lhs.element) {
+                    return placed
+                }
+                return lhs.offset < rhs.offset
             case .title:
                 let compared = Self.rowTitle(lhs.element)
                     .localizedCaseInsensitiveCompare(Self.rowTitle(rhs.element))
@@ -286,6 +359,12 @@ final class AgentListLayoutStore {
     private static let orderDefaultsKey = "agent-list-layout.order"
     private static let groupingDefaultsKey = "agent-list-layout.grouping"
     private static let collapsedGroupsDefaultsKey = "agent-list-layout.collapsed-groups"
+    /// The v3 migration marker: absent until the user makes their FIRST
+    /// explicit order choice. Fresh installs AND pre-v3 defaults (which
+    /// never wrote this key) both land on the new herdr default; a
+    /// deliberately chosen order — including a pre-v3 choice — sets the
+    /// marker and is preserved forever after.
+    private static let orderChoiceMarkerKey = "agent-list-layout.order-chosen"
 
     private(set) var order: AgentListOrder
     private(set) var grouping: AgentListGrouping
@@ -294,8 +373,22 @@ final class AgentListLayoutStore {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        order = defaults.string(forKey: Self.orderDefaultsKey)
-            .flatMap(AgentListOrder.init(rawValue:)) ?? .recent
+        let storedOrder = defaults.string(forKey: Self.orderDefaultsKey)
+            .flatMap(AgentListOrder.init(rawValue:))
+        if defaults.bool(forKey: Self.orderChoiceMarkerKey) {
+            // Deliberately chosen: preserved, even if it predates v3.
+            order = storedOrder ?? .herdr
+        } else if let storedOrder, storedOrder != .recent {
+            // A pre-v3 deliberate choice (the old default wrote
+            // nothing; only a real picker tap stored "recent"): the
+            // marker migrates it forward and the choice is preserved.
+            order = storedOrder
+            defaults.set(true, forKey: Self.orderChoiceMarkerKey)
+        } else {
+            // Fresh install or untouched old default: migrate to the
+            // v3 herdr default.
+            order = .herdr
+        }
         grouping = defaults.string(forKey: Self.groupingDefaultsKey)
             .flatMap(AgentListGrouping.init(rawValue:)) ?? .none
         collapsedGroupIDs = Set(defaults.stringArray(forKey: Self.collapsedGroupsDefaultsKey) ?? [])
@@ -305,6 +398,7 @@ final class AgentListLayoutStore {
         guard order != self.order else { return }
         self.order = order
         defaults.set(order.rawValue, forKey: Self.orderDefaultsKey)
+        defaults.set(true, forKey: Self.orderChoiceMarkerKey)
     }
 
     func select(grouping: AgentListGrouping) {
@@ -333,7 +427,11 @@ final class AgentListLayoutStore {
     }
 
     func reset() {
-        select(order: .recent)
+        // Reset returns the list to the fresh-install v3 state — herdr
+        // order, no grouping — WITHOUT clearing the choice marker: a
+        // user who reset away from a chosen sort and then picks another
+        // one is still making explicit choices.
+        select(order: .herdr)
         select(grouping: .none)
         collapsedGroupIDs.removeAll()
         defaults.removeObject(forKey: Self.collapsedGroupsDefaultsKey)

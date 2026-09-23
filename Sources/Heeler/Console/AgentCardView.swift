@@ -10,6 +10,10 @@ import UIKit
 struct AgentCardView: View {
     let agent: ConsoleAgent
     var isPinned: Bool = false
+    /// v3 Herdr order: rows the producer could not place (missing
+    /// workspace/tab/pane ordinals) get the honest "Order unavailable"
+    /// mark instead of a silently invented position.
+    var showsOrderUnavailable: Bool = false
 
     private var kindBadge: AgentKindBadgeModel {
         AgentKindBadgeModel(agent: agent)
@@ -66,17 +70,25 @@ struct AgentCardView: View {
                     Spacer(minLength: 8)
                     AgentStateBadge(status: agent.agent.status)
                 }
-                Text(verbatim: titleText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    // The subtitle truncates tail-first; the full title is
-                    // a long-press/AX read away.
-                    .truncationMode(.head)
-                    .help(titleText)
-                    .contextMenu {
-                        Text(titleText)
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(verbatim: titleText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        // The subtitle truncates tail-first; the full title is
+                        // a long-press/AX read away.
+                        .truncationMode(.head)
+                        .help(titleText)
+                        .contextMenu {
+                            Text(titleText)
+                        }
+                    if showsOrderUnavailable {
+                        Text("Order unavailable")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
                     }
+                }
             }
         }
         .padding(.vertical, 4)
@@ -85,7 +97,10 @@ struct AgentCardView: View {
         // then the agent title (line 2), then kind and status.
         .accessibilityLabel(
             "\(tabLineText), \(titleText), \(kindBadge.accessibilityLabel), status \(agent.agent.status.searchLabel)")
-        .accessibilityValue(accessibilityIdentity)
+        .accessibilityValue(
+            showsOrderUnavailable
+                ? accessibilityIdentity + ", order unavailable"
+                : accessibilityIdentity)
     }
 }
 

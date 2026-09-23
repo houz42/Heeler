@@ -572,7 +572,22 @@ struct ConsoleView: View {
             } else if agentListLayout.grouping == .none {
                 List(selection: selectedAgent) {
                     visibleHostIssueRows
-                    ForEach(searchedAgents) { agent in
+                    // The v3 optional Pinned section (bookmarks, pin
+                    // recency order): renders only when something is
+                    // pinned AND still in the result. The canonical
+                    // rows below never lose a member to it.
+                    if !pinnedSectionAgents.isEmpty {
+                        Section {
+                            ForEach(pinnedSectionAgents) { agent in
+                                agentRow(agent)
+                            }
+                        } header: {
+                            Text("Pinned")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    ForEach(canonicalSectionAgents) { agent in
                         agentRow(agent)
                     }
                 }
@@ -590,6 +605,18 @@ struct ConsoleView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2, pinnedViews: []) {
                         visibleHostIssuesView
+                        // The same optional Pinned bookmark section as
+                        // the flat list: pin-recency order, above the
+                        // canonical groups.
+                        if !pinnedSectionAgents.isEmpty {
+                            AgentListPinnedHeaderView(count: pinnedSectionAgents.count)
+                                .padding(.horizontal, 16)
+                            ForEach(pinnedSectionAgents) { agent in
+                                agentRow(agent)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 2)
+                            }
+                        }
                         ForEach(agentGroupSections) { section in
                             AgentListGroupHeaderView(
                                 section: section,
@@ -714,6 +741,25 @@ struct ConsoleView: View {
         return AgentListLayout.ordered(matched, by: agentListLayout.order)
     }
 
+    /// The pinned bookmark section (v3 "Pins are bookmarks"): pinned rows
+    /// in pin-recency order — a DUPLICATE of the links, never a removal
+    /// from the canonical list below. Only agents the current result
+    /// still contains appear; a pinned agent filtered out of the search
+    /// is not in the section either.
+    private var pinnedSectionAgents: [ConsoleAgent] {
+        searchedAgents.filter {
+            console.pins.isPinned(hostID: $0.hostID, paneID: $0.agent.paneID)
+        }
+    }
+
+    /// The canonical rows (v3 "the canonical list stays herdr-ordered"):
+    /// the FULL chosen-order result, untouched by the Pinned section —
+    /// a pin is a bookmark DUPLICATE above, never a removal or reorder
+    /// down here.
+    private var canonicalSectionAgents: [ConsoleAgent] {
+        searchedAgents
+    }
+
     /// Groups the (already filtered) result. While searching, matching
     /// groups stay open.
     private var agentGroupSections: [AgentListSection] {
@@ -752,7 +798,13 @@ struct ConsoleView: View {
             AgentCardView(
                 agent: agent,
                 isPinned: console.pins.isPinned(
-                    hostID: agent.hostID, paneID: agent.agent.paneID))
+                    hostID: agent.hostID, paneID: agent.agent.paneID),
+                // The honest mark only in the order that needs producer
+                // ordinals; a text query's relevance order never shows it.
+                showsOrderUnavailable:
+                    agentListLayout.order == .herdr
+                    && !agentSearch.engine.isTextQuery
+                    && !agent.hasProducerOrder)
             // Indentation rides INSIDE the link label: padding on the
             // NavigationLink itself is dropped by List row layout.
             .padding(.leading, leadingIndent)

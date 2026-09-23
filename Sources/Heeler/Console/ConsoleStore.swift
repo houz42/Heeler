@@ -51,6 +51,9 @@ final class ConsoleStore {
     @ObservationIgnored private var projections: [
         Host.ID: HostConsoleProjection
     ] = [:]
+    /// The Host catalog's array order (v3 Herdr order): projections is a
+    /// dictionary, so this is the record of the user's block sequence.
+    @ObservationIgnored private var hostCatalogOrder: [Host.ID] = []
     /// Skills probed per Host connection: keyed on the connection generation
     /// so a reconnect naturally invalidates, and evicted per Host on insert
     /// so stale generations cannot accumulate.
@@ -147,6 +150,11 @@ final class ConsoleStore {
     /// Aligns Host projections with the catalog. Editing a Host replaces its
     /// projection because its connection coordinates may have changed.
     func setHosts(_ hosts: [Host]) {
+        // The catalog's array order IS the user's host/session order —
+        // the v3 Herdr order's block sequence (herdr publishes no
+        // cross-session ordinal). Recorded so rebuilds flatten in it
+        // even though `projections` is a dictionary.
+        hostCatalogOrder = hosts.map(\.id)
         let incoming = Dictionary(hosts.map { ($0.id, $0) }) { _, last in last }
         composerStores = composerStores.filter { incoming[$0.key.hostID] != nil }
         // A dropped/edited Host's raw dial record dies with its projection:
@@ -728,7 +736,20 @@ final class ConsoleStore {
     }
 
     private func rebuildAgentOrder() {
-        let unsorted = projections.values.flatMap { $0.agentsByPane.values }
+        // Catalog-order flatten (v3 Herdr order): the host catalog's
+        // array order is the user's block sequence, so rows enter the
+        // sort in that order and every order's stable offset tiebreak
+        // inherits it. A host without a projection (transiently gone
+        // during edits) contributes nothing, and a projection without a
+        // catalog slot (impossible after setHosts) stays last.
+        var byHost: [Host.ID: [ConsoleAgent]] = [:]
+        for agent in projections.values.flatMap({ $0.agentsByPane.values }) {
+            byHost[agent.hostID, default: []].append(agent)
+        }
+        let unsorted = hostCatalogOrder.flatMap { byHost[$0] ?? [] }
+            + byHost.filter { !hostCatalogOrder.contains($0.key) }
+                .sorted { $0.key.uuidString < $1.key.uuidString }
+                .flatMap(\.value)
         let sorts = Dictionary(uniqueKeysWithValues: projections.keys.compactMap { id in
             sidebarSnapshots.snapshot(for: id).map { (id, $0.agentPanelSort) }
         })
