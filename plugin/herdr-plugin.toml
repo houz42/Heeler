@@ -11,52 +11,52 @@ command = ["npm", "ci"]
 # Per-session broker supervision: idempotent; only the first session with a
 # dead broker spawns a supervisor (single-instance via the owner socket).
 [[startup]]
-command = ["node", "src/sidebar-hook.js"]
+command = ["sh", "scripts/node-trampoline.sh", "src/sidebar-hook.js"]
 
 [[startup]]
-command = ["node", "src/broker-hook.js"]
+command = ["sh", "scripts/node-trampoline.sh", "src/broker-hook.js"]
 
 [[actions]]
 id = "pair"
 title = "Pair a mobile device"
 description = "Show a Pairing Code QR for the Meadow app"
 contexts = ["global"]
-command = ["node", "src/pair-action.js"]
+command = ["sh", "scripts/node-trampoline.sh", "src/pair-action.js"]
 
 [[actions]]
 id = "setup"
 title = "Meadow host setup"
 description = "Install the broker runtime, start the shared broker (one per host), install agent adapter shims"
 contexts = ["global"]
-command = ["node", "src/setup-action.js"]
+command = ["sh", "scripts/node-trampoline.sh", "src/setup-action.js"]
 
 [[actions]]
 id = "status"
 title = "Meadow host status"
 description = "Broker health, supervisor owner, runtime version, adapter shims, live agent registrations"
 contexts = ["global"]
-command = ["node", "src/setup-action.js"]
+command = ["sh", "scripts/node-trampoline.sh", "src/setup-action.js"]
 
 [[actions]]
 id = "stop-broker"
 title = "Stop the chat broker"
 description = "Gracefully stop the shared broker supervisor (adapters reconnect on next start)"
 contexts = ["global"]
-command = ["node", "src/setup-action.js"]
+command = ["sh", "scripts/node-trampoline.sh", "src/setup-action.js"]
 
 [[actions]]
 id = "upgrade-broker"
 title = "Upgrade the chat broker"
 description = "Re-sync the broker runtime from this plugin and restart the broker"
 contexts = ["global"]
-command = ["node", "src/setup-action.js"]
+command = ["sh", "scripts/node-trampoline.sh", "src/setup-action.js"]
 
 [[actions]]
 id = "uninstall-adapters"
 title = "Uninstall agent adapter shims"
 description = "Remove the plugin-owned omp loader shim(s)"
 contexts = ["global"]
-command = ["node", "src/setup-action.js"]
+command = ["sh", "scripts/node-trampoline.sh", "src/setup-action.js"]
 
 [[panes]]
 id = "pair"
@@ -64,12 +64,12 @@ title = "Pair device"
 placement = "popup"
 width = "100%"
 height = "100%"
-command = ["node", "src/pair-popup.js"]
+command = ["sh", "scripts/node-trampoline.sh", "src/pair-popup.js"]
 
 [[events]]
 on = "pane.agent_status_changed"
-command = ["node", "src/notify-hook.js"]
+command = ["sh", "scripts/node-trampoline.sh", "src/notify-hook.js"]
 
 [[events]]
 on = "pane.agent_status_changed"
-command = ["node", "src/activity-hook.js"]
+command = ["sh", "scripts/node-trampoline.sh", "src/activity-hook.js"]
