@@ -195,33 +195,35 @@ enum AgentListLayout {
         return false
     }
 
-    /// The full herdr-order comparison between two agents. Host blocks
-    /// keep the INPUT (catalog) order: same-block pairs fall through to
-    /// the ladder then the caller's offset tiebreak, and different-block
-    /// pairs report "not before" both ways — the stable sort keeps the
-    /// flatten's block sequence. No name/UUID comparison anywhere.
-    static func herdrOrderIsBefore(
-        _ lhs: ConsoleAgent, _ rhs: ConsoleAgent
-    ) -> Bool {
-        guard lhs.hostID == rhs.hostID && lhs.hostSessionName == rhs.hostSessionName
-        else { return false }
-        return herdrLadder(lhs, rhs) && !herdrLadder(rhs, lhs)
-    }
-
     /// Orders `agents` by the chosen view. Stable on the input order for
     /// every tie.
     static func ordered(_ agents: [ConsoleAgent], by order: AgentListOrder) -> [ConsoleAgent] {
-        agents.enumerated().sorted { lhs, rhs in
+        // The v3 herdr order's host/session block ranks: each distinct
+        // (host, session) keeps the position of its FIRST appearance in
+        // the input — the flatten's catalog order — as its rank. A
+        // structural key, never a name/UUID comparison: the sort is not
+        // stable in general, so cross-block pairs need a real key.
+        var herdrBlockRanks: [(Host.ID, String): Int] = [:]
+        if order == .herdr {
+            for agent in agents {
+                let key = (agent.hostID, agent.hostSessionName)
+                if herdrBlockRanks[key] == nil { herdrBlockRanks[key] = herdrBlockRanks.count }
+            }
+        }
+        return agents.enumerated().sorted { lhs, rhs in
             switch order {
             case .herdr:
                 // The v3 default: host/session blocks in the input
                 // (catalog) order, the producer's workspace→tab→pane
                 // ordinals inside each block, missing ordinals last in
-                // arrival order. The stable sort's offset tiebreak
-                // covers every tie, so cross-block pairs (false both
-                // ways) keep the flatten's block sequence.
-                if herdrOrderIsBefore(lhs.element, rhs.element) { return true }
-                if herdrOrderIsBefore(rhs.element, lhs.element) { return false }
+                // arrival order.
+                let lhsBlock = herdrBlockRanks[(lhs.element.hostID, lhs.element.hostSessionName)]!
+                let rhsBlock = herdrBlockRanks[(rhs.element.hostID, rhs.element.hostSessionName)]!
+                if lhsBlock != rhsBlock { return lhsBlock < rhsBlock }
+                let placed = herdrLadder(lhs.element, rhs.element)
+                if placed != herdrLadder(rhs.element, lhs.element) {
+                    return placed
+                }
                 return lhs.offset < rhs.offset
             case .title:
                 let compared = Self.rowTitle(lhs.element)
