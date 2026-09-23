@@ -147,22 +147,38 @@ struct ChatCodeBlock: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        ScrollView(.horizontal) {
-            VStack(alignment: .leading, spacing: 0) {
-                if let highlighted {
-                    Text(highlighted)
-                        .lineSpacing(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    Text(content)
-                        .font(.system(.subheadline, design: .monospaced))
-                        .lineSpacing(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+        if hugMode {
+            // HUG-CONTENT (v3 own-message bubbles): a ScrollView's
+            // ideal width is its PROPOSAL (it expands to fill
+            // whatever it is given), so the always-scrollable block
+            // would stretch the bubble even for two lines of code.
+            // ViewThatFits picks the COMPACT block (intrinsic width,
+            // no scroll) when the code fits the proposal, and falls
+            // back to the scrollable block when a line is longer —
+            // the code bubble then hugs exactly like the prose cases.
+            ViewThatFits(in: .horizontal) {
+                blockView(scrollable: false)
+                blockView(scrollable: true)
             }
-            .padding(.leading, 12)
-            .padding(.trailing, 12)
-            .padding(.vertical, 8)
+        } else {
+            blockView(scrollable: true)
+        }
+    }
+
+    @Environment(\.chatMarkdownHugMode) private var hugMode
+
+    /// One code block; `scrollable` false lays the lines out at
+    /// intrinsic width (hug mode's compact pick), true keeps the
+    /// horizontal scroll for long lines.
+    @ViewBuilder
+    private func blockView(scrollable: Bool) -> some View {
+        Group {
+            if scrollable {
+                ScrollView(.horizontal) { codeLines }
+            } else {
+                codeLines
+                    .fixedSize(horizontal: true, vertical: false)
+            }
         }
         .background(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: 8)
@@ -173,6 +189,24 @@ struct ChatCodeBlock: View {
         }
         .overlay(alignment: .topTrailing) { badge }
         .padding(.bottom, 8)
+    }
+
+    private var codeLines: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let highlighted {
+                Text(highlighted)
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(content)
+                    .font(.system(.subheadline, design: .monospaced))
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 12)
+        .padding(.vertical, 8)
     }
 
     /// Splash-attributed Swift code for the active color scheme, or `nil`
@@ -312,10 +346,27 @@ private struct ChatWideTableModeKey: EnvironmentKey {
     static let defaultValue = false
 }
 
+/// HUG-CONTENT mode (v3 own-message bubbles): the markdown's BLOCK
+/// chrome (code blocks) lays out at intrinsic width instead of
+/// stretching to fill the proposal — set by `ChatMarkdownView` when
+/// `hugsContent` is true, so a fenced-code own bubble hugs the code
+/// exactly like the prose cases hug text. Long code lines still
+/// scroll inside the block once the block reaches the caller's
+/// capped proposal.
+struct ChatMarkdownHugModeKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 extension EnvironmentValues {
     var chatWideTableMode: Bool {
         get { self[ChatWideTableModeKey.self] }
         set { self[ChatWideTableModeKey.self] = newValue }
+    }
+    /// True inside a hug-content markdown render (own-message
+    /// bubbles): block chrome sizes to content, not the proposal.
+    var chatMarkdownHugMode: Bool {
+        get { self[ChatMarkdownHugModeKey.self] }
+        set { self[ChatMarkdownHugModeKey.self] = newValue }
     }
 }
 
@@ -352,6 +403,26 @@ struct ChatMarkdownView: View {
     /// color from the theme's text style, so the color rides the theme
     /// (`ChatMarkdownTheme.chatColored`), not a container foreground.
     var textColor: SwiftUI.Color? = nil
+    /// HUG-CONTENT sizing (v3 own-message bubbles): when true, the
+    /// markdown lays out at its intrinsic width instead of stretching
+    /// to fill the proposal — the frame reports the CONTENT's own
+    /// width, so an outer bubble's `background` hugs the content
+    /// (emoji/one-word bubbles stay small; long prose wraps at the
+    /// outer container's max-width proposal). The width cap is
+    /// proposed by the CALLER (`ChatBubbleBody`'s `containerPropose`
+    /// pass); this view just refuses to fill the space it was given.
+    /// Longest-line code blocks stay scrollable at exactly their
+    /// content width.
+    var hugsContent: Bool = false
+
+    init(
+        markdown: String, textColor: SwiftUI.Color? = nil,
+        hugsContent: Bool = false
+    ) {
+        self.markdown = markdown
+        self.textColor = textColor
+        self.hugsContent = hugsContent
+    }
 
     var body: some View {
         // A single newline renders as a line break WITHIN one paragraph
@@ -382,7 +453,16 @@ struct ChatMarkdownView: View {
             // only the mono/plain paths did. Enabling it on the
             // container selects through MarkdownUI's Texts.
             .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // HUG-CONTENT: no fill-frame — the markdown keeps its
+            // intrinsic width (never wider than the proposal) and
+            // LEADING-aligns inside whatever the caller proposes, so
+            // the width the parent sees is the CONTENT's own. The
+            // environment flag reaches the theme's BLOCK chrome
+            // (code blocks) so they hug too.
+            .environment(\.chatMarkdownHugMode, hugsContent)
+            .frame(
+                maxWidth: hugsContent ? nil : .infinity,
+                alignment: .leading)
     }
 }
 

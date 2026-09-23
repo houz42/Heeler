@@ -49,6 +49,10 @@ enum UITestApp {
         /// The chat surface with special sections in the transcript (v2
         /// special-sections proofs: chip / L0 hide / expansion).
         case chatSpecialSections
+        /// The chat surface with v3 content-sized own-message bubbles
+        /// (one-word / emoji / multiline / long prose / fenced code
+        /// cases) — the bubble width capture surface.
+        case chatBubbles
 
 
 
@@ -67,6 +71,8 @@ enum UITestApp {
                 return ["--demo-screenshots", "--demo-screenshots-settings"]
             case .chatPendingAsk:
                 return ["--demo-screenshots", "--demo-chat-pending-ask"]
+            case .chatBubbles:
+                return ["--demo-screenshots", "--demo-chat-bubbles"]
             case .chatSpecialSections:
                 return ["--demo-screenshots", "--demo-chat-special-sections"]
             }

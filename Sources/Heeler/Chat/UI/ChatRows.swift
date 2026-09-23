@@ -563,18 +563,24 @@ struct ChatLinkText: View {
     /// Overrides the style's text color when non-nil (iMessage user
     /// bubbles: saturated blue fill needs white text).
     var foregroundOverride: Color? = nil
+    /// HUG-CONTENT sizing (v3 own-message bubbles): forwards to
+    /// `ChatMarkdownView` so rich prose lays out at intrinsic width
+    /// inside a capped proposal instead of filling it — the caller's
+    /// `frame(maxWidth:)` carries the wrap cap.
+    var hugsContent: Bool = false
 
     @Environment(\.openURL) private var openURL
     @Environment(\.colorScheme) private var colorScheme
     private var isDark: Bool { colorScheme == .dark }
     init(
         _ text: String, style: ChatBlockText.Style, router: OpenRouterCore?,
-        foregroundOverride: Color? = nil
+        foregroundOverride: Color? = nil, hugsContent: Bool = false
     ) {
         self.text = text
         self.style = style
         self.router = router
         self.foregroundOverride = foregroundOverride
+        self.hugsContent = hugsContent
     }
 
     var body: some View {
@@ -597,7 +603,12 @@ struct ChatLinkText: View {
         }
         .font(style.font)
         .foregroundStyle(foregroundOverride ?? style.color)
-        .frame(maxWidth: .infinity, alignment: alignment)
+        // HUG-CONTENT: no fill-frame — the text keeps its intrinsic
+        // width under the caller's capped proposal (the bubble hugs
+        // the content). Every other consumer keeps the original
+        // full-width fill.
+        .frame(
+            maxWidth: hugsContent ? nil : .infinity, alignment: alignment)
         .environment(
             \.openURL,
             OpenURLAction { url in
@@ -619,7 +630,8 @@ struct ChatLinkText: View {
         } else {
             ChatMarkdownView(
                 markdown: ChatMarkdownText(text).rendered,
-                textColor: foregroundOverride)
+                textColor: foregroundOverride,
+                hugsContent: hugsContent)
         }
     }
 
@@ -800,7 +812,9 @@ struct ChatBubbleBody: View {
 
     /// The approved preview's --bubble values: #eaf0ec light /
     /// #31483b dark — soft green-neutral paper, NOT vivid blue.
-    private static let userBubbleTint = Color(UIColor { traits in
+    /// Internal (not private): the v3 content-sized own-bubble path
+    /// (`ChatBubbleView`) reuses the SAME tint for its hugged bubble.
+    static let userBubbleTint = Color(UIColor { traits in
         traits.userInterfaceStyle == .dark
             ? UIColor(red: 0x31 / 255, green: 0x48 / 255, blue: 0x3B / 255, alpha: 1)
             : UIColor(red: 0xEA / 255, green: 0xF0 / 255, blue: 0xEC / 255, alpha: 1)
@@ -813,13 +827,136 @@ struct ChatBubbleBody: View {
     }
 }
 
-/// One conversation bubble in the transcript: the message's visible text
-/// run as one iMessage-style unit — agent prose leading-aligned in a gray
-/// bubble with the tail at bottom-left, user prose trailing-aligned in an
-/// accent-tinted bubble with the tail at bottom-right, capped at ~78% of
-/// the row width. Long-press hands the bubble to the focus layer; while
-/// focused the in-place copy hides (the focus layer's lifted copy is the
-/// message, so nothing duplicates behind the dim).
+/// v3 own-message bubble WIDTH POLICY (pure, unit-pinned): outgoing
+/// bubbles HUG content — the visible bubble never stretches past its
+/// content, and is capped at
+/// `min(0.85 × available transcript width, 560pt)`.
+/// `transcriptWidth` is the width the row itself may use (the chat's
+/// full-width row, inside the transcript's horizontal insets); the
+/// 0.85 factor and the 560pt absolute cap are the design doc's initial
+/// tokens. The cap is a MAXIMUM, never a forced width: content smaller
+/// than the cap stays at its own size.
+enum ChatUserBubbleSizing {
+    /// Bubble padding: 12pt horizontal / 8pt vertical (design token).
+    static let horizontalPadding: CGFloat = 12
+    static let verticalPadding: CGFloat = 8
+    /// The absolute bubble-width cap (design token).
+    static let absoluteCap: CGFloat = 560
+    /// The fraction of the available transcript width one own-message
+    /// bubble may span (design token).
+    static let transcriptFraction: CGFloat = 0.85
+
+    /// The maximum VISIBLE bubble width for one own message, given the
+    /// width its row can use.
+    static func maxVisibleBubbleWidth(transcriptWidth: CGFloat) -> CGFloat {
+        min(transcriptWidth * transcriptFraction, absoluteCap)
+    }
+
+    /// The LAYOUT WIDTH to propose to the bubble's content: the visible
+    /// cap PLUS the horizontal padding, so a filled-long-prose bubble's
+    /// text area spans exactly the visible maximum.
+    static func proposedContentWidth(transcriptWidth: CGFloat) -> CGFloat {
+        maxVisibleBubbleWidth(transcriptWidth: transcriptWidth)
+            + 2 * horizontalPadding
+    }
+}
+
+/// HUG-CONTENT single-pass layout: proposes `min(row proposal, cap)` to
+/// its single subview and reports EXACTLY the subview's size — no
+/// fixedSize/nil-proposal dance (which would lay prose out at its
+/// longest unwrapped line and overflow the cap). One capped proposal:
+/// content that fits keeps its intrinsic width, content that would
+/// exceed the cap wraps at exactly the cap.
+private struct HugContentLayout: Layout {
+    /// The proposal cap (the padded, visible bubble's max width).
+    var maxWidth: CGFloat
+
+    private func capped(_ proposal: ProposedViewSize) -> ProposedViewSize {
+        let cap = min(proposal.width ?? maxWidth, maxWidth)
+        return ProposedViewSize(width: cap, height: proposal.height)
+    }
+
+    func sizeThatFits(
+        proposal: ProposedViewSize, subviews: Subviews, cache: inout ()
+    ) -> CGSize {
+        guard let subview = subviews.first else { return .zero }
+        return subview.sizeThatFits(capped(proposal))
+    }
+
+    func placeSubviews(
+        in bounds: CGRect, proposal: ProposedViewSize,
+        subviews: Subviews, cache: inout ()
+    ) {
+        subviews.first?.place(
+            at: CGPoint(x: bounds.minX, y: bounds.minY),
+            proposal: capped(proposal))
+    }
+}
+
+/// The hug-content wrapper that turns a content view into a
+/// trailing-aligned own-message bubble. The bubble's visible
+/// background is applied to the CONTENT's intrinsic frame (v3:
+/// outgoing bubbles hug content — an emoji/one-word bubble stays
+/// small; long prose wraps at `min(0.85 × transcript, 560pt)`),
+/// inside a full-width trailing-aligned row that never stretches the
+/// bubble.
+///
+/// Layout contract: natively-hugging content (plain Text, galleries,
+/// chips) keeps its intrinsic width under the capped proposal; rich
+/// markdown needs help — `ChatMarkdownView` carries a
+/// `frame(maxWidth: .infinity)` fill that would span the proposal, so
+/// the prose path renders it in `hugsContent` mode (no fill-frame →
+/// intrinsic). The tap target is the VISIBLE bubble
+/// (`contentShape` over the hugged silhouette) — the row's empty
+/// leading space stays inert — while the row itself remains one
+/// full-width element for accessibility, so VoiceOver users keep the
+/// reachable message without the visual bubble being padded to full
+/// width.
+private struct HuggingBubble<Content: View>: View {
+    /// The cap on the VISIBLE bubble width (padding EXCLUDED):
+    /// `ChatUserBubbleSizing.maxVisibleBubbleWidth(transcriptWidth:)`.
+    var maxWidth: CGFloat
+    var shape: UnevenRoundedRectangle
+    var fill: AnyShapeStyle
+    var paddingH: CGFloat
+    var paddingV: CGFloat
+    var onTap: (() -> Void)?
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        // The visible bubble: content + padding + background, sized
+        // by ONE capped proposal (HugContentLayout) — content within
+        // the cap keeps its intrinsic width, content that would
+        /// exceed it wraps at exactly the cap.
+        HugContentLayout(maxWidth: maxWidth + 2 * paddingH) {
+            content()
+                .padding(.horizontal, paddingH)
+                .padding(.vertical, paddingV)
+                .background(fill, in: shape)
+                // The tap target is the VISIBLE BUBBLE — the row's
+                // empty leading space stays inert (v3: actions
+                // without padding the bubble to full width).
+                .contentShape(shape)
+        }
+        .onTapGesture { onTap?() }
+        // Full-width trailing-aligned row: the ROW stretches so the
+        // bubble parks at the trailing edge; the bubble itself stays
+        // content-sized.
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+}
+
+
+
+/// One conversation bubble in the transcript. AGENT bubbles keep the
+/// fill-width presentation (leading-aligned gray silhouette, capped at
+/// ~78% of the row). USER bubbles are CONTENT-SIZED (v3): the bubble
+/// hugs its content — intrinsic width for emoji/one-word/multiline/
+/// image cases, long prose wrapping at `min(0.85 × transcript, 560pt)`
+/// — trailing-aligned in a full-width row, with the background applied
+/// to the intrinsic content, never the row. Short tap toggles the
+/// inline actions rail on the VISIBLE bubble only (the row's empty
+/// leading space stays inert).
 struct ChatBubbleView: View {
     let bubble: ChatBubble
     let router: OpenRouterCore
@@ -836,17 +973,65 @@ struct ChatBubbleView: View {
     private var isUser: Bool { bubble.role == .user }
 
     var body: some View {
-        ChatBubbleBody(
-            bubble: bubble,
-            router: router,
-            imageFetch: imageFetch,
-            openImageReader: openImageReader)
-            .frame(maxWidth: rowWidth * 0.78, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { _, w in
-                rowWidth = w
+        Group {
+            if isUser {
+                // v3 content-sized own bubble: hug-content layout with
+                // the trailing-aligned full-width row.
+                HuggingBubble(
+                    maxWidth: ChatUserBubbleSizing.maxVisibleBubbleWidth(
+                        transcriptWidth: rowWidth),
+                    shape: ChatBubbleSilhouette.shape(userSide: true),
+                    fill: AnyShapeStyle(ChatBubbleBody.userBubbleTint),
+                    paddingH: ChatUserBubbleSizing.horizontalPadding,
+                    paddingV: ChatUserBubbleSizing.verticalPadding,
+                    onTap: onToggleActions)
+                {
+                    userBubbleContent
+                }
+            } else {
+                ChatBubbleBody(
+                    bubble: bubble,
+                    router: router,
+                    imageFetch: imageFetch,
+                    openImageReader: openImageReader)
+                    .frame(maxWidth: rowWidth * 0.78, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .onTapGesture { onToggleActions?() }
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { _, w in
+            rowWidth = w
+        }
+    }
+
+    /// The user bubble's content: attachments + prose, WITHOUT the
+    /// padding/background (HuggingBubble applies those to the hugged
+    /// frame).
+    @ViewBuilder
+    private var userBubbleContent: some View {
+        let split = SentAttachmentText.split(bubble.text)
+        VStack(alignment: .trailing, spacing: 6) {
+            if let openImageReader, let split, !split.imageRefs.isEmpty {
+                let imageRefs = split.imageRefs.filter { $0.mimeType != "file" }
+                let fileRefs = split.imageRefs.filter { $0.mimeType == "file" }
+                if !imageRefs.isEmpty {
+                    ChatTranscriptImageGallery(
+                        images: imageRefs,
+                        fetch: imageFetch,
+                        openReader: openImageReader)
+                }
+                ForEach(fileRefs) { fileRef in
+                    SentFileChip(fileRef: fileRef) {
+                        openImageReader(fileRef)
+                    }
+                }
+            }
+            ChatLinkText(
+                split?.prose ?? bubble.text,
+                style: .assistant,
+                router: router,
+                foregroundOverride: nil,
+                hugsContent: true)
+        }
     }
 }
 
