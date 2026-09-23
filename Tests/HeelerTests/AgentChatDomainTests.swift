@@ -135,7 +135,7 @@ struct AgentChatDomainDecodeTests {
                     .utf8))
         let data = try JSONEncoder().encode(item)
         let decoded = try JSONDecoder().decode(AgentChatItem.self, from: data)
-        guard case .message(let id, let author, _, let blocks) = decoded else {
+        guard case .message(let id, let author, _, let blocks, _) = decoded else {
             Issue.record("expected message")
             return
         }
@@ -217,7 +217,7 @@ struct AgentChatDomainDecodeTests {
         complete = c2 ?? p2
         let item = try JSONDecoder().decode(
             AgentChatItem.self, from: try #require(complete))
-        guard case .message(_, let author, _, let blocks) = item else {
+        guard case .message(_, let author, _, let blocks, _) = item else {
             Issue.record("expected message")
             return
         }

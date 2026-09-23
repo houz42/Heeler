@@ -212,7 +212,7 @@ enum AgentChatItem: Decodable, Sendable, Equatable {
         var name: String?
     }
 
-    case message(id: String, author: Author, createdAt: String?, blocks: [AgentChatBlock])
+    case message(id: String, author: Author, createdAt: String?, blocks: [AgentChatBlock], sendCorrelationRequestKey: String?)
     case boundary(id: String, boundary: String, summary: String?, olderAvailable: Bool)
     case notice(id: String, text: String, level: String)
     case unsupported(id: String, sourceType: String, label: String)
@@ -222,6 +222,7 @@ enum AgentChatItem: Decodable, Sendable, Equatable {
         case id, kind, author, createdAt, blocks, status
         case boundary, summary, olderAvailable
         case text, level, sourceType, label, itemKind, byteLength
+        case metadata
     }
 
     init(from decoder: any Decoder) throws {
@@ -233,7 +234,10 @@ enum AgentChatItem: Decodable, Sendable, Equatable {
                 id: id,
                 author: try container.decode(Author.self, forKey: .author),
                 createdAt: try container.decodeIfPresent(String.self, forKey: .createdAt),
-                blocks: try container.decode([AgentChatBlock].self, forKey: .blocks))
+                blocks: try container.decode([AgentChatBlock].self, forKey: .blocks),
+                sendCorrelationRequestKey: (try? container
+                    .decodeIfPresent([String: String].self, forKey: .metadata))?
+                    .flatMap { $0["requestKey"] })
         case "boundary":
             self = .boundary(
                 id: id,
@@ -264,13 +268,12 @@ enum AgentChatItem: Decodable, Sendable, Equatable {
 
     var id: String {
         switch self {
-        case .message(let id, _, _, _), .boundary(let id, _, _, _),
+        case .message(let id, _, _, _, _), .boundary(let id, _, _, _),
             .notice(let id, _, _), .unsupported(let id, _, _), .reference(let id, _, _):
             return id
         }
     }
 }
-
 // MARK: - Pages
 
 /// history.open / history.before result. `olderCursor: nil` is the
