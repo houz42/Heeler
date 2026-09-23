@@ -467,7 +467,9 @@ struct WorkVisibleRowsTests {
         #expect(visible.map(\.task.title).contains("Development"))
         #expect(!visible.map(\.task.title).contains("Parser slice (Chat/Transcript)"))
         #expect(visible.map(\.task.title).contains("Integration"))
-        #expect(visible.count == 5)
+        // 3 group rows + Foundation's 2 leaves + Integration's 2
+        // leaves (Development's 4 are hidden by the collapse).
+        #expect(visible.count == 7)
     }
 
     @Test func collapsingOneGroupLeavesOthersExpanded() {
