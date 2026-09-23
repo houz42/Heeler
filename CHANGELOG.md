@@ -8,6 +8,20 @@ Entries reference the issue that motivated them.
 ## [Unreleased]
 
 ### Added
+- One paired Q/A card per ask interaction (v3): unanswered and answered
+  states share the same card family — paper background, subtle green
+  border, 12pt radius, accent eyebrow, thin n-of-N step segments.
+  Multi-question asks swipe horizontally between questions (keyboard
+  arrows and accessibility next/previous as non-gesture equivalents);
+  answered cards show Q then A per question with producer-ordered
+  selected-label chips, free-text answers, and separately-labeled
+  notes, collapsed to one line with tap to expand the full answer.
+  Answers record as typed per-question snapshots (question text,
+  option labels, custom text, note captured at answer time, producer
+  order) that survive reopen; cancelled/expired/remote outcomes render
+  the honest result, never unconfirmed choices as accepted, and a
+  submission stays "Submitting answers" until authoritative
+  acceptance replaces it with the same card.
 - Host detail: every connection route is a tappable row. Tapping a route
   makes it the Host's active route — the path the next connection dials
   first — persisted per Host and marked with a green checkmark (a live

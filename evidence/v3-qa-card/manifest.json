@@ -5,10 +5,10 @@
         "configurationName" : "Test Scheme Action",
         "deviceId" : "BA7D68CB-D0F1-491A-851A-E6230E790FA3",
         "deviceName" : "iPhone 17",
-        "exportedFileName" : "C07CC7E9-8B3C-4F03-B578-EF725BEB3B80.png",
+        "exportedFileName" : "0A154A5E-75FB-4119-AE0B-A62A76DD411D.png",
         "isAssociatedWithFailure" : false,
-        "suggestedHumanReadableName" : "qa-card-answered-collapsed_0_9681CE97-1B42-4723-83FF-CAF367F3F136.png",
-        "timestamp" : 1790154895.172
+        "suggestedHumanReadableName" : "qa-card-answered-collapsed_0_F1A04FE0-5C38-44D8-BAB4-9F16CCA743E2.png",
+        "timestamp" : 1790156249.304
       }
     ],
     "testIdentifier" : "QACardProofTests/testAnsweredCardsRenderEveryAnswerShape()",
@@ -20,19 +20,28 @@
         "configurationName" : "Test Scheme Action",
         "deviceId" : "BA7D68CB-D0F1-491A-851A-E6230E790FA3",
         "deviceName" : "iPhone 17",
-        "exportedFileName" : "183A9C54-F6F2-4CE4-B68C-699C882A8207.png",
+        "exportedFileName" : "24870BEA-77F5-4E89-B67F-363E4BBBB284.png",
         "isAssociatedWithFailure" : false,
-        "suggestedHumanReadableName" : "qa-card-answered-recollapsed_0_39CFEFF9-8134-40F9-981C-07D1C256EF65.png",
-        "timestamp" : 1790154907.691
+        "suggestedHumanReadableName" : "qa-card-chips-expanded_0_59BE004A-0D9F-48C7-A2B5-22B13C7A53C0.png",
+        "timestamp" : 1790156264.565
       },
       {
         "configurationName" : "Test Scheme Action",
         "deviceId" : "BA7D68CB-D0F1-491A-851A-E6230E790FA3",
         "deviceName" : "iPhone 17",
-        "exportedFileName" : "0C7F835F-9D5B-4AAA-927D-6BFBFC032125.png",
+        "exportedFileName" : "242FDD4E-F59C-45B6-A60C-9166571790B2.png",
         "isAssociatedWithFailure" : false,
-        "suggestedHumanReadableName" : "qa-card-answered-expanded_0_D1E9E254-06C3-420C-8459-3C2ADE76EA15.png",
-        "timestamp" : 1790154907.241
+        "suggestedHumanReadableName" : "qa-card-answered-recollapsed_0_7EF4BE0E-7739-4027-9858-D84D45294754.png",
+        "timestamp" : 1790156261.999
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "BA7D68CB-D0F1-491A-851A-E6230E790FA3",
+        "deviceName" : "iPhone 17",
+        "exportedFileName" : "B7E1D33B-7702-4F04-9F3C-EAB6CD3ED757.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "qa-card-answered-expanded_0_B6F6E1FD-0E19-4E6D-B866-E024614AFF0B.png",
+        "timestamp" : 1790156261.542
       }
     ],
     "testIdentifier" : "QACardProofTests/testExpandCollapseFullAnswer()",
@@ -44,10 +53,10 @@
         "configurationName" : "Test Scheme Action",
         "deviceId" : "BA7D68CB-D0F1-491A-851A-E6230E790FA3",
         "deviceName" : "iPhone 17",
-        "exportedFileName" : "50F00D70-1FB4-4C5C-8BFC-78675612B15C.png",
+        "exportedFileName" : "69334EFC-D00F-4C50-9605-9C7839638139.png",
         "isAssociatedWithFailure" : false,
-        "suggestedHumanReadableName" : "qa-card-outcomes_0_646F3990-FC2B-4AAD-B7C6-C4999D58FB4B.png",
-        "timestamp" : 1790154916.111
+        "suggestedHumanReadableName" : "qa-card-outcomes_0_ADD25196-C606-4412-BAF6-92894DBAA552.png",
+        "timestamp" : 1790156272.993
       }
     ],
     "testIdentifier" : "QACardProofTests/testHonestOutcomeCardsRender()",
@@ -59,10 +68,10 @@
         "configurationName" : "Test Scheme Action",
         "deviceId" : "BA7D68CB-D0F1-491A-851A-E6230E790FA3",
         "deviceName" : "iPhone 17",
-        "exportedFileName" : "EB15E493-C4FB-4538-9260-B323EF715527.png",
+        "exportedFileName" : "AE2C0472-CA4E-453B-B325-18DA7F7C4EB8.png",
         "isAssociatedWithFailure" : false,
-        "suggestedHumanReadableName" : "qa-card-swipe-question_0_E83DB75F-4F5C-46CE-BC89-16F4CB5B8970.png",
-        "timestamp" : 1790154928.574
+        "suggestedHumanReadableName" : "qa-card-swipe-question_0_0F3C8FE7-6448-4152-9206-5D1ED506D673.png",
+        "timestamp" : 1790156285.523
       }
     ],
     "testIdentifier" : "QACardProofTests/testSwipeMovesToSecondQuestion()",
@@ -74,10 +83,10 @@
         "configurationName" : "Test Scheme Action",
         "deviceId" : "BA7D68CB-D0F1-491A-851A-E6230E790FA3",
         "deviceName" : "iPhone 17",
-        "exportedFileName" : "E59C9609-3AFB-4EFE-BBB9-95A0EA1587A2.png",
+        "exportedFileName" : "B0089D4D-ACD5-4653-8777-9450692BA934.png",
         "isAssociatedWithFailure" : false,
-        "suggestedHumanReadableName" : "qa-card-unanswered-selected_0_EAE4897F-4D33-4BB5-BD87-CEF473C876D6.png",
-        "timestamp" : 1790154939.539
+        "suggestedHumanReadableName" : "qa-card-unanswered-selected_0_049E912B-A00A-4BF4-97BB-4173730A82F4.png",
+        "timestamp" : 1790156296.717
       }
     ],
     "testIdentifier" : "QACardProofTests/testUnansweredCardRendersAndSelects()",
