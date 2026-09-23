@@ -32,3 +32,17 @@ func waitToExist(
         file: file, line: line)
     return element
 }
+
+/// One-line element NON-existence wait with the shared timeout budget
+/// (the inverse of `waitToExist`): pins that an affordance is GONE.
+func waitToNotExist(
+    _ element: XCUIElement,
+    timeout: TimeInterval = UITestTimeouts.standard,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) {
+    XCTAssertTrue(
+        element.waitForNonExistence(timeout: timeout),
+        "\(element) still exists",
+        file: file, line: line)
+}

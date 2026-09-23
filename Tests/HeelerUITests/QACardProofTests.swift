@@ -134,15 +134,12 @@ final class QACardProofTests: XCTestCase {
             longCard.waitForExistence(timeout: UITestTimeouts.standard))
         longCard.tap()
 
-        // Expanded: the full answer + note render.
+        // Expanded: the full answer renders (the optional note is
+        // removed from the product — no Note row).
         XCTAssertTrue(
             element("Stage the rollout behind the config flag", in: app)
                 .waitForExistence(timeout: UITestTimeouts.standard),
             "the expanded full answer never rendered")
-        XCTAssertTrue(
-            element("Keep the kill switch documented", in: app)
-                .waitForExistence(timeout: UITestTimeouts.standard),
-            "the separately-labeled note never rendered")
 
         captureScreenshot(app, "qa-card-answered-expanded", lifetime: .keepAlways)
 
@@ -151,18 +148,71 @@ final class QACardProofTests: XCTestCase {
         captureScreenshot(app, "qa-card-answered-recollapsed", lifetime: .keepAlways)
 
         // Expand the export card too: the multi-select answer renders
-        // its selected labels as CHIPS (producer order) with the note
-        // as a separate "Note" section.
+        // its selected labels as CHIPS in producer order.
         let exportCard = app.descendants(matching: .any)
             .matching(identifier: "resolved-ask-card-demo-qa-answered").firstMatch
         XCTAssertTrue(
             exportCard.waitForExistence(timeout: UITestTimeouts.standard))
         exportCard.tap()
         XCTAssertTrue(
-            element("Include the first ten seconds only", in: app)
+            element("Validation report", in: app)
                 .waitForExistence(timeout: UITestTimeouts.standard),
-            "the export card's note never rendered when expanded")
+            "the export card's chips never rendered when expanded")
         captureScreenshot(app, "qa-card-chips-expanded", lifetime: .keepAlways)
+    }
+
+    // MARK: the immediate answered flip on submit
+
+    /// THE USER'S REPORT: submitting an answer left the card
+    /// unanswered. The fix: an ACCEPTED submit flips the card to the
+    /// ANSWERED render immediately — no broker refresh. This drives
+    /// the real card through a real submit (the demo seam accepts)
+    /// and pins the flip: the unanswered controls vanish and the
+    /// answered card shows the chosen answer, collapsed.
+    func testSubmitFlipsCardToAnsweredImmediately() {
+        let app = launchQACards()
+
+        // Answer BOTH questions of the demo ask: multi-select on q1,
+        // single choice on q2.
+        let unitSuite = app.buttons["Toggle: Unit suite"].firstMatch
+        XCTAssertTrue(
+            unitSuite.waitForExistence(timeout: UITestTimeouts.standard),
+            "the first question's option must be tappable")
+        unitSuite.tap()
+
+        // Swipe to the second question and choose.
+        let card = element("Your input needed", in: app)
+        XCTAssertTrue(
+            card.waitForExistence(timeout: UITestTimeouts.standard))
+        card.swipeLeft()
+        let you = app.buttons["Answer: You"].firstMatch
+        XCTAssertTrue(
+            you.waitForExistence(timeout: UITestTimeouts.standard),
+            "the second question's option must be tappable after the swipe")
+        you.tap()
+
+        // Send answers (the card's own validated submit).
+        let send = app.buttons["Send answers"].firstMatch
+        XCTAssertTrue(
+            send.waitForExistence(timeout: UITestTimeouts.standard),
+            "Send answers must render once every question is answered")
+        send.tap()
+
+        // THE FLIP: the card renders ANSWERED immediately — the
+        // eyebrow reads Answered (not Submitting), the chosen answers
+        // are visible.
+        let answeredEyebrow = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label CONTAINS %@", "Answered")
+        ).firstMatch
+        XCTAssertTrue(
+            answeredEyebrow.waitForExistence(timeout: UITestTimeouts.standard),
+            "the card must flip to the Answered eyebrow on submit")
+
+        // The unanswered affordances are GONE: no Send answers button
+        // remains reachable (the answered card is not interactive).
+        waitToNotExist(app.buttons["Send answers"].firstMatch)
+
+        captureScreenshot(app, "qa-card-flipped-answered", lifetime: .keepAlways)
     }
 
     func testHonestOutcomeCardsRender() {

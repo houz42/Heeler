@@ -155,8 +155,11 @@ private struct ChatInteractionSwipeModifier: ViewModifier {
 // MARK: - The unanswered (interactive) card
 
 /// One built answer payload per answered question — the submit seam's
-/// unit. `customText` and `note` ride the payload so the producer
-/// receives the full answer (the adapter's RemoteAnswer shape).
+/// unit. `customText` rides the payload so the producer receives the
+/// full answer (the adapter's RemoteAnswer shape). `note` stays in the
+/// WIRE shape (the adapter accepts it) but this client never sends
+/// one — the optional note was removed from the product (no note
+/// input on the ask form; always nil from here).
 struct ChatInteractionAnswerPayload: Sendable, Equatable {
     let questionId: String
     let optionIds: [String]
@@ -168,10 +171,12 @@ struct ChatInteractionAnswerPayload: Sendable, Equatable {
 /// thin step segments, horizontal swipe between questions (vertical
 /// scrolls; horizontal must not trigger Back or a choice tap), radio
 /// or checkbox options per the producer, an explicit Other text input
-/// when the producer permits custom answers, an optional note, and
-/// one Submit that validates every required question. Selecting a
-/// single choice can ADVANCE to the next question but never submits
-/// the whole interaction automatically.
+/// when the producer permits custom answers, and one Submit that
+/// validates every required question. Selecting a single choice can
+/// ADVANCE to the next question but never submits the whole
+/// interaction automatically. On an ACCEPTED submit the card flips
+/// to the ANSWERED render immediately (submitSucceeded) — the user
+/// sees their chosen answer without waiting for a broker refresh.
 struct ChatInteractionCard: View {
     let interaction: PendingInteraction
     /// True while the submission is awaiting authoritative
@@ -183,6 +188,12 @@ struct ChatInteractionCard: View {
     /// so the user can retry or go back.
     var errorMessage: String? = nil
     var submit: ([ChatInteractionAnswerPayload]) async throws -> Void
+    /// Fired when `submit` returned WITHOUT throwing: the answer was
+    /// accepted, so the card flips to the ANSWERED render immediately
+    /// (the user sees their chosen answer; the store's authoritative
+    /// record then replaces it by identity — same requestId — without
+    /// a visual swap). Never fired on error: choices stay for retry.
+    var submitSucceeded: ([ChatInteractionAnswerPayload]) -> Void = { _ in }
     /// Formats a submit/cancel error into honest user copy (the
     /// screen's wire-message unwrap); nil falls back to
     /// localizedDescription.
@@ -197,11 +208,10 @@ struct ChatInteractionCard: View {
     @Environment(\.colorScheme) private var colorScheme
 
     /// Per-interaction draft state (this card's own — the screen owns
-    /// nothing): 1-based step, selections, custom text, notes.
+    /// nothing): 1-based step, selections, custom text.
     @State private var step: Int = 1
     @State private var selections: [String: Set<String>] = [:]
     @State private var customTexts: [String: String] = [:]
-    @State private var notes: [String: String] = [:]
     @State private var submitting = false
     @State private var error: String?
 
@@ -240,7 +250,6 @@ struct ChatInteractionCard: View {
                 if currentQuestion?.allowCustom == true {
                     customTextView
                 }
-                noteView
                 if let error {
                     Label(error, systemImage: "exclamationmark.triangle")
                         .font(.caption2)
@@ -440,35 +449,11 @@ struct ChatInteractionCard: View {
         }
     }
 
-    private var noteView: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            TextField(
-                "Add a note (optional)", text: bindingForNote, axis: .vertical)
-                .font(.caption)
-                .lineLimit(1...3)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 6)
-                .background(
-                    Color.secondary.opacity(0.06),
-                    in: RoundedRectangle(cornerRadius: 8))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(optionBorder, lineWidth: 1))
-                .disabled(submitting)
-                .accessibilityLabel("Explanatory note")
-        }
-    }
 
     private var bindingForCustomText: Binding<String> {
         Binding(
             get: { customTexts[currentQuestion?.id ?? ""] ?? "" },
             set: { customTexts[currentQuestion?.id ?? ""] = $0 })
-    }
-
-    private var bindingForNote: Binding<String> {
-        Binding(
-            get: { notes[currentQuestion?.id ?? ""] ?? "" },
-            set: { notes[currentQuestion?.id ?? ""] = $0 })
     }
 
     // MARK: submission
@@ -520,14 +505,15 @@ struct ChatInteractionCard: View {
             payloads.append(ChatInteractionAnswerPayload(
                 questionId: question.id,
                 optionIds: (selections[question.id] ?? []).sorted(),
-                customText: (custom?.isEmpty ?? true) ? nil : custom,
-                note: notes[question.id]))
+                customText: (custom?.isEmpty ?? true) ? nil : custom))
         }
         Task { @MainActor in
             do {
                 try await submit(payloads)
-                // The resolved card replaces this one when the store's
-                // resolution lands; submitting stays until then.
+                // Accepted (no throw): flip to the ANSWERED card
+                // immediately — the user sees their answer now, not
+                // after a broker refresh.
+                submitSucceeded(payloads)
             } catch {
                 submitting = false
                 setError(error, prefix: "Answer failed")
@@ -723,8 +709,9 @@ struct ChatResolvedAskCard: View {
 
     /// The answered state: A line (one ellipsized line collapsed;
     /// full text expanded), selected-label chips in producer order,
-    /// the additional-answer paragraph, and the separately-labeled
-    /// note. Empty optional notes are omitted.
+    /// and the additional-answer paragraph. (The optional note is
+    /// removed from the product per the user's decision — no note
+    /// input on the ask form, no note row here.)
     @ViewBuilder
     private var answeredView: some View {
         let pair = currentPair
@@ -732,8 +719,6 @@ struct ChatResolvedAskCard: View {
         let hasCustom =
             !(pair.customAnswerText ?? "").trimmingCharacters(
                 in: .whitespacesAndNewlines).isEmpty
-        let note = pair.note?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         VStack(alignment: .leading, spacing: 6) {
             if !hasSelections && !hasCustom {
                 // Missing answer data: the honest placeholder — never
@@ -765,7 +750,7 @@ struct ChatResolvedAskCard: View {
                 // as chips (or a list when long), the additional
                 // answer paragraph (ONLY when selection PLUS custom
                 // text — a free-text-only answer already IS the A
-                // line), the separately-labeled note.
+                // line).
                 if hasSelections {
                     selectedOptionsView(pair)
                 }
@@ -775,17 +760,6 @@ struct ChatResolvedAskCard: View {
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(.secondary)
                         Text(pair.customAnswerText ?? "")
-                            .font(.footnote)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                if !note.isEmpty {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Note")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        Text(note)
                             .font(.footnote)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
