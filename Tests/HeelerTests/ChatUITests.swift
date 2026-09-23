@@ -417,7 +417,7 @@ struct ChatUITests {
     // MARK: per-pane level persistence
 
     @Test func detailLevelPersistsPerPaneInNamespacedSuite() {
-        let suiteName = "dev.houz42.heeler.chat.test.\(UUID().uuidString)"
+        let suiteName = "dev.houz42.meadow.chat.test.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let store = ChatDetailLevelStore(defaults: defaults)

@@ -20,7 +20,7 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>NSUserActivityTypes</key>
 	<array>
-		<string>dev.houz42.heeler.agent</string>
+		<string>dev.houz42.meadow.agent</string>
 	</array>
 </dict>
 </plist>

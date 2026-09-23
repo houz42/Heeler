@@ -6,7 +6,7 @@ import Foundation
 // Macros page, each optionally bound to a Snippet plus literal argument
 // text. Bindings are keyed by pane id (one window shows one agent, so
 // pane id is agent id) and stored in the dedicated
-// `dev.houz42.heeler.macros` UserDefaults suite so they never collide with
+// `dev.houz42.meadow.macros` UserDefaults suite so they never collide with
 // the app's own keys. Pure Foundation — no SwiftUI/@Observable here — so
 // the view binds it however it likes.
 //
@@ -21,7 +21,7 @@ struct MacroBinding: Codable, Equatable, Sendable {
 }
 
 struct MacroKeyStore: @unchecked Sendable {
-    static let suiteName = "dev.houz42.heeler.macros"
+    static let suiteName = "dev.houz42.meadow.macros"
     /// The slot rows the Macros page renders: fixed, so a bound macro stays
     /// under the same thumb across panes and launches.
     static let slotRange = 1...6
