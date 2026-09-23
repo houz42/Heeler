@@ -119,6 +119,40 @@ final class BubbleWidthProofTests: XCTestCase {
                 + "not stretch to a fixed fraction")
     }
 
+    // MARK: the cap bounds the VISIBLE bubble exactly
+
+    /// The long-prose bubble wraps to the design cap — its rendered
+    /// width must not exceed `min(0.85 × transcript width, 560pt)`
+    /// (the review's boundary bug: a +padding error let it reach
+    /// cap + 24pt). The transcript row is the app width minus the
+    /// transcript's 12pt horizontal insets; the element frame is the
+    /// VISIBLE bubble's frame.
+    func testLongProseBubbleRespectsVisibleCap() {
+        let app = launchBubblesChat()
+        let long = ownMessage("Before you commit the checkout fix", in: app)
+        XCTAssertTrue(
+            long.waitForExistence(timeout: UITestTimeouts.standard))
+
+        let transcriptWidth = app.frame.width - 24  // 12pt insets/side
+        let cap = min(transcriptWidth * 0.85, 560)
+        let bubbleWidth = long.frame.width
+
+        // The markdown may merge the whole wrapped paragraph into one
+        // element; allow small rendering slop but never the +24pt
+        // padding error the review caught.
+        XCTAssertLessThanOrEqual(
+            bubbleWidth, cap + 8,
+            "the long-prose bubble spans \(bubbleWidth)pt — the visible "
+                + "cap is \(cap)pt (min(0.85 × \(transcriptWidth), 560)); "
+                + "the padded bubble must not exceed the design cap")
+        // And it is close to the cap: the fixture's prose is long
+        // enough to fill it (it wraps at the cap, not before).
+        XCTAssertGreaterThan(
+            bubbleWidth, cap * 0.8,
+            "the long-prose bubble spans only \(bubbleWidth)pt of a "
+                + "\(cap)pt cap — it should fill and wrap at the cap")
+    }
+
     // MARK: trailing alignment evidence
 
     /// Content-sized own bubbles park at the TRAILING edge: the
