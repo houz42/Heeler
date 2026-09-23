@@ -8,6 +8,16 @@ Entries reference the issue that motivated them.
 ## [Unreleased]
 
 ### Added
+- Producer-backed live-work indicator (v3): a compact six-frame work
+  spark at the transcript's live edge, shown ONLY when a fresh
+  producer activity report says the agent is working. Idle and
+  no-report render NOTHING — no marker and no reserved space
+  (connection success alone never implies thinking); blocked,
+  completed and unknown render a static mark that never animates;
+  Reduce Motion freezes the spark on its starburst frame. No
+  visible status sentence: tapping opens the details sheet, and the
+  accessibility tree keeps every state nameable ("Agent working",
+  "Agent waiting for input", …).
 - One paired Q/A card per ask interaction (v3): unanswered and answered
   states share the same card family — paper background, subtle green
   border, 12pt radius, accent eyebrow, thin n-of-N step segments.

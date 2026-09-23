@@ -68,6 +68,13 @@
             /// spans, links) — the wrapped-cell table capture
             /// surface (v3 table proofs).
             case chatTables
+            /// The chat surface with the v3 live-work indicator: the
+            /// producer-backed work spark at the live edge — a state
+            /// control cycles Working (animated spark) → Idle (no
+            /// marker, no reserved space) → Blocked/Completed/Unknown
+            /// (static) → No report (nil). The state→render mapping
+            /// capture surface (v3 live-work proofs).
+            case chatLiveWork
             /// The Scan-to-Pair sheet in its paste-first entry layout
             /// (the paste entry always mounted, camera-authorized
             /// path) — the remote-pairing reachability capture and
@@ -83,6 +90,7 @@
             static func fromArguments() -> Route {
                 let arguments = ProcessInfo.processInfo.arguments
                 if arguments.contains(pairingPasteLaunchArgument) { return .pairingPaste }
+                if arguments.contains(chatLiveWorkLaunchArgument) { return .chatLiveWork }
                 if arguments.contains(chatQACardsLaunchArgument) { return .chatQACards }
                 if arguments.contains(chatLifecycleLaunchArgument) { return .chatLifecycle }
                 if arguments.contains(chatBubblesLaunchArgument) { return .chatBubbles }
@@ -109,6 +117,7 @@
         static let chatLifecycleLaunchArgument = "--demo-chat-lifecycle"
         static let chatBubblesLaunchArgument = "--demo-chat-bubbles"
         static let chatTablesLaunchArgument = "--demo-chat-tables"
+        static let chatLiveWorkLaunchArgument = "--demo-chat-live-work"
         static let pairingPasteLaunchArgument = "--demo-pairing-paste"
 
         /// The multi-path demo Host: the same machine over LAN and VPN.
@@ -220,6 +229,8 @@
                 chatPendingAskSurface
             case .chatQACards:
                 chatQACardsSurface
+            case .chatLiveWork:
+                chatLiveWorkSurface
             case .chatSpecialSections:
                 chatSpecialSectionsSurface
             }
@@ -355,6 +366,100 @@
                 authorLabel: "Meadow · omp",
                 onAskAnswer: { _, _ in },
                 onAskCancel: { _ in })
+        }
+
+        /// The v3 live-work capture surface: ChatScreen transcript
+        /// whose live edge carries the producer-backed work spark.
+        /// A segmented control (the DEMO's control — never part of
+        /// the production surface) drives the component through
+        /// every state the design maps: Working (animated spark),
+        /// Idle (NOTHING — no marker, no reserved space), Blocked /
+        /// Completed / Unknown (static mark), and No report (nil —
+        /// also nothing; connection alone never implies thinking).
+        /// The control pins which state a capture shows; the spark
+        /// itself is the production `ChatLiveWorkIndicator`.
+        private var chatLiveWorkSurface: some View {
+            ChatLiveWorkDemoSurface()
+        }
+
+        /// The stateful demo host: the segmented state control + the
+        /// ChatScreen wired with the selected `liveWork` state.
+        private struct ChatLiveWorkDemoSurface: View {
+            @State private var selection: ChatLiveWorkState? = .working
+
+            private let options: [(label: String, value: ChatLiveWorkState?)] = [
+                ("Working", .working),
+                ("Idle", .idle),
+                ("Blocked", .blocked),
+                ("Completed", .completed),
+                ("Unknown", .unknown),
+                ("No report", nil),
+            ]
+
+            var body: some View {
+                VStack(spacing: 0) {
+                    // The demo control: outside the transcript so it
+                    // never appears in the live-edge captures.
+                    OptionFlowLayout(spacing: 8) {
+                        ForEach(options, id: \.label) { option in
+                            Button(option.label) {
+                                selection = option.value
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(
+                                selection == option.value
+                                    ? Color.accentColor : Color.secondary)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    Divider()
+                    ChatScreen(
+                        paneID: "demo:live-work",
+                        agentName: "omp",
+                        state: .idle,
+                        content: ChatContent(messages: [
+                            ChatMessage(role: .user, blocks: [
+                                .text(
+                                    """
+                                    Please rerun the targeted suite and \
+                                    summarize what changed since the last \
+                                    commit.
+                                    """),
+                            ]),
+                            ChatMessage(role: .assistant, blocks: [
+                                .text(
+                                    """
+                                    On it — running the targeted suite \
+                                    now and reviewing the diff.
+                                    """),
+                            ]),
+                        ]),
+                        initialLevel: .l1,
+                        changeLevel: { _, _ in },
+                        liveWork: selection,
+                        liveWorkDetail: detailLine)
+                }
+            }
+
+            /// The producer-detail line the tap sheet carries for the
+            /// selected state (simulated producer prose).
+            private var detailLine: String {
+                switch selection {
+                case .working:
+                    "Running the targeted suite (reported by the agent)."
+                case .idle:
+                    "The agent reported it is idle."
+                case .blocked:
+                    "The agent is waiting for an answer."
+                case .completed:
+                    "The agent reported its task complete."
+                case .unknown:
+                    "The agent's working state has not been reported."
+                case nil:
+                    ""
+                }
+            }
         }
 
         /// The v3 Q/A-card capture surface: ChatScreen with BOTH card
