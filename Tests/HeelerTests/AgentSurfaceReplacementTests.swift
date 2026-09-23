@@ -805,3 +805,231 @@ private final class RefusingSurfaceTestBackgroundGranter: BackgroundExecutionGra
 
     func end(_: BackgroundExecutionToken) {}
 }
+
+// MARK: - Device regression: surface-swap churn must not stop the pipeline
+
+extension AgentSurfaceReplacementTests {
+    /// The chat↔terminal surface swap fires the terminal surface's
+    /// onDisappear while the detail is still on stage (SwiftUI's spurious
+    /// disappear/appear pair in one transaction). The preserving leave used
+    /// to tear the pipeline down — cancelling the armed size-report fallback
+    /// before its grace fired, so on device the PTY never opened and the
+    /// terminal rendered blank (#device). An ON-STAGE preserving leave is
+    /// churn: the pipeline and its armed fallback must survive it.
+    @MainActor
+    @Test(.timeLimit(.minutes(1)))
+    func onStagePreservingLeaveKeepsThePipelineAndItsArmedFallbackAlive() async throws {
+        let transport = ScriptedTransport()
+        let composer = Self.makeComposer(transport: transport)
+        let attach = Self.makeAttachStore(transport: transport, composer: composer)
+
+        // The surface attached; the fallback armed (no size report on the
+        // device path).
+        attach.terminalViewDidAppear()
+
+        // The surface swap's spurious onDisappear: a PRESERVING leave while
+        // the detail is still on stage.
+        await attach.leave().value
+
+        // The pipeline was NOT torn down: the store's terminal is neither
+        // stopped nor replaced (a replacement would change the surface id).
+        #expect(attach.terminalID == attach.terminalID)
+        #expect(attach.terminalStatus != .stopped)
+
+        // The armed fallback survives the churn: within the grace window
+        // (plus margin) the attach opens at the default geometry and goes
+        // live when the remote paints.
+        let opened = try await Self.eventually(
+            timeout: .seconds(6),
+            condition: { await transport.hasLiveAttachSession })
+        #expect(opened, "the fallback attach never opened after the surface-swap leave")
+        let request = await transport.attachRequests.last
+        #expect(request?.cols == 80)
+        #expect(request?.rows == 24)
+        _ = await transport.emitAttachOutput(Data("\u{1B}[2Jdevice".utf8))
+        let live = try await Self.eventually(
+            timeout: .seconds(5),
+            condition: { attach.terminalStatus == .live })
+        #expect(live, "the pipeline never went live after the fallback open")
+
+        // A REAL departure still tears the channel down: the terminal
+        // handoff leave (preserving=false) stops the pipeline even while the
+        // detail is on stage — the shell cannot take the Host terminal lease
+        // until this Attach has explicitly released it.
+        attach.leaveForTerminalHandoff()
+        let stopped = try await Self.eventually(
+            timeout: .seconds(5),
+            condition: { attach.terminalStatus == .stopped })
+        #expect(stopped, "the terminal-handoff leave did not stop the pipeline")
+        let closed = try await Self.eventually(
+            timeout: .seconds(5),
+            condition: { await transport.hasLiveAttachSession == false })
+        #expect(closed, "the terminal-handoff leave did not close the session")
+    }
+}
+
+// MARK: - Device regression: armed churn survives a lagging stage read
+
+extension AgentSurfaceReplacementTests {
+    /// The stage tracking LAGS the SwiftUI disappear: at the surface-swap
+    /// leave's decision instant isOnStage() can already read false (device
+    /// trace 38a0f1a4 — the leave transition cancelled the armed fallback).
+    /// A preserving leave with an ARMED fallback is churn regardless of the
+    /// stage read: the pipeline must survive to let its grace open the PTY.
+    @MainActor
+    @Test(.timeLimit(.minutes(1)))
+    func armedFallbackSurvivesAPreservingLeaveWithALaggingStageRead() async throws {
+        let transport = ScriptedTransport()
+        let composer = AgentComposerStore(target: "w1:p1") { params in
+            try await transport.promptAgent(params)
+        }
+        let attach = AgentAttachStore(
+            target: "w1:p1",
+            paneTitle: "pane",
+            transportGeneration: 1,
+            isOnStage: { false },  // The stage read lags: false AT the leave.
+            runTerminal: { request, handler in
+                let session = try await transport.attachTerminal(request)
+                try await handler.runEndingSession(session)
+            },
+            stageImage: { _, _ in throw TransportError.cancelled },
+            stageFile: { _, _ in throw TransportError.cancelled },
+            composer: composer,
+            closePane: {})
+
+        // Arm the fallback, then the surface-swap's spurious onDisappear
+        // arrives while the stage read already says false.
+        attach.terminalViewDidAppear()
+        await attach.leave().value
+
+        // The armed pipeline was NOT torn down: the grace still opens the
+        // attach and goes live on the remote paint.
+        let opened = try await Self.eventually(
+            timeout: .seconds(6),
+            condition: { await transport.hasLiveAttachSession })
+        #expect(opened, "the armed fallback was cancelled by the lagging-stage leave")
+        _ = await transport.emitAttachOutput(Data("\u{1B}[2Jdevice".utf8))
+        let live = try await Self.eventually(
+            timeout: .seconds(5),
+            condition: { attach.terminalStatus == .live })
+        #expect(live, "the preserved pipeline never went live")
+
+        // A REAL departure still tears it down: the terminal handoff passes
+        // preserving=false.
+        attach.leaveForTerminalHandoff()
+        let stopped = try await Self.eventually(
+            timeout: .seconds(5),
+            condition: { attach.terminalStatus == .stopped })
+        #expect(stopped, "the handoff leave did not stop the preserved pipeline")
+    }
+}
+
+// MARK: - Release/lifecycle blocker: departure during the grace window
+
+extension AgentSurfaceReplacementTests {
+    /// Back/dismiss during the fallback's grace window must not leave an
+    /// offscreen pipeline opening a PTY: the churn-preserving leave survives
+    /// (as designed), but the deferred REAL departure (the reliable
+    /// post-churn stage read) forces a non-preserving teardown that cancels
+    /// the armed grace. The store-level contract: leave() preserves the arm,
+    /// leaveForTerminalHandoff() (the deferred departure's path) tears it
+    /// down before the grace fires.
+    @MainActor
+    @Test(.timeLimit(.minutes(1)))
+    func realDepartureDuringTheGraceWindowTearsDownTheArmedFallback() async throws {
+        let transport = ScriptedTransport()
+        let composer = AgentComposerStore(target: "w1:p1") { params in
+            try await transport.promptAgent(params)
+        }
+        let attach = AgentAttachStore(
+            target: "w1:p1",
+            paneTitle: "pane",
+            transportGeneration: 1,
+            isOnStage: { false },
+            runTerminal: { request, handler in
+                let session = try await transport.attachTerminal(request)
+                try await handler.runEndingSession(session)
+            },
+            stageImage: { _, _ in throw TransportError.cancelled },
+            stageFile: { _, _ in throw TransportError.cancelled },
+            composer: composer,
+            closePane: {})
+
+        // The arm (the grace window opens).
+        attach.terminalViewDidAppear()
+        // The churn leave: preserves the arm (this is the surface swap).
+        await attach.leave().value
+        #expect(attach.terminalStatus == .waitingForSize)
+
+        // The deferred real departure: forces the non-preserving teardown
+        // well inside the 1.5s grace window.
+        attach.leaveForTerminalHandoff()
+        try await Self.eventually(
+            timeout: .seconds(3),
+            condition: { attach.terminalStatus == .stopped })
+
+        // The grace never fired: the attach NEVER opened.
+        try await Task.sleep(for: .milliseconds(2200))
+        let opened = await transport.attachRequests.count > 0
+        #expect(!opened, "the armed fallback opened a PTY after the real departure")
+    }
+}
+
+// MARK: - Two-step departure: Terminal → Chat → Back must release the channel
+
+extension AgentSurfaceReplacementTests {
+    /// The detail's real departure is the one teardown boundary that works
+    /// regardless of which surface is showing: while CHAT is displayed the
+    /// terminal child is unmounted, so its deferred departure check can
+    /// never fire — a preserved (live) attach would hold the Host's one
+    /// terminal channel after the detail is gone. The detail boundary's
+    /// non-preserving teardown must stop even a LIVE pipeline; the ordinary
+    /// chat↔terminal toggle (preserving) must not.
+    @MainActor
+    @Test(.timeLimit(.minutes(1)))
+    func twoStepDepartureReleasesTheChannelWhileTogglesPreserveIt() async throws {
+        let transport = ScriptedTransport()
+        let composer = AgentComposerStore(target: "w1:p1") { params in
+            try await transport.promptAgent(params)
+        }
+        let attach = AgentAttachStore(
+            target: "w1:p1",
+            paneTitle: "pane",
+            transportGeneration: 1,
+            isOnStage: { true },
+            runTerminal: { request, handler in
+                let session = try await transport.attachTerminal(request)
+                try await handler.runEndingSession(session)
+            },
+            stageImage: { _, _ in throw TransportError.cancelled },
+            stageFile: { _, _ in throw TransportError.cancelled },
+            composer: composer,
+            closePane: {})
+
+        // A live session (the terminal was open and rendered).
+        attach.terminalViewDidAppear()
+        try await Self.eventually(
+            timeout: .seconds(6),
+            condition: { await transport.hasLiveAttachSession })
+        _ = await transport.emitAttachOutput(Data("\u{1B}[2JTUI".utf8))
+        try await Self.eventually(
+            timeout: .seconds(5),
+            condition: { attach.terminalStatus == .live })
+
+        // The ordinary toggle: the preserving leave KEEPS the live session.
+        await attach.leave().value
+        #expect(attach.terminalStatus == .live)
+        #expect(await transport.hasLiveAttachSession)
+
+        // The two-step departure: the detail closes while CHAT is showing —
+        // the detail boundary's non-preserving teardown stops the LIVE
+        // pipeline and releases the channel.
+        attach.leaveForTerminalHandoff()
+        try await Self.eventually(
+            timeout: .seconds(5),
+            condition: { attach.terminalStatus == .stopped })
+        try await Self.eventually(
+            timeout: .seconds(5),
+            condition: { await transport.hasLiveAttachSession == false })
+    }
+}

@@ -170,6 +170,18 @@ final class AgentAttachStore {
         terminal.feed
     }
 
+    /// The terminal surface appeared on stage. Feeds the bounded
+    /// default-geometry fallback (a device whose Ghostty surface never
+    /// reports a valid grid still opens its PTY; the first real size
+    /// report corrects it in-band).
+    func terminalViewDidAppear() {
+        #if DEBUG
+        terminal.restorationTrace.emitDiagnostic(
+            "surface_attach_arm_hop status=\(AttachTerminalStore.diagnosticStatusName(terminal.status))")
+        #endif
+        terminal.terminalViewDidAppear()
+    }
+
     #if DEBUG
     func terminalDidBecomeVisible() {
         terminal.restorationTrace.emit(.agentDetailVisible, generation: terminal.transportGeneration)
@@ -388,7 +400,16 @@ final class AgentAttachStore {
         ownsOnStageLifecycle: Bool = false,
         while isStillWanted: @escaping @MainActor () -> Bool
     ) {
-        guard isStillWanted() else { return }
+        #if DEBUG
+        terminal.restorationTrace.emitDiagnostic(
+            "replace_terminal entry owns_on_stage=\(ownsOnStageLifecycle)")
+        #endif
+        guard isStillWanted() else {
+            #if DEBUG
+            terminal.restorationTrace.emitDiagnostic("replace_terminal aborted unwanted_at_entry")
+            #endif
+            return
+        }
         // Synchronous on purpose. `previous.stop()` can wait on the SSH channel
         // teardown, and the user must see recovery throughout that wait rather
         // than the predecessor's `.live` status and an EmptyView overlay.
@@ -407,7 +428,7 @@ final class AgentAttachStore {
                 return
             }
             let previous = self.terminal
-            await previous.stop(preservingPendingPaste: true)
+            await previous.stop(preservingPendingPaste: true, caller: "replace_terminal")
             guard isStillWanted() else {
                 if !self.isOnStage() {
                     self.abortTerminalRecoveryOffStage(ownedBy: recoveryOwner)
@@ -442,6 +463,15 @@ final class AgentAttachStore {
             self.terminal = replacement
             #endif
             self.activationRecovery.bind(to: replacement.surfaceID)
+            // Arm the replacement's bounded fallback when it is on stage:
+            // the connection it replaces just died (generation replacement),
+            // so its transport may not be ready at its first grace either.
+            // The surface-attach arm covers the mounted-surface case; this
+            // covers a replacement installed while the detail shows another
+            // surface (chat), whose terminal surface mounts only later.
+            if self.isOnStage() {
+                replacement.terminalViewDidAppear()
+            }
             self.finishTerminalRecovery(ownedBy: recoveryOwner)
         }
     }
@@ -503,6 +533,10 @@ final class AgentAttachStore {
     /// and hold the Host's only terminal channel, leaving the screen the user
     /// is actually looking at queued behind it on "Connecting…" forever.
     func rejoin() {
+        #if DEBUG
+        terminal.restorationTrace.emitDiagnostic(
+            "attach_rejoin lifecycle=\(lifecycleState) on_stage=\(isOnStage())")
+        #endif
         guard lifecycleState != .active, isOnStage() else { return }
         activationRecovery.clear()
         let requiresFullReplacement = lifecycleState == .rejoinRequired
@@ -527,7 +561,7 @@ final class AgentAttachStore {
             // let a drop start while staging is still tearing down.
             self.composer.resumeDroppedImagesAfterRejoin()
             if requiresFullReplacement, self.terminal.status != .stopped {
-                await self.terminal.stop(preservingPendingPaste: true)
+                await self.terminal.stop(preservingPendingPaste: true, caller: "rejoin_replacement")
                 guard self.terminalRecoveryOwner == recoveryOwner else { return }
                 guard self.lifecycleState == .active else {
                     self.finishTerminalRecovery(ownedBy: recoveryOwner)
@@ -565,6 +599,15 @@ final class AgentAttachStore {
             self.terminal = replacement
             #endif
             self.activationRecovery.bind(to: replacement.surfaceID)
+            // Arm the replacement's bounded fallback when it is on stage:
+            // the connection it replaces just died (generation replacement),
+            // so its transport may not be ready at its first grace either.
+            // The surface-attach arm covers the mounted-surface case; this
+            // covers a replacement installed while the detail shows another
+            // surface (chat), whose terminal surface mounts only later.
+            if self.isOnStage() {
+                replacement.terminalViewDidAppear()
+            }
             self.finishTerminalRecovery(ownedBy: recoveryOwner)
         }
     }
@@ -614,6 +657,10 @@ final class AgentAttachStore {
     private func leave(
         preservingOnStageActivationRecovery: Bool
     ) -> Task<Void, Never> {
+        #if DEBUG
+        terminal.restorationTrace.emitDiagnostic(
+            "attach_leave lifecycle=\(lifecycleState) preserving=\(preservingOnStageActivationRecovery)")
+        #endif
         guard lifecycleState != .left else {
             return lifecycleTask ?? Task {}
         }
@@ -623,6 +670,55 @@ final class AgentAttachStore {
             terminalRecoveryOwner != nil,
             isOnStage()
         {
+            return lifecycleTask ?? Task {}
+        }
+        // A preserving leave while the detail is STILL ON STAGE is surface
+        // churn, not a departure: the chat↔terminal surface swap fires the
+        // terminal surface's onDisappear in the same transaction its sibling
+        // branch appears, and SwiftUI hands out the spurious pair even when
+        // the screen never leaves the window. Tearing down here cancelled
+        // the pipeline (and its armed size-report fallback) mid-flight: on
+        // device the PTY never opened and the terminal rendered blank
+        // (#device, trace: arm_enter → attach_leave preserving=true →
+        // arm_cancelled site=stop → grace_cancelled_before_wake). The real
+        // departure keeps its teardown — a genuine leave arrives with
+        // isOnStage() false, and the terminal-handoff leave passes
+        // preserving=false so the shell can take the channel.
+        if preservingOnStageActivationRecovery,
+            lifecycleState == .active,
+            isOnStage(),
+            terminal.status == .waitingForSize || terminal.status == .connecting
+                || terminal.status == .live
+        {
+            #if DEBUG
+            terminal.restorationTrace.emitDiagnostic(
+                "attach_leave_skipped surface_churn lifecycle=\(lifecycleState) "
+                + "status=\(AttachTerminalStore.diagnosticStatusName(terminal.status)) "
+                + "fallback_armed=\(terminal.sizeFallbackTaskIsArmed)")
+            #endif
+            return lifecycleTask ?? Task {}
+        }
+        // The stage tracking LAGS the SwiftUI disappear: at the surface-swap
+        // leave's decision instant isOnStage() can already read false (device
+        // trace 38a0f1a4: attach_leave preserving=true with an ARMED fallback
+        // tore down — caller=leave_transition cancelled the grace, the very
+        // churn this guard exists for). A preserving leave with an armed
+        // fallback task is churn REGARDLESS of the isOnStage() read: the
+        // armed grace is the pipeline's own liveness signal — it WILL open a
+        // PTY within the window. The real departures stay covered: the
+        // terminal handoff and detail-close paths pass preserving=false, and
+        // a real departure's stop() (leave/replace/rejoin callers) still
+        // cancels any armed task through the same teardown that follows.
+        if preservingOnStageActivationRecovery,
+            lifecycleState == .active,
+            terminal.sizeFallbackTaskIsArmed
+        {
+            #if DEBUG
+            terminal.restorationTrace.emitDiagnostic(
+                "attach_leave_skipped armed_churn lifecycle=\(lifecycleState) "
+                + "on_stage=\(isOnStage()) "
+                + "status=\(AttachTerminalStore.diagnosticStatusName(terminal.status))")
+            #endif
             return lifecycleTask ?? Task {}
         }
         #if DEBUG
@@ -646,7 +742,7 @@ final class AgentAttachStore {
         return enqueueLifecycleTransition { [self] in
             composer.abandonDroppedImagesForTeardown()
             await staging.leave()
-            await terminal.stop()
+            await terminal.stop(caller: "leave_transition")
             linkIndex.clear()
         }
     }

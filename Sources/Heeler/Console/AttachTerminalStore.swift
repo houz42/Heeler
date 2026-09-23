@@ -99,6 +99,20 @@ struct TerminalSurfaceID: Hashable, Sendable {
     init() {}
 }
 
+extension AttachTerminalStore {
+    /// DIAGNOSTIC (throwaway, not for commit): a stable status spelling for
+    /// the arm-instrumentation lines.
+    nonisolated static func diagnosticStatusName(_ status: AttachTerminalStore.Status) -> String {
+        switch status {
+        case .waitingForSize: "waitingForSize"
+        case .connecting: "connecting"
+        case .live: "live"
+        case .ended: "ended"
+        case .stopped: "stopped"
+        }
+    }
+}
+
 /// Reconciles the two independently scheduled signals that identify a
 /// foreground recovery's Transport. Readiness is projected before terminal
 /// waiters resume, so either signal may arrive first. A decision is made only
@@ -228,9 +242,30 @@ final class AttachTerminalStore {
     private(set) var acquiredTransportGeneration: UInt64?
     private var stopRequested = false
     private var preservesPendingPasteOnStop = false
+    private var runTask: Task<Void, Never>?
     private var session: TerminalAttachSession?
     private var inputGeneration: TerminalInputController.SessionGeneration?
-    private var runTask: Task<Void, Never>?
+    /// The bounded wait for a genuine first size report before the fallback
+    /// opens the session at the default geometry.
+    private var sizeFallbackTask: Task<Void, Never>?
+    /// How long the pipeline waits for the surface's first real size report
+    /// before opening the PTY at the fallback geometry. Long enough that an
+    /// ordinary mount's report (first layout, same runloop turns) always
+    /// wins; short enough that a stuck surface reads as connecting, not
+    /// blank.
+    private static let sizeReportGrace: Duration = .seconds(1.5)
+    /// The PTY geometry the fallback opens with. 80×24 is the terminal
+    /// default every remote program handles; the first genuine size report
+    /// corrects it in-band.
+    private static let fallbackColumns = 80
+    private static let fallbackRows = 24
+    /// True while the current pipeline was opened by the fallback (no
+    /// genuine size report ever arrived). A run that ends without ever
+    /// going live on such a pipeline re-arms the fallback once — a
+    /// transport that was momentarily unavailable at the grace moment
+    /// must not strand the surface blank forever.
+    private var fallbackOpenedThisPipeline = false
+    private var fallbackReArmedOnce = false
     #if DEBUG
     private(set) var restorationTrace = AttachRestorationTrace()
 
@@ -286,11 +321,80 @@ final class AttachTerminalStore {
             runTerminal: runTerminal)
     }
 
+    /// True while the bounded fallback's grace task is armed (the pipeline
+    /// WILL open a PTY within the grace window — its own liveness signal,
+    /// valid in every status: a failed open re-arms with the store .ended).
+    var sizeFallbackTaskIsArmed: Bool {
+        sizeFallbackTask != nil
+    }
+
+    /// The terminal view appeared. On some devices the Ghostty surface can
+    /// mount without ever reporting a valid grid (its first size callback
+    /// lands before the store's callbacks are wired, or the surface sits in
+    /// a zero-frame container through the whole appearance), which left the
+    /// pipeline stuck in `.waitingForSize` and the screen blank forever
+    /// (#device). Arm a bounded fallback: if no real size report opens the
+    /// session within the grace window, start it at the default 80×24 — the
+    /// PTY semantics carry the correction, because the first genuine
+    /// `viewDidResize` rides the live channel as a window-change exactly
+    /// like any later resize.
+    func terminalViewDidAppear() {
+        #if DEBUG
+        if status == .waitingForSize, sizeFallbackTask == nil {
+            restorationTrace.emitDiagnostic("arm_enter status=waitingForSize scheduling=1")
+        } else {
+            restorationTrace.emitDiagnostic(
+                "arm_enter status=\(Self.diagnosticStatusName(status)) "
+                + "task_armed=\(sizeFallbackTask != nil) guarded_out=1")
+        }
+        #endif
+        guard status == .waitingForSize, sizeFallbackTask == nil else { return }
+        sizeFallbackTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.sizeReportGrace)
+            if Task.isCancelled, let self {
+                #if DEBUG
+                self.restorationTrace.emitDiagnostic("grace_cancelled_before_wake")
+                #endif
+            }
+            guard !Task.isCancelled, let self else { return }
+            self.sizeFallbackTask = nil
+            #if DEBUG
+            self.restorationTrace.emitDiagnostic(
+                "grace_fired status=\(Self.diagnosticStatusName(self.status)) "
+                + "run_task=\(self.runTask != nil)")
+            #endif
+            guard self.status == .waitingForSize, self.runTask == nil else { return }
+            #if DEBUG
+            self.restorationTrace.emitFallbackStart()
+            self.restorationTrace.emit(
+                .initialResize, generation: self.transportGeneration)
+            #endif
+            self.cols = Self.fallbackColumns
+            self.rows = Self.fallbackRows
+            self.fallbackOpenedThisPipeline = true
+            self.start()
+        }
+    }
+
     /// The terminal view's geometry, reported on first layout and on every
     /// change (rotation, split view, keyboard). The first report opens the
     /// session; later changes ride the live channel as window-change.
     func viewDidResize(cols: Int, rows: Int) {
+        #if DEBUG
+        restorationTrace.emitSizeReport(
+            cols: cols, rows: rows,
+            accepted: cols > 0 && rows > 0 && (cols != self.cols || rows != self.rows),
+            generation: transportGeneration)
+        #endif
         guard cols > 0, rows > 0, cols != self.cols || rows != self.rows else { return }
+        #if DEBUG
+        if sizeFallbackTask != nil {
+            restorationTrace.emitDiagnostic(
+                "arm_cancelled site=viewDidResize cols=\(cols) rows=\(rows)")
+        }
+        #endif
+        sizeFallbackTask?.cancel()
+        sizeFallbackTask = nil
         self.cols = cols
         self.rows = rows
         if runTask == nil {
@@ -331,6 +435,13 @@ final class AttachTerminalStore {
 
     /// Reattaches after the session ended remotely.
     func retry() {
+        #if DEBUG
+        if sizeFallbackTask != nil {
+            restorationTrace.emitDiagnostic("arm_cancelled site=retry")
+        }
+        #endif
+        sizeFallbackTask?.cancel()
+        sizeFallbackTask = nil
         guard case .ended = status, runTask == nil else { return }
         start()
     }
@@ -344,18 +455,36 @@ final class AttachTerminalStore {
     /// queued for the Host's terminal channel, and teardown must abort that
     /// wait rather than sit behind whoever holds the channel — a stop must
     /// never depend on the channel becoming available.
-    func stop(preservingPendingPaste: Bool = false) async {
+    func stop(
+        preservingPendingPaste: Bool = false,
+        caller: String = "unattributed"
+    ) async {
         stopRequested = true
         preservesPendingPasteOnStop = preservingPendingPaste
         if let session {
             await session.end()
         }
+        #if DEBUG
+        if let task = sizeFallbackTask {
+            restorationTrace.emitDiagnostic(
+                "arm_cancelled site=stop caller=\(caller) status=\(Self.diagnosticStatusName(status))")
+            task.cancel()
+            sizeFallbackTask = nil
+        } else {
+            sizeFallbackTask?.cancel()
+            sizeFallbackTask = nil
+        }
+        #else
+        sizeFallbackTask?.cancel()
+        sizeFallbackTask = nil
+        #endif
         if let task = runTask {
             task.cancel()
             await task.value
         }
         status = .stopped
     }
+
 
     private func start() {
         status = .connecting
@@ -402,11 +531,51 @@ final class AttachTerminalStore {
             try await runTerminal(request, handler)
         } catch {
             guard !stopRequested else { return }
-            status = .ended(Self.message(for: error))
+            let message = Self.message(for: error)
+            #if DEBUG
+            restorationTrace.emitDiagnostic("run_failed message=\(message)")
+            #endif
+            status = .ended(message)
+            reArmFallbackAfterFailedOpen()
             return
         }
         guard !stopRequested else { return }
+        #if DEBUG
+        restorationTrace.emitDiagnostic("run_ended_without_failure")
+        #endif
         status = .ended("The session ended.")
+        reArmFallbackAfterFailedOpen()
+    }
+
+    /// A fallback-opened pipeline that ended without ever going live gets
+    /// ONE fallback re-arm: the most probable cause is a transport that was
+    /// not ready at the grace moment (the device's very condition that kept
+    /// the size report away too). The re-arm re-runs the same bounded grace;
+    /// a genuine size report arriving meanwhile cancels it as usual.
+    private func reArmFallbackAfterFailedOpen() {
+        guard fallbackOpenedThisPipeline, !fallbackReArmedOnce,
+            cols != nil, rows != nil
+        else { return }
+        fallbackReArmedOnce = true
+        #if DEBUG
+        restorationTrace.emitDiagnostic("fallback_rearmed_after_failed_open")
+        #endif
+        sizeFallbackTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.sizeReportGrace)
+            if Task.isCancelled, let self {
+                #if DEBUG
+                self.restorationTrace.emitDiagnostic("grace_cancelled_before_wake")
+                #endif
+            }
+            guard !Task.isCancelled, let self else { return }
+            self.sizeFallbackTask = nil
+            guard case .ended = self.status, self.runTask == nil else { return }
+            #if DEBUG
+            self.restorationTrace.emitDiagnostic(
+                "rearm_grace_fired status=\(Self.diagnosticStatusName(self.status))")
+            #endif
+            self.start()
+        }
     }
 
     private func consume(
@@ -443,6 +612,11 @@ final class AttachTerminalStore {
                 // the bytes on screen.
                 if status == .connecting {
                     status = .live
+                    // The session the fallback opened WENT LIVE: a later
+                    // ordinary end (the remote closed) must not re-arm the
+                    // failed-open recovery — only a pipeline that never
+                    // produced output earns that.
+                    fallbackOpenedThisPipeline = false
                 }
                 #if DEBUG
                 restorationTrace.emit(.firstOutputBytes, generation: acquiredTransportGeneration)

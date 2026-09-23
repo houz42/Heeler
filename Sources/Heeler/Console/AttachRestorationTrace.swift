@@ -39,6 +39,17 @@ final class AttachRestorationTrace {
     func emit(_ phase: Phase, generation: UInt64? = nil) {
         guard state.record(phase) else { return }
         let generation = generation.map { String($0) } ?? "none"
+        // DIAGNOSTIC (throwaway, not for commit): append the attach phase to a
+        // container file, pulled off-device via `devicectl copy`.
+        let diagLine = "[attach-trace] phase=\(phase) gen=\(generation) trace=\(traceID)\n"
+        let diagURL = FileManager.default.temporaryDirectory.appendingPathComponent("attach-trace.log")
+        if let data = diagLine.data(using: .utf8) {
+            if let h = try? FileHandle(forWritingTo: diagURL) {
+                h.seekToEndOfFile(); h.write(data); try? h.close()
+            } else {
+                try? data.write(to: diagURL)
+            }
+        }
         switch phase {
         case .foregroundRecoveryStarted:
             os_signpost(.event, log: Self.log, name: "foreground_recovery_started", signpostID: signpostID,
@@ -75,6 +86,62 @@ final class AttachRestorationTrace {
             os_signpost(.event, log: Self.log, name: "first_output_bytes", signpostID: signpostID,
                 "trace_id=%{public}s generation=%{public}s", traceID, generation)
         }
+    }
+
+    /// DIAGNOSTIC (throwaway, not for commit): every size report the store
+    /// receives, INCLUDING the zero/invalid ones its guard drops — the file
+    /// line says which it was. Not deduped: the sequence of reports is the
+    /// diagnostic. Answers on-device whether the surface reports 0x0 or
+    /// never calls at all.
+    func emitSizeReport(cols: Int, rows: Int, accepted: Bool, generation: UInt64? = nil) {
+        let generation = generation.map { String($0) } ?? "none"
+        let line = "[attach-trace] size_report cols=\(cols) rows=\(rows) accepted=\(accepted ? 1 : 0) gen=\(generation) trace=\(traceID)\n"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("attach-trace.log")
+        if let data = line.data(using: .utf8) {
+            if let h = try? FileHandle(forWritingTo: url) {
+                h.seekToEndOfFile(); h.write(data); try? h.close()
+            } else {
+                try? data.write(to: url)
+            }
+        }
+        os_signpost(.event, log: Self.log, name: "size_report", signpostID: signpostID,
+            "cols=%d rows=%d accepted=%{public}d trace_id=%{public}s generation=%{public}s",
+            cols, rows, accepted ? 1 : 0, traceID, generation)
+    }
+
+    /// DIAGNOSTIC (throwaway, not for commit): the fallback opened the
+    /// session because no genuine size report arrived within the grace
+    /// window. Distinguishes the fallback start from a real-report start.
+    func emitFallbackStart() {
+        let line = "[attach-trace] fallback_start cols=80 rows=24 trace=\(traceID)\n"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("attach-trace.log")
+        if let data = line.data(using: .utf8) {
+            if let h = try? FileHandle(forWritingTo: url) {
+                h.seekToEndOfFile(); h.write(data); try? h.close()
+            } else {
+                try? data.write(to: url)
+            }
+        }
+        os_signpost(.event, log: Self.log, name: "fallback_start", signpostID: signpostID,
+            "trace_id=%{public}s", traceID)
+    }
+
+    /// DIAGNOSTIC (throwaway, not for commit): a free-form line with the
+    /// fallback's arm lifecycle — entered, guarded out (with the status at
+    /// that moment), scheduled, fired, or cancelled (with the cancelling
+    /// site). Same container file as the other diagnostics.
+    func emitDiagnostic(_ note: String) {
+        let line = "[attach-trace] \(note) trace=\(traceID)\n"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("attach-trace.log")
+        if let data = line.data(using: .utf8) {
+            if let h = try? FileHandle(forWritingTo: url) {
+                h.seekToEndOfFile(); h.write(data); try? h.close()
+            } else {
+                try? data.write(to: url)
+            }
+        }
+        os_signpost(.event, log: Self.log, name: "attach_diagnostic", signpostID: signpostID,
+            "%{public}s trace_id=%{public}s", note, traceID)
     }
 
     var recordedPhases: Set<Phase> { state.emittedPhases }

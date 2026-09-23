@@ -3149,3 +3149,142 @@ struct TerminalByteFeedTests {
         #expect(surface.chunks.isEmpty)
     }
 }
+
+// MARK: - Device fallback (#device: surfaces that never report a grid)
+
+extension AttachTerminalStoreTests {
+    /// The device regression: a Ghostty surface that mounts but never
+    /// reports a valid grid left the pipeline in `.waitingForSize` forever —
+    /// a blank terminal with no attach ever started. The fallback opens the
+    /// PTY at the default geometry after the grace window.
+    @Test(.timeLimit(.minutes(1)))
+    func fallbackOpensTheAttachWhenNoSizeReportArrives() async throws {
+        let transport = ScriptedTransport()
+        let (store, captured) = makeStore(transport: transport)
+
+        // The surface appeared but NEVER reports a size.
+        store.terminalViewDidAppear()
+
+        // After the grace window the pipeline opens at the default
+        // geometry, not `.waitingForSize` forever.
+        try await waitUntil("fallback should open the attach") {
+            await transport.hasLiveAttachSession
+        }
+        #expect(await store.status != .waitingForSize)
+        let request = await transport.attachRequests.last
+        #expect(request?.cols == 80)
+        #expect(request?.rows == 24)
+
+        // The remote paints; the surface is live and the feed receives.
+        try await paint(transport, Data("\u{1B}[2Jdevice".utf8))
+        try await waitUntil("store should go live on the fallback attach") {
+            store.status == .live
+        }
+        try await waitUntil("feed should carry the paint") {
+            await captured.text.contains("device")
+        }
+    }
+
+    /// A genuine first size report beats the fallback: no request opens
+    /// before the grace window when the surface reported normally.
+    @Test func realSizeReportBeatsTheFallback() async throws {
+        let transport = ScriptedTransport()
+        let (store, _) = makeStore(transport: transport)
+
+        store.terminalViewDidAppear()
+        // The surface reports a real grid immediately.
+        store.viewDidResize(cols: 120, rows: 40)
+
+        try await waitUntil("attach should open at the real geometry") {
+            await transport.hasLiveAttachSession
+        }
+        let request = await transport.attachRequests.last
+        #expect(request?.cols == 120)
+        #expect(request?.rows == 40)
+    }
+
+    /// When the fallback opened the PTY at the default geometry, the first
+    /// genuine size report rides the LIVE session as a window-change —
+    /// never a restart.
+    @Test(.timeLimit(.minutes(1)))
+    func lateRealSizeRidesTheFallbackSessionInBand() async throws {
+        let transport = ScriptedTransport()
+        let (store, _) = makeStore(transport: transport)
+
+        store.terminalViewDidAppear()
+        try await waitUntil("fallback attach open") { await transport.hasLiveAttachSession }
+        try await paint(transport, Data("\u{1B}[2JTUI".utf8))
+        try await waitUntil("live") { store.status == .live }
+
+        store.viewDidResize(cols: 100, rows: 35)
+        // The session continues (no new request, no ended status).
+        let requestCount = await transport.attachRequests.count
+        #expect(requestCount == 1)
+        try await waitUntil("resize reached the live session") {
+            await transport.attachInputs.contains(
+                where: { input in
+                    if case .resize(let cols, let rows) = input {
+                        return cols == 100 && rows == 35
+                    }
+                    return false
+                })
+        }
+    }
+}
+
+// MARK: - Device regression: the fallback re-arms once after a failed open
+
+extension AttachTerminalStoreTests {
+    /// The device's grace-moment transport state can fail the first
+    /// fallback open (the run ends .ended without ever going live). The
+    /// fallback re-arms ONCE: the second grace re-runs the attach, and the
+    /// pipeline goes live once the transport is available.
+    @Test(.timeLimit(.minutes(1)))
+    func fallbackReArmsOnceAfterAFailedOpen() async throws {
+        let transport = ScriptedTransport()
+        let captured = Captured()
+        // A runner that throws on the FIRST attempt (the transport was not
+        // ready at the grace moment) and attaches on the second.
+        let box = FailOnceBox()
+        let store = AttachTerminalStore(target: "w1:p1") { request, handler in
+            if await box.consumeFailure() {
+                throw TransportError.sshUnreachable(detail: "not ready at grace")
+            }
+            let session = try await transport.attachTerminal(request)
+            try await handler.runEndingSession(session)
+        }
+        store.feed.attach(captured)
+
+        store.terminalViewDidAppear()
+        // First grace: the fallback opens and the run fails immediately —
+        // the pipeline lands .ended without ever going live.
+        try await waitUntil("the failed open lands .ended") {
+            if case .ended = store.status { return true }
+            return false
+        }
+        // The re-armed second grace re-runs the attach — the transport is
+        // available now — and the pipeline goes live on the remote paint.
+        try await waitUntil("re-armed attach opens") {
+            await transport.hasLiveAttachSession
+        }
+        try await paint(transport, Data("\u{1B}[2Jreborn".utf8))
+        try await waitUntil("store should go live on the re-armed attach") {
+            store.status == .live
+        }
+        try await waitUntil("feed should carry the paint") {
+            await captured.text.contains("reborn")
+        }
+        let requestCount = await transport.attachRequests.count
+        #expect(requestCount == 1)
+    }
+}
+
+/// One-shot failure gate for the re-arm test.
+actor FailOnceBox {
+    private var failed = false
+    func consumeFailure() -> Bool {
+        if failed { return false }
+        failed = true
+        return true
+    }
+}

@@ -30,6 +30,13 @@ struct ShellTerminalView: View {
 
     private var terminalScreen: TerminalScreenView {
         var screen = TerminalScreenView(feed: store.terminalFeed)
+        screen.onSurfaceAttached = {
+            // The surface REALLY mounted — arm the pipeline's bounded
+            // default-geometry fallback on the device-proven signal (the
+            // surface attach), so a device whose Ghostty surface never
+            // reports a grid still opens its PTY.
+            store.terminalViewDidAppear()
+        }
         screen.onSizeChanged = { cols, rows in
             store.viewDidResize(cols: cols, rows: rows)
         }
@@ -244,7 +251,10 @@ struct ShellTerminalView: View {
                 else { return }
                 setKeyboardMode(.text)
             }
-            .onAppear { store.rejoin() }
+            .onAppear {
+                store.rejoin()
+                store.terminalViewDidAppear()
+            }
             .onDisappear { store.leave() }
     }
 

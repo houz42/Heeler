@@ -176,6 +176,13 @@ struct AgentTerminalView: View {
     /// Whether this screen's presentations gate the window's keyboard
     /// commands; defaults to `isOnStage`.
     private let isCommandOnStage: () -> Bool
+    /// Retains the terminal's UIKit surface across the chat↔terminal toggle
+    /// (the detail keeps chat as its default surface): the surface mounts once
+    /// — on the user's terminal-icon tap — and every later toggle returns the
+    /// SAME laid-out surface, so the grid, scrollback, and the size reports
+    /// the pipeline opened on are never lost. Owned by the detail; nil keeps
+    /// the stock make-and-discard behavior. Ported from upstream.
+    private let surfaceRetention: TerminalSurfaceRetention?
     /// Opens another Agent from the terminal's switcher strip. The owner moves
     /// the selection, exactly as a tap in the Agent list would.
     private let onSwitch: (ConsoleAgent.ID) -> Void
@@ -277,6 +284,7 @@ struct AgentTerminalView: View {
         openTerminal: @escaping () -> Void = {},
         composer: AgentComposerStore,
         attachStore: AgentAttachStore? = nil,
+        retention: TerminalSurfaceRetention? = nil,
         interactionProbe: AgentTerminalInteractionProbe? = nil
     ) {
         self.agent = agent
@@ -298,6 +306,7 @@ struct AgentTerminalView: View {
         self.openTerminal = openTerminal
         self.composer = composer
         self.interactionProbe = interactionProbe.map(WeakAgentTerminalInteractionProbe.init)
+        self.surfaceRetention = retention
         _attach = State(
             initialValue: attachStore ?? AgentAttachStore(
                 target: agent.agent.paneID,
@@ -340,11 +349,18 @@ struct AgentTerminalView: View {
 
     private var terminalScreen: TerminalScreenView {
         var screen = TerminalScreenView(feed: attach.terminalFeed)
-        #if DEBUG
+        screen.retention = surfaceRetention
         screen.onSurfaceAttached = {
+            // The surface REALLY mounted — arm the pipeline's bounded
+            // default-geometry fallback here, on the device-proven signal
+            // (the surface attach), so a device whose Ghostty surface never
+            // reports a grid still opens its PTY. The DEBUG trace rides the
+            // same callback.
+            attach.terminalViewDidAppear()
+            #if DEBUG
             attach.terminalSurfaceDidAttach()
+            #endif
         }
-        #endif
         screen.onSizeChanged = { cols, rows in
             attach.viewDidResize(cols: cols, rows: rows)
         }
@@ -682,10 +698,18 @@ struct AgentTerminalView: View {
         .onDisappear {
             interactionProbe?.value?.disconnect()
             messageJump.resetSession()
+            // A preserving leave: surface churn must not tear the pipeline
+            // down, and the stage read at THIS instant is unreliable (it
+            // lags the SwiftUI transaction). The deferred block below reads
+            // the stage AFTER the churn settles — the reliable signal — and
+            // forces a real (non-preserving) teardown for a genuine
+            // departure, so Back/dismiss during the fallback's grace
+            // window cannot leave an offscreen pipeline opening a PTY.
             attach.leave()
             Task { @MainActor in
                 await Task.yield()
                 guard !isOnStage() else { return }
+                attach.leaveForTerminalHandoff()
                 directKeyboardIntent.setWantsKeyboard(false)
                 keyboardControl.dismissKeyboard()
                 usesDirectToolsKeyboard = false
@@ -712,6 +736,13 @@ struct AgentTerminalView: View {
             // consumed any pre-armed token or reclaimed via same-screen intent.
             // Arming again leaves a stale one-shot that can raise a dismissed
             // keyboard on a later replacement.
+        }
+        // The pipeline's bounded default-geometry fallback arm: fires for
+        // every pipeline (initial appearance and every replacement), so a
+        // device whose Ghostty surface never reports a valid grid still
+        // opens its PTY (the first real size report corrects in-band).
+        .onChange(of: attach.terminalID, initial: true) { _, _ in
+            attach.terminalViewDidAppear()
         }
         #if DEBUG
         // A fresh terminal ID means a new Attach pipeline, including a
