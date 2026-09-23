@@ -896,6 +896,26 @@ struct HostDetailRouteSwitchTests {
         var address: String?
     }
 
+    /// The observation harness for the broadcast pin: `onChange` can be
+    /// invoked from any thread, so the flag is lock-guarded like the
+    /// file's other cross-thread sentinels.
+    private final class BroadcastFlag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var fired = false
+
+        func mark() {
+            lock.lock()
+            fired = true
+            lock.unlock()
+        }
+
+        var didFire: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return fired
+        }
+    }
+
     /// The tap's own semantics: any candidate, any time — including the
     /// configured default and rows a probe never marked.
     @Test func tapMakesTheTappedRouteActiveAndReversible() throws {
@@ -1015,7 +1035,10 @@ struct HostDetailRouteSwitchTests {
     /// observation taken on `activeRoute` fires when ANY surface writes
     /// through the shared store — no connection-status change needed to
     /// mask it. This is the mechanism that keeps the list and the
-    /// detail from ever diverging.
+    /// detail from ever diverging. (The observation's onChange fires
+    /// SYNCHRONOUSLY during the write, so a lock-guarded flag is the
+    /// whole harness — no continuation, no timeout timer that could
+    /// outlive the test and double-resume under load.)
     @Test func sharedStoreBroadcastsPreferenceChangesToReaders() async throws {
         let suiteName = "hm-detail-route-switch-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -1026,34 +1049,26 @@ struct HostDetailRouteSwitchTests {
         let shared = HostActiveRouteStore(defaults: defaults)
 
         // A reader (the list card's mark, say) observes the active route.
-        let changes = AsyncStream<Void>.makeStream()
+        let observation = BroadcastFlag()
         withObservationTracking {
             _ = shared.activeRoute(
                 hostID: host.id, candidates: host.candidateAddresses)
         } onChange: {
-            changes.continuation.yield(())
+            observation.mark()
         }
 
-        // A DIFFERENT surface (the detail, say) switches the route.
+        // Sanity: the observation has not fired before the write.
+        #expect(!observation.didFire)
+
+        // A DIFFERENT surface (the detail, say) switches the route. The
+        // observation fires synchronously inside this call — the reader
+        // re-renders from the write alone, with no unrelated state change.
         shared.setActiveRoute(
             "vpn.example", hostID: host.id, candidates: host.candidateAddresses)
 
-        // The observation fired — the reader re-renders from the write
-        // alone, with no unrelated state change.
-        let fired = await withCheckedContinuation { continuation in
-            let task = Task {
-                var iterator = changes.stream.makeAsyncIterator()
-                if await iterator.next() != nil {
-                    continuation.resume(returning: true)
-                }
-            }
-            Task {
-                try? await Task.sleep(for: .seconds(2))
-                task.cancel()
-                continuation.resume(returning: false)
-            }
-        }
-        #expect(fired, "a preference write must re-render readers on its own")
+        #expect(
+            observation.didFire,
+            "a preference write must re-render readers on its own")
         #expect(
             shared.activeRoute(hostID: host.id, candidates: host.candidateAddresses)
                 == "vpn.example")
