@@ -13,10 +13,6 @@ import SwiftUI
 fileprivate enum ChatWash {
     /// The tinted wash behind a user turn's full-width row.
     static func turn(isDark: Bool) -> Double { isDark ? 0.16 : 0.07 }
-    /// The orange wash behind the blocked-agent pending card.
-    static func pending(isDark: Bool) -> Double { isDark ? 0.12 : 0.06 }
-    /// The tinted wash behind the resolved-ask special element.
-    static func resolved(isDark: Bool) -> Double { isDark ? 0.14 : 0.07 }
 }
 
 /// One full-width chat row. Rows are plain (no bubbles, no avatars) — the
@@ -45,7 +41,10 @@ struct ChatRowView: View {
                 ChatResultBody(result: result)
             }
         case .pending(let interaction):
-            ChatPendingRow(interaction: interaction, choose: { _ in })
+            // The plain row renderer (previews) keeps the card
+            // read-only: the real submit seam lives in ChatScreen.
+            ChatInteractionCard(
+                interaction: interaction, submit: { _ in })
         case .notice(_, _, let text, let level):
             // Item 19: the quiet system row — never dropped; the wash
             // strengthens with the level.
@@ -55,7 +54,7 @@ struct ChatRowView: View {
             // plain row renderer (previews) keeps the chip collapsed.
             ChatSpecialSectionRow(section: section)
         case .resolvedAsk(let ask):
-            ChatResolvedAskRow(ask: ask)
+            ChatResolvedAskCard(ask: ask)
         case .image:
             // Handled by the screen (fetch seam + reader); the plain
             // row renderer never sees it.
@@ -330,130 +329,6 @@ struct ChatCollapsibleRow<Content: View>: View {
         .padding(.vertical, 2)
         .opacity(isSubtle ? 0.9 : 1)
     }
-}
-
-/// The blocked-agent affordance: the raw question plus one tappable button
-/// per option. Visible at every detail level — it is the conversation's live
-/// edge.
-struct ChatPendingRow: View {
-    let interaction: PendingInteraction
-    let choose: (String) -> Void
-
-    @Environment(\.colorScheme) private var colorScheme
-    private var isDark: Bool { colorScheme == .dark }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("Waiting for your answer", systemImage: "questionmark.circle")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.orange)
-            ChatBlockText(interaction.question, style: .assistant)
-            if !interaction.options.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(interaction.options, id: \.self) { option in
-                        Button {
-                            choose(option)
-                        } label: {
-                            Text(option)
-                                .font(.subheadline)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 8))
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.primary)
-                        .accessibilityLabel("Answer: \(option)")
-                    }
-                }
-            }
-        }
-        .padding(12)
-        .background(
-            .orange.opacity(ChatWash.pending(isDark: isDark)),
-            in: RoundedRectangle(cornerRadius: 10))
-    }
-}
-
-/// One resolved ask — a compact SPECIAL element at the ask's
-/// anchored position in the flow (question → answer → reply; the
-/// anchor logic in ChatFiltering places it). NOT a chat bubble:
-/// its own glanceable treatment — two compact labeled lines over a
-/// subtle tinted wash: 'Q: <question>' on the LEFT (the agent's
-/// side), 'A: <answer>' RIGHT-ALIGNED (the user's action position)
-/// with the resolved checkmark. Long text CLAMPS (two lines,
-/// ellipsis) — tapping the element toggles the full text
-/// expanded/collapsed, so the summary stays glanceable and the
-/// detail is one tap away. 'You answered: <labels>' when this
-/// device's acknowledged answer won; the honest outcome note
-/// otherwise.
-struct ChatResolvedAskRow: View {
-    let ask: ResolvedAsk
-
-    @Environment(\.colorScheme) private var colorScheme
-    private var isDark: Bool { colorScheme == .dark }
-    /// Tap toggles the clamped Q/A lines to their full text.
-    @State private var isExpanded = false
-
-    /// The collapsed clamp: two lines, ellipsis.
-    private static let collapsedLines = 2
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // Q — the question recap: left, secondary, compact.
-            // Omitted entirely when the question text is unknown
-            // (legacy records): the A line alone is still honest.
-            if let question = questionDisplay, !question.isEmpty {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("Q")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.tint)
-                    Text(question)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(isExpanded ? nil : Self.collapsedLines)
-                        .truncationMode(.tail)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            // A — the answer: right-aligned (the user's action
-            // position), with the resolved checkmark.
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.tint)
-                Text(answerDisplay)
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(isExpanded ? nil : Self.collapsedLines)
-                    .truncationMode(.tail)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity, alignment: .trailing)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(
-            .tint.opacity(ChatWash.resolved(isDark: isDark)),
-            in: RoundedRectangle(cornerRadius: 12))
-        .contentShape(Rectangle())
-        .onTapGesture { withAnimation(.snappy) { isExpanded.toggle() } }
-        .accessibilityElement(children: .combine)
-        .accessibilityHint(
-            isExpanded ? "Tap to collapse" : "Tap to read the full text")
-    }
-
-    /// The Q line's text: the answered question's own text, or nil
-    /// when unknown.
-    private var questionDisplay: String? {
-        guard let question = ask.questionText else { return nil }
-        let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    /// The A line's text: the resolved body ('You answered: …' /
-    /// the honest outcome note).
-    private var answerDisplay: String { ask.body }
 }
 
 
@@ -1120,7 +995,13 @@ private enum ChatRowPreviewFixture {
         let resolvedAsks = [
             ResolvedAsk(
                 id: "r-preview",
-                body: "You answered: Run the tests",
+                questions: [
+                    ResolvedAskQuestion(
+                        id: "q", question: "Run the suite first?",
+                        selectedOptions: [
+                            .init(id: "o0", label: "Run the tests")])
+                ],
+                outcome: .youAnswered,
                 questionText: "Run the suite first?"),
         ]
         return ChatContent(
@@ -1314,7 +1195,10 @@ struct ChatMessageActionsRail: View {
 
 // MARK: - Pending question card (conversation redesign)
 
-private struct OptionFlowLayout: Layout {
+/// Options chip flow (internal): shared by the pending question card
+/// and the Q/A cards — short labels flow compactly, long labels
+/// stack full-width at the call site.
+struct OptionFlowLayout: Layout {
     var spacing: CGFloat = 8
     func sizeThatFits(
         proposal: ProposedViewSize, subviews: Subviews, cache: inout ()
@@ -1357,9 +1241,6 @@ private struct OptionFlowLayout: Layout {
     }
 }
 
-private func optionIsCompact(_ label: String) -> Bool {
-    label.count <= 24 && !label.contains("\n")
-}
 
 /// Ink that clears the ACCENT FILL in both appearances: white on the
 /// dark light-mode accent (#22644D, 7.0:1), the prototype's dark ink
@@ -1378,164 +1259,6 @@ enum ChatAccentInk {
     })
 }
 
-/// The redesigned pending-question card: border + paper + eyebrow with
-/// step dots + question + quiet instruction + adaptive options. Short
-/// labels flow compactly; descriptive labels stack full-width.
-struct AgentPendingQuestionCard: View {
-    let interaction: PendingInteraction
-    /// 1-based current question index.
-    var step: Int
-    var stepCount: Int
-    var isMultiSelect: Bool = false
-    var selectedOptionIds: Set<String> = []
-    var choose: (String) -> Void
-    var confirmMultiSelect: (() -> Void)? = nil
-    /// Back to the previous question (choices preserved by the owner).
-    var back: (() -> Void)? = nil
-    /// Cancel the whole ask (small secondary; the real
-    /// cancelInteraction path — nil hides it honestly).
-    var cancel: (() -> Void)? = nil
-    /// A failed/stale submit or cancel — surfaced HERE; choices are
-    /// retained so the user can retry or Back.
-    var errorMessage: String? = nil
-
-    private var questions: [PendingAskQuestion] {
-        interaction.effectiveQuestions
-    }
-    private var currentQuestion: PendingAskQuestion? {
-        let list = questions
-        guard step >= 1, step <= list.count else { return list.first }
-        return list[step - 1]
-    }
-
-    private var accent: Color {
-        Color.accentColor
-    }
-    /// Ink that clears the ACCENT FILL in both appearances — see
-    /// `ChatAccentInk` (the one production definition, also what the
-    /// contrast regression test resolves).
-    private var onAccentInk: Color {
-        ChatAccentInk.color
-    }
-    /// The selected option's fill: the soft accent wash with PRIMARY
-    /// ink (the prototype's `.option.selected` — background var(--soft),
-    /// never white-on-accent).
-    private var accentWash: Color {
-        Color("AccentWash")
-    }
-    private var cardBorder: Color {
-        Color(red: 0xC4 / 255.0, green: 0xD5 / 255.0, blue: 0xCB / 255.0)
-    }
-    private var optionBorder: Color {
-        Color(red: 0xCA / 255.0, green: 0xD5 / 255.0, blue: 0xCD / 255.0)
-    }
-
-    var body: some View {
-        // Tightened card (refinement): compressed header, gaps, and
-        // question (body sizes unchanged; only chrome whitespace
-        // shrank). Options keep the 44 pt floor.
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 6) {
-                Text("Your input needed · \(step) of \(stepCount)")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(accent)
-                Spacer(minLength: 0)
-                HStack(spacing: 4) {
-                    ForEach(0..<max(stepCount, 1), id: \.self) { index in
-                        Circle()
-                            .fill(index < step ? accent : Color.secondary.opacity(0.25))
-                            .frame(width: 4, height: 4)
-                    }
-                }
-            }
-            Text(currentQuestion?.text ?? interaction.question)
-                .font(.subheadline.weight(.semibold))
-                .fixedSize(horizontal: false, vertical: true)
-            if isMultiSelect {
-                Text("Select one or more, then confirm.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            optionsView
-            if let errorMessage {
-                Label(errorMessage, systemImage: "exclamationmark.triangle")
-                    .font(.caption2)
-                    .foregroundStyle(.red)
-            }
-            if step > 1 || cancel != nil {
-                HStack {
-                    if let back, step > 1 {
-                        Button(action: back) {
-                            Label("Back", systemImage: "chevron.left")
-                                .font(.footnote)
-                        }
-                        .accessibilityLabel("Previous question")
-                    }
-                    Spacer(minLength: 0)
-                    if let cancel {
-                        Button(action: cancel) {
-                            Text("Cancel")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                        .accessibilityLabel("Cancel this question")
-                    }
-                }
-            }
-            if isMultiSelect, let confirmMultiSelect {
-                Button(action: confirmMultiSelect) {
-                    Text("Confirm")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 11)
-                        .background(accent, in: RoundedRectangle(cornerRadius: 9))
-                        .foregroundStyle(onAccentInk)
-                }
-                .disabled(selectedOptionIds.isEmpty)
-                .accessibilityLabel("Confirm answers")
-            }
-        }
-        .padding(12)
-        .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 15))
-        .overlay(RoundedRectangle(cornerRadius: 15).strokeBorder(cardBorder, lineWidth: 1))
-    }
-
-    @ViewBuilder
-    private var optionsView: some View {
-        let options = currentQuestion?.options ?? []
-        if options.allSatisfy({ $0.label.count <= 24 }) {
-            OptionFlowLayout(spacing: 8) {
-                ForEach(options) { option in
-                    optionButton(label: option.label, id: option.id)
-                }
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(options) { option in
-                    optionButton(label: option.label, id: option.id, fullWidth: true)
-                }
-            }
-        }
-    }
-
-    private func optionButton(label: String, id: String, fullWidth: Bool = false) -> some View {
-        let selected = isMultiSelect && selectedOptionIds.contains(id)
-        return Button {
-            choose(id)
-        } label: {
-            Text(label)
-                .font(.subheadline)
-                .multilineTextAlignment(.leading)
-                .padding(.horizontal, 11)
-                .frame(maxWidth: fullWidth ? .infinity : nil, minHeight: 44, alignment: .leading)
-                .background(selected ? accentWash : Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
-                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(selected ? accent : optionBorder, lineWidth: 1))
-                .foregroundStyle(.primary)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Answer: \(label)")
-    }
-}
 
 // MARK: - L1 Work inspector
 

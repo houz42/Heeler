@@ -6,12 +6,11 @@ import Foundation
 // visible at L0–L3 lives here; the SwiftUI rows stay dumb and style whatever
 // `ChatFiltering` hands them.
 
-/// A blocked-agent question the user must answer before the run can continue.
-/// Rendered as the raw question text plus one tappable button per option; an
-/// empty `options` list renders the question alone (free-text answers go
-/// through the composer, not this row).
 /// One question of a pending ask, with the option IDs the answer
 /// payload needs (single-question demos synthesize index ids).
+/// The unanswered card's input shape: options, multi-select, and
+/// whether the producer permits custom ("Other") text — the same
+/// card family the answered record renders from (v3 Q/A card).
 internal struct PendingAskQuestion: Sendable, Equatable, Identifiable {
     struct Option: Sendable, Equatable, Identifiable {
         let id: String
@@ -21,15 +20,19 @@ internal struct PendingAskQuestion: Sendable, Equatable, Identifiable {
     let text: String
     var multi: Bool = false
     var options: [Option] = []
+    /// The producer permits a custom ("Other") free-text answer for
+    /// this question; the card reveals the text input only when true.
+    var allowCustom: Bool = false
 
     init(
         id: String, text: String, multi: Bool = false,
-        options: [Option] = []
+        options: [Option] = [], allowCustom: Bool = false
     ) {
         self.id = id
         self.text = text
         self.multi = multi
         self.options = options
+        self.allowCustom = allowCustom
     }
 }
 
@@ -65,33 +68,216 @@ internal struct PendingInteraction: Sendable, Equatable, Identifiable {
     }
 }
 
-/// One resolved ask, rendered as a quiet block in the transcript flow:
-/// 'You answered: <labels>' when this device's acknowledged answer
-/// won, the honest outcome note otherwise (answered in terminal /
-/// remotely / cancelled / expired). Conversation history, not
-/// chrome — visible at every detail level. PLACEMENT: the block
-/// anchors to its QUESTION'S OWN TURN — the message that POSED the
-/// ask. The ask is an ask CARD (a tool call whose ARGUMENTS carry
-/// the question text — never a plain text message in real
-/// transcripts), so the anchor matches both text blocks and
-/// toolCall argument string-leaves, and the block renders right
-/// after that message, BEFORE the agent's reply that follows it
-/// (the correct order: question → answer → reply), at every
-/// detail level. Arrival time is never used. An ask whose anchor
-/// never matches (legacy records with no question text, or the
-/// asking message outside the visible page) parks after the
-/// transcript's rows, before any pending card.
-internal struct ResolvedAsk: Sendable, Equatable, Identifiable {
+/// One Q/A pair of a resolved ask — the paired-card design's unit.
+/// The card shows Q then A on separate lines; the pair is never split
+/// into separate chat bubbles. Snapshots preserve the producer's
+/// labels/options AT ANSWER TIME, so later catalog changes cannot
+/// rewrite history. Selected option labels render in PRODUCER
+/// order (never serialized with ambiguous punctuation as a single
+/// stored answer).
+internal struct ResolvedAskQuestion: Sendable, Equatable, Identifiable {
+    /// The published option ids (producer order) — part of the
+    /// durable snapshot, so the answer record carries what the user
+    /// actually saw.
     let id: String
-    let body: String
-    /// The answered question's own text — the anchor: the block
-    /// renders after the message containing this text.
+    /// The producer's original question/summary — never an AI
+    /// paraphrase.
+    let question: String
+    /// The selected options, in PRODUCER order: id + the label
+    /// captured at answer time.
+    var selectedOptions: [SelectedOption]
+    /// The user's free-text answer (customText / Other input). A
+    /// free-text-only response renders this as the A line; selection
+    /// plus custom text renders labels then a separate
+    /// "Additional answer" paragraph.
+    var customAnswerText: String?
+    /// The user's explanatory note — SEPARATELY labeled "Note", never
+    /// promoted to a chosen option or merged into the answer text.
+    /// Empty optional notes are omitted.
+    var note: String?
+    /// The per-question outcome the protocol reported, when the
+    /// producer distinguishes per-question outcomes.
+    var outcome: String?
+
+    internal struct SelectedOption: Sendable, Equatable, Identifiable {
+        let id: String
+        let label: String
+    }
+
+    init(
+        id: String, question: String,
+        selectedOptions: [SelectedOption] = [],
+        customAnswerText: String? = nil,
+        note: String? = nil,
+        outcome: String? = nil
+    ) {
+        self.id = id
+        self.question = question
+        self.selectedOptions = selectedOptions
+        self.customAnswerText = customAnswerText
+        self.note = note
+        self.outcome = outcome
+    }
+}
+
+/// One resolved ask interaction — ONE CARD per ask interaction, with
+/// a Q/A pair per question (never split into separate chat bubbles).
+/// Answered and unanswered states share the SAME card family: paper
+/// background, subtle green border, 12pt radius, matching
+/// width/insets, accent eyebrow + footer separator — only the
+/// contents change after acceptance (see ChatInteractionCard).
+/// Conversation history, not chrome — visible at every detail level.
+/// PLACEMENT: the card anchors to its QUESTION'S OWN TURN — the
+/// message that POSED the ask. The ask is an ask CARD (a tool call
+/// whose ARGUMENTS carry the question text — never a plain text
+/// message in real transcripts), so the anchor matches both text
+/// blocks and toolCall argument string-leaves, and the card renders
+/// right after that message, BEFORE the agent's reply that follows it
+/// (the correct order: question → answer → reply), at every detail
+/// level. Arrival time is never used. An ask whose anchor never
+/// matches (legacy records with no question text, or the asking
+/// message outside the visible page) parks after the transcript's
+/// rows, before any pending card.
+internal struct ResolvedAsk: Sendable, Equatable, Identifiable {
+    /// The overall resolution kind — what happened to the ask as a
+    /// whole. `.youAnswered` renders the recorded Q/A pairs;
+    /// everything else renders the question plus the honest outcome
+    /// (answered remotely/in terminal/cancelled/expired/unknown) —
+    /// never unconfirmed choices styled as accepted.
+    enum Outcome: String, Sendable, Equatable {
+        case youAnswered
+        case answeredInTerminal
+        case answeredRemotely
+        case cancelled
+        case expired
+        case settledElsewhere
+
+        /// The honest outcome line for non-answered kinds — shown
+        /// inside the card's answer area, never as accepted-answer
+        /// styling.
+        var outcomeText: String {
+            switch self {
+            case .youAnswered:
+                return "Answered"
+            case .answeredInTerminal:
+                return "Answered in the agent's terminal."
+            case .answeredRemotely:
+                return "Answered from another client."
+            case .cancelled:
+                return "This question was cancelled."
+            case .expired:
+                return "This question expired before it was answered."
+            case .settledElsewhere:
+                return "This question was already answered or cancelled elsewhere."
+            }
+        }
+    }
+
+    let id: String
+    /// The Q/A pairs, one per answered question, in PRODUCER order.
+    /// A `youAnswered` record with no recorded pairs (remote answer
+    /// with missing details) renders "Answer details unavailable."
+    var questions: [ResolvedAskQuestion]
+    /// The overall outcome (per-question outcomes ride the pairs).
+    var outcome: Outcome
+    /// The first question's own text — the anchor: the card renders
+    /// after the message containing this text. (Producer-supplied
+    /// heading/original question, never an AI paraphrase.)
     var questionText: String?
 
-    init(id: String, body: String, questionText: String? = nil) {
+    /// The flat one-line summary ("You answered: …" / the honest
+    /// outcome note) — the anchor tests' row-order probe and the
+    /// search/accessibility path. DISPLAY-ONLY; the structured pairs
+    /// are the record.
+    var body: String {
+        switch outcome {
+        case .youAnswered:
+            let labels = questions.map { question in
+                question.selectedOptions.map(\.label)
+                    + (question.customAnswerText.map { ["\($0)"] } ?? [])
+            }.flatMap { $0 }
+            if labels.isEmpty { return "You answered." }
+            return "You answered: " + labels.joined(separator: " + ")
+        default:
+            return outcome.outcomeText
+        }
+    }
+
+    /// Builds the UI record from the store's durable resolution
+    /// record. A `youAnswered` resolution with NO answer data
+    /// (answered remotely with missing details) keeps an empty
+    /// pair list — the card renders "Answer details unavailable.",
+    /// never fabricated choices.
+    init(id: String, questions: [ResolvedAskQuestion] = [],
+        outcome: Outcome, questionText: String? = nil
+    ) {
         self.id = id
-        self.body = body
+        self.questions = questions
+        self.outcome = outcome
         self.questionText = questionText
+    }
+}
+
+extension ResolvedAsk {
+    /// Maps the store's durable resolution record to the card's UI
+    /// record — the single projection `AgentDetailView.brokerContent`
+    /// uses. All accepted answers read identically regardless of
+    /// origin; provenance stays internal to the record.
+    init(resolution: AgentChatInteractionResolution) {
+        let pairs: [ResolvedAskQuestion] =
+            (resolution.questionAnswers ?? []).map { answer in
+                ResolvedAskQuestion(
+                    id: answer.questionId,
+                    question: answer.question,
+                    selectedOptions: answer.selections.map { selection in
+                        .init(id: selection.optionId, label: selection.label)
+                    },
+                    customAnswerText: answer.customText,
+                    note: answer.note)
+            }
+        // A youAnswered record with no structured pairs may still
+        // carry the legacy flat labels (a v2 archive): surface them as
+        // a single pair so the card renders the captured answer
+        // rather than "details unavailable" — honest to what was
+        // recorded, never reconstructed from prose.
+        let effectivePairs: [ResolvedAskQuestion]
+        if pairs.isEmpty, resolution.kind == .youAnswered {
+            let labels = resolution.answerSummaryLines
+            if !labels.isEmpty {
+                effectivePairs = [
+                    ResolvedAskQuestion(
+                        id: "q",
+                        question: resolution.questionText ?? "",
+                        selectedOptions: labels.enumerated().map {
+                            index, label in
+                            .init(id: "legacy\(index)", label: label)
+                        })
+                ]
+            } else {
+                effectivePairs = pairs
+            }
+        } else {
+            effectivePairs = pairs
+        }
+        self.init(
+            id: resolution.requestId,
+            questions: effectivePairs,
+            outcome: .init(resolution.kind),
+            questionText: resolution.questionText)
+    }
+}
+
+extension ResolvedAsk.Outcome {
+    /// The store's durable kind maps 1:1 onto the UI outcome.
+    init(_ kind: AgentChatInteractionResolution.Kind) {
+        switch kind {
+        case .youAnswered: self = .youAnswered
+        case .answeredInTerminal: self = .answeredInTerminal
+        case .answeredRemotely: self = .answeredRemotely
+        case .cancelled: self = .cancelled
+        case .expired: self = .expired
+        case .settledElsewhere: self = .settledElsewhere
+        }
     }
 }
 

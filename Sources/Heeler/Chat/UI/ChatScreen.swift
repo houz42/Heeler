@@ -109,7 +109,7 @@ struct ChatScreen: View {
         pendingUnsupported: Bool = false,
         authorLabel: String = "",
         attachments: ChatAttachments? = nil,
-        onAskAnswer: ((PendingInteraction, [PendingAskAnswerPayload]) async throws -> Void)? = nil,
+        onAskAnswer: ((PendingInteraction, [ChatInteractionAnswerPayload]) async throws -> Void)? = nil,
         onAskCancel: ((PendingInteraction) async throws -> Void)? = nil,
         imageFetcher: ((String) async throws -> Data)? = nil,
         fetch: RemoteFileFetcher? = nil
@@ -556,103 +556,58 @@ struct ChatScreen: View {
     /// render, choosing does nothing, Cancel hidden — honest). THROWS:
     /// a failed/stale submission RETAINS every choice and surfaces the
     /// error on the card; nothing is silently swallowed.
-    var onAskAnswer: ((PendingInteraction, _ answers: [PendingAskAnswerPayload]) async throws -> Void)? = nil
+    /// The full payload (option ids + custom text + note per
+    /// question) rides `ChatInteractionAnswerPayload`.
+    var onAskAnswer:
+        ((PendingInteraction, _ answers: [ChatInteractionAnswerPayload])
+            async throws -> Void)? = nil
     var onAskCancel: ((PendingInteraction) async throws -> Void)? = nil
+    /// The ask card's external question navigation (keyboard arrows
+    /// / a11y next-previous route through the same state as swipe).
+    @State private var askNavigation = ChatInteractionQuestionNavigation()
+    /// Interactions with a submission in flight: the card swaps to
+    /// the honest "Submitting answers" state until the store's
+    /// authoritative acceptance replaces it with the resolved card.
+    @State private var askSubmittingByRequest: Set<String> = []
     /// The last ask seam failure, rendered on the card; choices stay.
-    @State private var askError: String?
+    @State private var askErrorByRequest: [String: String] = [:]
 
-    /// 1-based step per requestId (a re-ask after resolution starts
-    /// fresh because the id changes).
-    @State private var askStepByRequest: [String: Int] = [:]
-    /// Choices so far per requestId: questionId -> option ids.
-    @State private var askChoices: [String: [String: Set<String>]] = [:]
-
-    /// One built answer payload per answered question.
-    struct PendingAskAnswerPayload {
-        let questionId: String
-        let optionIds: [String]
-    }
-
+    /// The v3 Q/A card: ONE card per ask interaction — unanswered and
+    /// answered share the same family. The card owns its own draft
+    /// state (step, selections, custom texts, notes); this wiring
+    /// supplies only the seams and the acceptance-driven flags.
     @ViewBuilder
     private func askCard(_ interaction: PendingInteraction) -> some View {
-        let questions = interaction.effectiveQuestions
-        let step = askStepByRequest[interaction.id] ?? 1
-        let question = questions[min(step, questions.count) - 1]
-        let choices = askChoices[interaction.id] ?? [:]
-        let selected = choices[question.id] ?? []
-        AgentPendingQuestionCard(
+        ChatInteractionCard(
             interaction: interaction,
-            step: min(step, questions.count),
-            stepCount: questions.count,
-            isMultiSelect: question.multi,
-            selectedOptionIds: selected,
-            choose: { optionId in
-                chooseAskOption(interaction, question: question, optionId: optionId)
+            isSubmitting: askSubmittingByRequest.contains(interaction.id),
+            errorMessage: askErrorByRequest[interaction.id],
+            submit: { payloads in
+                guard let onAskAnswer else { return }
+                askSubmittingByRequest.insert(interaction.id)
+                askErrorByRequest[interaction.id] = nil
+                do {
+                    try await onAskAnswer(interaction, payloads)
+                    // Authoritative acceptance: the store's
+                    // resolution record replaces the card; the
+                    // submitting flag clears with the card itself.
+                } catch {
+                    // Retain every choice; the user re-submits.
+                    askSubmittingByRequest.remove(interaction.id)
+                    askErrorByRequest[interaction.id] =
+                        Self.askErrorText(error, prefix: "Answer failed")
+                }
             },
-            confirmMultiSelect:
-                (question.multi && onAskAnswer != nil)
-                ? { confirmMultiAsk(interaction) } : nil,
-            back: step > 1 ? {
-                askStepByRequest[interaction.id] = step - 1
-            } : nil,
+            errorText: { error in
+                if case AgentChatError.wire(_, let message, _) = error {
+                    return message
+                }
+                return nil
+            },
             cancel: onAskCancel.map { cancel in
-                { Task { @MainActor in
-                    do { try await cancel(interaction) }
-                    catch {
-                        askError = Self.askErrorText(
-                            error, prefix: "Cancel failed")
-                    }
-                } } as () -> Void
+                { try await cancel(interaction) }
             },
-            errorMessage: askError)
-    }
-
-    /// Choosing records the answer; ANY question (single or multi)
-    /// advances — only the LAST question's choice submits the whole
-    /// payload once. Multi-select toggles still submit via Confirm.
-    private func chooseAskOption(
-        _ interaction: PendingInteraction,
-        question: PendingAskQuestion, optionId: String
-    ) {
-        var perQuestion = askChoices[interaction.id] ?? [:]
-        if question.multi {
-            // Multi questions NEVER advance on a toggle (the user may
-            // want more selections); their explicit Confirm both
-            // advances (middle questions) and submits (the last one).
-            var set = perQuestion[question.id] ?? []
-            if set.contains(optionId) { set.remove(optionId) }
-            else { set.insert(optionId) }
-            perQuestion[question.id] = set
-            askChoices[interaction.id] = perQuestion
-        } else {
-            perQuestion[question.id] = [optionId]
-            askChoices[interaction.id] = perQuestion
-            let step = askStepByRequest[interaction.id] ?? 1
-            let questions = interaction.effectiveQuestions
-            if step >= questions.count {
-                submitAsk(interaction)
-            } else {
-                askStepByRequest[interaction.id] = step + 1
-            }
-        }
-    }
-
-    /// A multi question's Confirm: ADVANCES to the next question when
-    /// more remain (choices preserved), SUBMITS the full payload when
-    /// this was the last one. The card's Confirm is disabled until the
-    /// current set is non-empty; earlier steps all recorded.
-    private func confirmMultiAsk(_ interaction: PendingInteraction) {
-        let step = askStepByRequest[interaction.id] ?? 1
-        let questions = interaction.effectiveQuestions
-        guard step >= 1, step <= questions.count else { return }
-        let current = questions[step - 1]
-        guard let set = askChoices[interaction.id]?[current.id], !set.isEmpty
-        else { return }
-        if step >= questions.count {
-            submitAsk(interaction)
-        } else {
-            askStepByRequest[interaction.id] = step + 1
-        }
+            navigation: askNavigation)
     }
 
     /// An ask error's honest copy: the wire message when present (the
@@ -665,30 +620,6 @@ struct ChatScreen: View {
             return "\(prefix): \(message)"
         }
         return "\(prefix): \(error.localizedDescription)"
-    }
-
-    /// The final answer delivery: EVERY question must carry a choice —
-    /// a partial payload is never sent (the caller's Confirm gates the
-    /// last multi question; earlier single-choice steps all recorded).
-    private func submitAsk(_ interaction: PendingInteraction) {
-        guard let onAskAnswer else { return }
-        let perQuestion = askChoices[interaction.id] ?? [:]
-        var payloads: [PendingAskAnswerPayload] = []
-        for question in interaction.effectiveQuestions {
-            guard let ids = perQuestion[question.id], !ids.isEmpty else { return }
-            payloads.append(PendingAskAnswerPayload(
-                questionId: question.id, optionIds: ids.sorted()))
-        }
-        Task { @MainActor in
-            do {
-                try await onAskAnswer(interaction, payloads)
-                askError = nil
-            } catch {
-                // Retain every choice; the user re-submits or Backs.
-                askError = Self.askErrorText(
-                    error, prefix: "Answer failed")
-            }
-        }
     }
 
     /// The message-actions selection (final interaction spec): the one

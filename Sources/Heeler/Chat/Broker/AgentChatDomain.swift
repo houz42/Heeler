@@ -412,19 +412,22 @@ struct AgentChatInteractionsResult: Decodable, Sendable, Equatable {
 }
 
 /// One resolved ask (honest state): the card is gone but the WHY
-/// renders — as a quiet block in the conversation flow. The KIND is
-/// what the app actually knows, never the ambiguous wire `source`
-/// ('remote' means any remote client — this device or another).
+/// renders — as a Q/A card in the conversation flow (v3 paired-card
+/// design: ONE card per ask interaction, one Q/A pair per question).
+/// The KIND is what the app actually knows, never the ambiguous wire
+/// `source` ('remote' means any remote client — this device or
+/// another).
 struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codable {
     /// What happened, from the app's point of view. The wire's
     /// outcome/source pair maps here at capture time; a resolution
-    /// this device recorded itself is `youAnswered` (with labels).
+    /// this device recorded itself is `youAnswered` (with the
+    /// per-question answer records).
     enum Kind: String, Sendable, Equatable, Codable {
         /// THIS device answered and the broker's acknowledgement
-        /// CONFIRMED this client's submission; `labels` carries the
-        /// chosen option LABELS (resolved against the interaction's
-        /// questions at submit time — the wire's `idx:<n>` ids are
-        /// never user-facing).
+        /// CONFIRMED this client's submission; `questionAnswers`
+        /// carries the per-question records (option ids + labels
+        /// resolved against the interaction's questions at submit
+        /// time — the wire's `idx:<n>` ids are never user-facing).
         case youAnswered
         /// Answered at the agent's own terminal.
         case answeredInTerminal
@@ -446,31 +449,90 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
         case settledElsewhere
     }
 
+    /// One question's answer, snapshotted AT ANSWER TIME so later
+    /// catalog changes cannot rewrite history (the v3 typed record
+    /// contract). Producer order preserved: question order follows
+    /// the interaction's `questions`, selected options follow the
+    /// question's published `options` order.
+    struct QuestionAnswer: Sendable, Equatable, Codable {
+        /// The answered question's stable id (producer-supplied).
+        let questionId: String
+        /// The producer's ORIGINAL question/summary text at answer
+        /// time — never an AI paraphrase.
+        let question: String
+        /// The selected options, producer order: wire option id +
+        /// the label captured at answer time.
+        var selections: [Selection]
+        /// The user's free-text answer (customText / Other input).
+        var customText: String?
+        /// The user's explanatory note — SEPARATELY labeled "Note",
+        /// never promoted to a chosen option. Empty notes are
+        /// omitted at capture.
+        var note: String?
+
+        struct Selection: Sendable, Equatable, Codable {
+            let optionId: String
+            let label: String
+        }
+    }
+
     let requestId: String
     let kind: Kind
-    /// The answered question's own text — the transcript anchor.
-    /// The broker's resolved event carries no position, but the ask
-    /// itself is IN the transcript (the agent's turn that posed it);
-    /// the resolved block renders right after the message containing
+    /// The answered ask's FIRST question's own text — the transcript
+    /// anchor. The broker's resolved event carries no position, but
+    /// the ask itself is IN the transcript (the agent's turn that
+    /// posed it); the card renders right after the message containing
     /// its question text, before the agent's reply that follows —
     /// never parked at the transcript's tail (that lands it after
     /// the very reply it produced). Nil (legacy/hand-built records
     /// or an unknown question) parks after the transcript rows as
     /// before.
     var questionText: String?
-    /// The chosen option labels, one line per answered question
-    /// (`youAnswered` only).
-    var labels: [String]?
+    /// The per-question answer records (`youAnswered` only), in the
+    /// interaction's producer order. Empty/nil = this device's
+    /// answer data is unavailable (the card renders "Answer details
+    /// unavailable.", never fabricated choices).
+    var questionAnswers: [QuestionAnswer]?
 
     var id: String { requestId }
 
-    /// The transcript block's body: the quiet resolved record in the
-    /// conversation flow.
+    /// Legacy archive read: the v2 archive carried flat `labels` (one
+    /// line per question, label-joins only). Decoded but never
+    /// re-written — v3 writes always use `questionAnswers`; an old
+    /// archive's flat lines surface through `answerSummaryLines`.
+    private var legacyLabels: [String]?
+
+    private enum CodingKeys: String, CodingKey {
+        case requestId, kind, questionText, labels, questionAnswers
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        requestId = try container.decode(String.self, forKey: .requestId)
+        kind = try container.decode(Kind.self, forKey: .kind)
+        questionText = try container.decodeIfPresent(String.self, forKey: .questionText)
+        questionAnswers = try container.decodeIfPresent([QuestionAnswer].self, forKey: .questionAnswers)
+        // v2 archives carry `labels` only; keep it readable.
+        legacyLabels = try container.decodeIfPresent([String].self, forKey: .labels)
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(requestId, forKey: .requestId)
+        try container.encode(kind, forKey: .kind)
+        try container.encodeIfPresent(questionText, forKey: .questionText)
+        // v3 writes never carry the flat legacy form.
+        try container.encodeIfPresent(questionAnswers, forKey: .questionAnswers)
+    }
+
+    /// The transcript block's body: the honest one-line record for
+    /// surfaces that still render the summary line (search/accessibility).
     var transcriptBody: String {
         switch kind {
         case .youAnswered:
-            if let labels, !labels.isEmpty {
-                return "You answered: " + labels.joined(separator: " + ")
+            let lines = answerSummaryLines
+            if !lines.isEmpty {
+                return "You answered: " + lines.joined(separator: " + ")
             }
             return "You answered."
         case .answeredInTerminal:
@@ -486,13 +548,34 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
         }
     }
 
+    /// One summary label per answered question: its selected labels
+    /// joined, or its custom text — the flat summary the search path
+    /// uses. Producer order.
+    var answerSummaryLines: [String] {
+        if let questionAnswers, !questionAnswers.isEmpty {
+            return questionAnswers.map { answer in
+                let selectionLabels = answer.selections.map(\.label)
+                if !selectionLabels.isEmpty {
+                    return selectionLabels.joined(separator: " + ")
+                }
+                if let customText = answer.customText, !customText.isEmpty {
+                    return customText.replacingOccurrences(
+                        of: "\n", with: " ")
+                }
+                return "Answer details unavailable."
+            }
+        }
+        if let legacyLabels, !legacyLabels.isEmpty { return legacyLabels }
+        return []
+    }
+
     /// Builds the resolution for an answer submitted by THIS device,
     /// resolving option ids to their user-facing labels against the
     /// interaction's questions. An id with no matching option is
     /// dropped, never rendered raw. Only the store's ACKNOWLEDGED
     /// answer path may record this kind — the broadcast event cannot
     /// identify the winner, so an unconfirmed submit never claims it.
-    /// The FIRST question's text anchors the transcript block.
+    /// The FIRST question's text anchors the transcript card.
     init(
         answered interaction: AgentChatInteraction,
         answers: [AgentChatAnswer]
@@ -501,7 +584,7 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
             requestId: interaction.requestId,
             kind: .youAnswered,
             questionText: interaction.questions.first?.text,
-            labels: Self.answeredLabels(
+            questionAnswers: Self.questionAnswers(
                 interaction: interaction, answers: answers))
     }
 
@@ -511,7 +594,7 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
     /// honest pre-ack record is NEUTRAL: 'Answered remotely.' Only
     /// this store's own accepted acknowledgement upgrades the record
     /// to `youAnswered` (the store's ack path replaces this entry);
-    /// a refused/uncertain submit never claims labels. The store
+    /// a refused/uncertain submit never claims answers. The store
     /// supplies the question text (from the interaction it held)
     /// when it has one.
     init(
@@ -532,7 +615,7 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
         }
         self.init(
             requestId: requestId, kind: kind,
-            questionText: questionText, labels: nil)
+            questionText: questionText, questionAnswers: nil)
     }
 
     /// The stale-answer self-heal: the broker refused the answer
@@ -547,7 +630,7 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
             requestId: staleRequestId,
             kind: generationInvalidated ? .expired : .settledElsewhere,
             questionText: questionText,
-            labels: nil)
+            questionAnswers: nil)
     }
 
     init(
@@ -557,25 +640,71 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
         self.requestId = requestId
         self.kind = kind
         self.questionText = questionText
-        self.labels = labels
+        self.questionAnswers = nil
+        self.legacyLabels = labels
     }
 
-    private static func answeredLabels(
+    /// Direct structured init (the v3 record contract).
+    init(
+        requestId: String, kind: Kind,
+        questionText: String? = nil,
+        questionAnswers: [QuestionAnswer]?
+    ) {
+        self.requestId = requestId
+        self.kind = kind
+        self.questionText = questionText
+        self.questionAnswers = questionAnswers
+        self.legacyLabels = nil
+    }
+
+    /// The per-question answer records in the INTERACTION's producer
+    /// order (not the answers' arrival order): questionId, original
+    /// question text, selected option ids + captured labels (in the
+    /// question's published option order), customText, note.
+    /// Questionless answers (an unknown questionId) are dropped,
+    /// never rendered raw.
+    private static func questionAnswers(
         interaction: AgentChatInteraction, answers: [AgentChatAnswer]
-    ) -> [String]? {
-        var lines: [String] = []
-        for answer in answers {
-            // Match the answer's question, then its options, by the
-            // stable ids the interaction published.
-            guard let question = interaction.questions.first(where: {
-                $0.id == answer.questionId
+    ) -> [QuestionAnswer]? {
+        var byQuestion: [QuestionAnswer] = []
+        for question in interaction.questions {
+            guard let answer = answers.first(where: {
+                $0.questionId == question.id
             }) else { continue }
-            let labels = answer.optionIds.compactMap { optionId in
-                question.options.first(where: { $0.id == optionId })?.label
+            // Producer order: walk the question's published options
+            // and keep the selected ones — the answer's own option
+            // order never leaks through.
+            let selections = question.options.compactMap { option in
+                answer.optionIds.contains(option.id)
+                    ? QuestionAnswer.Selection(
+                        optionId: option.id, label: option.label)
+                    : nil
             }
-            if !labels.isEmpty { lines.append(labels.joined(separator: " + ")) }
+            let customText = Self.emptyToNil(
+                answer.customText?
+                    .trimmingCharacters(in: .whitespacesAndNewlines))
+            let note = Self.emptyToNil(
+                answer.note?.trimmingCharacters(in: .whitespacesAndNewlines))
+            // Whitespace-only custom text/note is EMPTY: omitted —
+            // empty optional notes never render a "Note" line.
+            // A question with NO recorded data at all (no selections,
+            // no custom text) is omitted — the answer record never
+            // fabricates an empty pair.
+            if selections.isEmpty && customText == nil { continue }
+            byQuestion.append(QuestionAnswer(
+                questionId: question.id,
+                question: question.text,
+                selections: selections,
+                customText: customText,
+                note: note))
         }
-        return lines.isEmpty ? nil : lines
+        return byQuestion.isEmpty ? nil : byQuestion
+    }
+
+    /// An empty (or whitespace-only) trimmed string reads as nil.
+    private static func emptyToNil(_ text: String?) -> String? {
+        guard let text, !text.isEmpty else { return nil }
+        return text
     }
 }
 
