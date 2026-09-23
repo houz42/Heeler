@@ -481,7 +481,8 @@ struct AgentDetailView: View {
                                 AgentChatAnswer(
                                     questionId: payload.questionId,
                                     optionIds: payload.optionIds,
-                                    customText: nil, note: nil)
+                                    customText: payload.customText,
+                                    note: payload.note)
                             })
                     } catch let error as AgentChatError {
                         // The broker's real stale codes (ask.ts
@@ -635,26 +636,25 @@ struct AgentDetailView: View {
                         options: question.options.map { option in
                             PendingAskQuestion.Option(
                                 id: option.id, label: option.label)
-                        })
+                        },
+                        allowCustom: question.allowCustom)
                 })
         } ?? []
-        // Resolved asks render as quiet blocks in the transcript flow:
-        // 'You answered: <labels>' (only when this store's own
-        // acknowledgement confirmed the win) or the honest outcome note
-        // (answered in terminal / answered remotely — the broadcast
-        // cannot identify the winner — / cancelled / expired /
-        // settled elsewhere). They persist across reconnects and
-        // reopen (the store keeps them for the agent's chat life).
-        // PLACEMENT: each block anchors to its question's own text
-        // — right after the message that posed the question, BEFORE
-        // the agent's reply that follows it; unanchored records park
-        // after the transcript's rows, before any pending card.
+        // Resolved asks render as Q/A cards in the transcript flow —
+        // one card per interaction, one Q/A pair per question (the
+        // v3 paired-card design). The projection is the single
+        // `ResolvedAsk(resolution:)` factory: structured records for
+        // this device's accepted answers, the honest outcome card for
+        // terminal/remote/cancelled/expired/settled — identical
+        // styling for all accepted answers; provenance is internal.
+        // They persist across reconnects and reopen (the store keeps
+        // them for the agent's chat life). PLACEMENT: each card
+        // anchors to its question's own text — right after the
+        // message that posed the question, BEFORE the agent's reply
+        // that follows it; unanchored records park after the
+        // transcript's rows, before any pending card.
         content.resolvedAsks = brokerChat?.interactionResolutions.map {
-            resolution in
-            ResolvedAsk(
-                id: resolution.requestId,
-                body: resolution.transcriptBody,
-                questionText: resolution.questionText)
+            ResolvedAsk(resolution: $0)
         } ?? []
         return content
     }

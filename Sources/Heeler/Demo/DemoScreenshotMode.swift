@@ -46,6 +46,13 @@
             /// accent-bearing pending-card capture surface (Confirm
             /// button + selected-option chip). v2 accent proofs.
             case chatPendingAsk
+            /// The chat surface with the v3 Q/A cards: an unanswered
+            /// TWO-question ask (multi-select + single-choice-with-
+            /// custom), answered cards covering every answer shape
+            /// (labels, free text, selection+note, long collapsed
+            /// text, cancelled/expired outcomes) — the paired-card
+            /// capture surface (v3 Q/A proofs).
+            case chatQACards
             /// The chat surface with special sections in the transcript
             /// (a `<system-notice>` and an `<irc>` block) — the
             /// v2 special-sections capture surface. The initial detail
@@ -62,9 +69,9 @@
             /// surface (v3 table proofs).
             case chatTables
 
-
             static func fromArguments() -> Route {
                 let arguments = ProcessInfo.processInfo.arguments
+                if arguments.contains(chatQACardsLaunchArgument) { return .chatQACards }
                 if arguments.contains(chatBubblesLaunchArgument) { return .chatBubbles }
                 if arguments.contains(chatTablesLaunchArgument) { return .chatTables }
                 if arguments.contains(chatSpecialSectionsLaunchArgument) { return .chatSpecialSections }
@@ -72,6 +79,7 @@
                 if arguments.contains(chatPendingAskLaunchArgument) { return .chatPendingAsk }
                 if arguments.contains(hostListLaunchArgument) { return .hostList }
                 if arguments.contains(hostDetailProbingLaunchArgument) { return .hostDetailProbing }
+                if arguments.contains(hostDetailPickLaunchArgument) { return .hostDetailPick }
                 if arguments.contains(hostFormLaunchArgument) { return .hostForm }
                 return .none
             }
@@ -84,6 +92,7 @@
         static let chatPendingAskLaunchArgument = "--demo-chat-pending-ask"
         static let chatSpecialSectionsLaunchArgument = "--demo-chat-special-sections"
         static let hostDetailPickLaunchArgument = "--demo-host-detail-pick"
+        static let chatQACardsLaunchArgument = "--demo-chat-qa-cards"
         static let chatBubblesLaunchArgument = "--demo-chat-bubbles"
         static let chatTablesLaunchArgument = "--demo-chat-tables"
 
@@ -190,6 +199,8 @@
                 multipathDetail(midProbe: false)
             case .chatPendingAsk:
                 chatPendingAskSurface
+            case .chatQACards:
+                chatQACardsSurface
             case .chatSpecialSections:
                 chatSpecialSectionsSurface
             }
@@ -280,6 +291,150 @@
                             ])
                     ]),
                 initialLevel: .l0,
+                changeLevel: { _, _ in },
+                deliver: { _ in },
+                authorLabel: "Meadow · omp",
+                onAskAnswer: { _, _ in },
+                onAskCancel: { _ in })
+        }
+
+        /// The v3 Q/A-card capture surface: ChatScreen with BOTH card
+        /// states of the SAME family — an unanswered TWO-question ask
+        /// (multi-select then single-choice-with-custom) at the live
+        /// edge, and answered cards anchored in the transcript covering
+        /// every answer shape the design names: producer-ordered label
+        /// chips, free-text-only, selection plus note, a long answer
+        /// collapsed to one line (tap to expand), and the honest
+        /// non-answered outcomes (cancelled / answered remotely with
+        /// missing details). The onAsk seams are wired so the proof
+        /// suite can REALLY select, type custom text, submit, swipe
+        /// between questions, and tap to expand — no backend.
+        private var chatQACardsSurface: some View {
+            ChatScreen(
+                paneID: "demo:qa-cards",
+                agentName: "ios-polish",
+                state: .blocked,
+                content: ChatContent(
+                    messages: [
+                        ChatMessage(role: .assistant, blocks: [
+                            .text(
+                                """
+                                The export refactor is ready for a decision. \
+                                Two questions below need your call before I can \
+                                continue with the release prep.
+                                """),
+                        ]),
+                        // The answered multi-question card: anchored to
+                        // the turn that posed it (question → answer →
+                        // reply order).
+                        ChatMessage(role: .assistant, blocks: [
+                            .text(
+                                """
+                                What should the export include for the \
+                                review bundle? Pick the artifacts and, if you \
+                                want footage, note the exact window.
+                                """),
+                        ]),
+                        // (the resolved cards anchor by questionText)
+                        ChatMessage(role: .assistant, blocks: [
+                            .text(
+                                """
+                                Sounds good — the export now carries the \
+                                video and the validation report with your \
+                                ten-second window. Continuing with the \
+                                release prep.
+                                """),
+                        ]),
+                    ],
+                    pending: [
+                        PendingInteraction(
+                            id: "demo-qa-ask",
+                            question: "",
+                            options: [],
+                            questions: [
+                                PendingAskQuestion(
+                                    id: "q0",
+                                    text: "Which checks should run before the retry lands?",
+                                    multi: true,
+                                    options: [
+                                        .init(id: "o0", label: "Unit suite"),
+                                        .init(id: "o1", label: "UI smoke"),
+                                        .init(id: "o2", label: "Device build"),
+                                    ]),
+                                PendingAskQuestion(
+                                    id: "q1",
+                                    text: "Who reviews the pull request?",
+                                    options: [
+                                        .init(id: "o0", label: "You"),
+                                        .init(id: "o1", label: "Me"),
+                                        .init(id: "o2", label: "Both of us"),
+                                    ],
+                                    allowCustom: true),
+                            ]),
+                    ],
+                    resolvedAsks: [
+                        // Answered, multi-question with different answer
+                        // shapes: labels + note, then free text.
+                        ResolvedAsk(
+                            id: "demo-qa-answered",
+                            questions: [
+                                ResolvedAskQuestion(
+                                    id: "q0",
+                                    question: "What should the export include?",
+                                    selectedOptions: [
+                                        .init(id: "o0", label: "Video"),
+                                        .init(
+                                            id: "o1",
+                                            label: "Validation report"),
+                                    ],
+                                    note: "Include the first ten seconds only."),
+                                ResolvedAskQuestion(
+                                    id: "q1",
+                                    question: "Any custom export options?",
+                                    customAnswerText:
+                                        "I'll take it after lunch"),
+                            ],
+                            outcome: .youAnswered,
+                            questionText:
+                                "What should the export include for the review bundle?"),
+                        // Cancelled: honest outcome, no accepted styling.
+                        ResolvedAsk(
+                            id: "demo-qa-cancelled",
+                            questions: [],
+                            outcome: .cancelled,
+                            questionText: "Ship the hotfix tonight?"),
+                        // Answered remotely with missing details: the
+                        // honest placeholder, never fabricated choices.
+                        ResolvedAsk(
+                            id: "demo-qa-remote-missing",
+                            questions: [],
+                            outcome: .answeredRemotely,
+                            questionText: "Bump the dependency to v2?"),
+                        // Long answer collapsed to ONE ellipsized line;
+                        // tap expands the full text + note.
+                        ResolvedAsk(
+                            id: "demo-qa-long",
+                            questions: [
+                                ResolvedAskQuestion(
+                                    id: "q0",
+                                    question: "Summarize the rollout plan for the review.",
+                                    customAnswerText:
+                                        """
+                                        Stage the rollout behind the config \
+                                        flag, ship to the internal track on \
+                                        Monday, watch the retry and payment \
+                                        dashboards for two full days, then \
+                                        widen to 50% of production traffic \
+                                        once the error budget is intact, and \
+                                        finally make the flag default-on next \
+                                        Thursday if nothing regresses.
+                                        """,
+                                    note: "Keep the kill switch documented."),
+                            ],
+                            outcome: .youAnswered,
+                            questionText: "Summarize the rollout plan for the review."),
+                    ]),
+                initialLevel: .l1,
                 changeLevel: { _, _ in },
                 deliver: { _ in },
                 authorLabel: "Meadow · omp",

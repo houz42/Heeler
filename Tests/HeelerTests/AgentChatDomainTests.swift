@@ -831,7 +831,7 @@ struct AgentAskTranscriptTests {
         #expect(resolution.kind == .youAnswered)
     }
 
-    @Test("multi-select joins its labels; unknown option ids never render raw")
+    @Test("multi-select joins its labels in PRODUCER order; unknown option ids never render raw")
     func multiSelectAndUnknownIds() {
         let json = #"{"requestId":"r-2","generation":1,"kind":"question","questions":[{"id":"q1","text":"Include what?","multi":true,"options":[{"id":"idx:0","label":"Video"},{"id":"idx:1","label":"Report"},{"id":"idx:2","label":"Frames"}],"allowCustom":false}]}"#
         let interaction = try! JSONDecoder().decode(
@@ -847,9 +847,12 @@ struct AgentAskTranscriptTests {
                     questionId: "qX", optionIds: ["idx:9"],
                     customText: nil, note: nil),
             ])
+        // v3 Q/A card contract: selected labels render in the
+        // QUESTION's published option order — the answer's own
+        // arrival order (["idx:2", "idx:0"]) never leaks through.
         #expect(
             resolution.transcriptBody
-                == "You answered: Frames + Video")
+                == "You answered: Video + Frames")
     }
 
     @Test("a wire 'remote' resolved event maps NEUTRALLY — the broadcast cannot identify the winner")
@@ -894,11 +897,25 @@ struct AgentAskTranscriptTests {
     @Test("a resolution is Equatable/Codable-safe for persistence")
     func kindIsCodable() throws {
         let resolution = AgentChatInteractionResolution(
-            requestId: "r1", kind: .youAnswered, labels: ["Ship it"])
+            requestId: "r1", kind: .youAnswered,
+            questionText: "Ship it?",
+            questionAnswers: [
+                .init(
+                    questionId: "q1", question: "Ship it?",
+                    selections: [.init(optionId: "idx:0", label: "Ship it")],
+                    customText: nil, note: "make it so")
+            ])
         let round = try JSONDecoder().decode(
             AgentChatInteractionResolution.self,
             from: JSONEncoder().encode(resolution))
         #expect(round == resolution)
+        // The v3 typed record contract survives the roundtrip:
+        // per-question id, question text, selected labels, note.
+        #expect(round.questionAnswers?.first?.question == "Ship it?")
+        #expect(
+            round.questionAnswers?.first?.selections.first?.label
+                == "Ship it")
+        #expect(round.questionAnswers?.first?.note == "make it so")
     }
 }
 
@@ -1020,10 +1037,17 @@ struct ChatResolvedAskAnchorTests {
         ChatMessage(role: .assistant, blocks: [.text(text)])
     }
 
-    @Test("the answer block renders between the question and the agent's reply")
+    @Test("the answer card renders between the question and the agent's reply")
     func anchorPlacesBlockBetweenQuestionAndReply() {
         let ask = ResolvedAsk(
-            id: "r-1", body: "You answered: Ship it",
+            id: "r-1",
+            questions: [
+                ResolvedAskQuestion(
+                    id: "q_proof", question: "Ship the v2 ask-history slice?",
+                    selectedOptions: [
+                        .init(id: "o0", label: "Ship it")])
+            ],
+            outcome: .youAnswered,
             questionText: "Ship the v2 ask-history slice?")
         let rows = ChatFiltering.visibleRows(
             messages: [
@@ -1074,7 +1098,15 @@ struct ChatResolvedAskAnchorTests {
             .text("You picked Ship it. Continuing."),
         ])
         let ask = ResolvedAsk(
-            id: "r-1", body: "You answered: Ship it",
+            id: "r-1",
+            questions: [
+                ResolvedAskQuestion(
+                    id: "q_proof",
+                    question: "Ship the v2 ask-history slice?",
+                    selectedOptions: [
+                        .init(id: "o0", label: "Ship it")])
+            ],
+            outcome: .youAnswered,
             questionText: "Ship the v2 ask-history slice?")
         let rows = ChatFiltering.visibleRows(
             messages: [askTurn, reply],
@@ -1098,38 +1130,53 @@ struct ChatResolvedAskAnchorTests {
     @Test("an unanchored ask (no question text) still parks at the tail")
     func unanchoredStillParksAtTail() {
         let anchored = ResolvedAsk(
-            id: "r-1", body: "You answered: Ship it",
-            questionText: "Ship it?")
+            id: "r-1",
+            questions: [
+                ResolvedAskQuestion(
+                    id: "q", question: "Ship it?",
+                    selectedOptions: [.init(id: "o0", label: "Ship it")])
+            ],
+            outcome: .youAnswered, questionText: "Ship it?")
         let unanchored = ResolvedAsk(
-            id: "r-2", body: "The question was cancelled.",
+            id: "r-2", questions: [], outcome: .cancelled,
             questionText: nil)
         let rows = ChatFiltering.visibleRows(
             messages: [
                 message("Ship it? Choose now."),
                 message("Done — shipped."),
             ],
-            toolResults: [], pending: [], resolvedAsks: [anchored, unanchored],
-            level: .l0)
+            toolResults: [], pending: [],
+            resolvedAsks: [anchored, unanchored], level: .l0)
         let order = rows.map { row -> String in
             switch row {
             case .text(_, _, _, let text):
                 return "text:\(text.prefix(12))"
-            case .resolvedAsk(let ask): return "ask:\(ask.body)"
-            default: return "other"
+            case .resolvedAsk(let ask):
+                return "ask:\(ask.outcome == .youAnswered ? ask.body : ask.outcome.rawValue)"
+            default:
+                return "other"
             }
         }
+        // The answered card anchors after its question; the
+        // questionless cancelled record parks at the tail.
         #expect(order == [
             "text:Ship it? Cho",
             "ask:You answered: Ship it",
             "text:Done — shipp",
-            "ask:The question was cancelled.",
+            "ask:cancelled",
         ])
     }
 
     @Test("an ask whose question is outside the visible page parks at the tail")
     func anchorOutsidePageParks() {
         let ask = ResolvedAsk(
-            id: "r-1", body: "You answered: Ship it",
+            id: "r-1",
+            questions: [
+                ResolvedAskQuestion(
+                    id: "q", question: "Question never shown in this page?",
+                    selectedOptions: [.init(id: "o0", label: "Ship it")])
+            ],
+            outcome: .youAnswered,
             questionText: "Question never shown in this page?")
         let rows = ChatFiltering.visibleRows(
             messages: [message("Unrelated later turn.")],
@@ -1201,13 +1248,25 @@ struct ChatResolvedAskRowTests {
         ChatMessage(role: role, blocks: [.text(text)])
     }
 
-    @Test("the resolved block renders at every detail level")
+    /// The structured youAnswered fixture used by the placement tests:
+    /// one Q/A pair with a selected label.
+    private var answeredAsk: ResolvedAsk {
+        ResolvedAsk(
+            id: "r1",
+            questions: [
+                ResolvedAskQuestion(
+                    id: "q", question: "Ship it?",
+                    selectedOptions: [.init(id: "o0", label: "Ship it")])
+            ],
+            outcome: .youAnswered, questionText: "Ship it?")
+    }
+
+    @Test("the resolved card renders at every detail level")
     func rendersAtEveryLevel() {
-        let ask = ResolvedAsk(id: "r1", body: "You answered: Ship it")
         for level in DetailLevel.allCases {
             let rows = ChatFiltering.visibleRows(
                 messages: [message("Earlier turn")], toolResults: [],
-                pending: [], resolvedAsks: [ask], level: level)
+                pending: [], resolvedAsks: [answeredAsk], level: level)
             let askRows = rows.filter {
                 if case .resolvedAsk = $0 { return true } else { return false }
             }
@@ -1215,11 +1274,11 @@ struct ChatResolvedAskRowTests {
         }
     }
 
-    @Test("resolved blocks park AFTER the transcript, BEFORE any pending card — deterministic, no receipt-time interleave")
+    @Test("resolved cards park AFTER the transcript, BEFORE any pending card — deterministic, no receipt-time interleave")
     func parksAfterTranscriptBeforePending() {
         let asks = [
-            ResolvedAsk(id: "r1", body: "You answered: Ship it"),
-            ResolvedAsk(id: "r2", body: "The question was cancelled."),
+            answeredAsk,
+            ResolvedAsk(id: "r2", questions: [], outcome: .cancelled),
         ]
         let pending = PendingInteraction(
             question: "Proceed?", options: ["yes"])
@@ -1234,25 +1293,25 @@ struct ChatResolvedAskRowTests {
             default: return "other"
             }
         }
-        // Deterministic: transcript rows, then resolved blocks in
+        // Deterministic: transcript rows, then resolved cards in
         // first-record order, then the live edge. Local receipt time
         // is NEVER used to interleave (arrival time proves nothing
-        // about conversation position).
+        // about conversation position). Neither ask anchors (no
+        // question text match), so both park at the tail.
         #expect(order == [
             "text:Earlier turn",
             "ask:You answered: Ship it",
-            "ask:The question was cancelled.",
+            "ask:This question was cancelled.",
             "pending",
         ])
     }
 
     @Test("row id is stable and namespaced (level switching diffs cleanly)")
     func rowIdStable() {
-        let ask = ResolvedAsk(id: "r-uuid-1", body: "You answered: Ship it")
         let rows = ChatFiltering.visibleRows(
             messages: [], toolResults: [], pending: [],
-            resolvedAsks: [ask], level: .l0)
-        #expect(rows.map(\.id) == ["resolved#r-uuid-1"])
+            resolvedAsks: [answeredAsk], level: .l0)
+        #expect(rows.map(\.id) == ["resolved#r1"])
     }
 }
 
@@ -1295,9 +1354,16 @@ struct AgentChatResolutionPersistenceTests {
         await store1.start()
         try await Task.sleep(for: .milliseconds(200))
         store1.recordResolution(AgentChatInteractionResolution(
-            requestId: "r-1", kind: .youAnswered, labels: ["Ship it"]))
+            requestId: "r-1", kind: .youAnswered,
+            questionAnswers: [
+                .init(
+                    questionId: "q1", question: "Ship it?",
+                    selections: [.init(optionId: "o0", label: "Ship it")],
+                    customText: nil, note: nil)
+            ]))
         store1.recordResolution(AgentChatInteractionResolution(
-            requestId: "r-2", kind: .cancelled, labels: nil))
+            requestId: "r-2", kind: .cancelled,
+            questionAnswers: nil))
         #expect(
             store1.interactionResolutions.count == 2,
             "same-store start() keeps resolutions")

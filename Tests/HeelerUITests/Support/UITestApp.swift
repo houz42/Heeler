@@ -46,6 +46,10 @@ enum UITestApp {
         /// The chat surface with a pending multi-select ask (v2 accent
         /// proofs: Confirm + selected-option chip in both appearances).
         case chatPendingAsk
+        /// The chat surface with the v3 Q/A cards (unanswered
+        /// multi-question ask + answered cards of every answer shape)
+        /// — the paired-card capture surface (v3 Q/A proofs).
+        case chatQACards
         /// The chat surface with special sections in the transcript (v2
         /// special-sections proofs: chip / L0 hide / expansion).
         case chatSpecialSections
@@ -74,6 +78,8 @@ enum UITestApp {
                 return ["--demo-screenshots", "--demo-screenshots-settings"]
             case .chatPendingAsk:
                 return ["--demo-screenshots", "--demo-chat-pending-ask"]
+            case .chatQACards:
+                return ["--demo-screenshots", "--demo-chat-qa-cards"]
             case .chatBubbles:
                 return ["--demo-screenshots", "--demo-chat-bubbles"]
             case .chatTables:

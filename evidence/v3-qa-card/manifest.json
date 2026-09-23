@@ -1,0 +1,95 @@
+[
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "BA7D68CB-D0F1-491A-851A-E6230E790FA3",
+        "deviceName" : "iPhone 17",
+        "exportedFileName" : "0A154A5E-75FB-4119-AE0B-A62A76DD411D.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "qa-card-answered-collapsed_0_F1A04FE0-5C38-44D8-BAB4-9F16CCA743E2.png",
+        "timestamp" : 1790156249.304
+      }
+    ],
+    "testIdentifier" : "QACardProofTests/testAnsweredCardsRenderEveryAnswerShape()",
+    "testIdentifierURL" : "test://com.apple.xcode/Heeler/HeelerUITests/QACardProofTests/testAnsweredCardsRenderEveryAnswerShape"
+  },
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "BA7D68CB-D0F1-491A-851A-E6230E790FA3",
+        "deviceName" : "iPhone 17",
+        "exportedFileName" : "24870BEA-77F5-4E89-B67F-363E4BBBB284.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "qa-card-chips-expanded_0_59BE004A-0D9F-48C7-A2B5-22B13C7A53C0.png",
+        "timestamp" : 1790156264.565
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "BA7D68CB-D0F1-491A-851A-E6230E790FA3",
+        "deviceName" : "iPhone 17",
+        "exportedFileName" : "242FDD4E-F59C-45B6-A60C-9166571790B2.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "qa-card-answered-recollapsed_0_7EF4BE0E-7739-4027-9858-D84D45294754.png",
+        "timestamp" : 1790156261.999
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "BA7D68CB-D0F1-491A-851A-E6230E790FA3",
+        "deviceName" : "iPhone 17",
+        "exportedFileName" : "B7E1D33B-7702-4F04-9F3C-EAB6CD3ED757.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "qa-card-answered-expanded_0_B6F6E1FD-0E19-4E6D-B866-E024614AFF0B.png",
+        "timestamp" : 1790156261.542
+      }
+    ],
+    "testIdentifier" : "QACardProofTests/testExpandCollapseFullAnswer()",
+    "testIdentifierURL" : "test://com.apple.xcode/Heeler/HeelerUITests/QACardProofTests/testExpandCollapseFullAnswer"
+  },
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "BA7D68CB-D0F1-491A-851A-E6230E790FA3",
+        "deviceName" : "iPhone 17",
+        "exportedFileName" : "69334EFC-D00F-4C50-9605-9C7839638139.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "qa-card-outcomes_0_ADD25196-C606-4412-BAF6-92894DBAA552.png",
+        "timestamp" : 1790156272.993
+      }
+    ],
+    "testIdentifier" : "QACardProofTests/testHonestOutcomeCardsRender()",
+    "testIdentifierURL" : "test://com.apple.xcode/Heeler/HeelerUITests/QACardProofTests/testHonestOutcomeCardsRender"
+  },
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "BA7D68CB-D0F1-491A-851A-E6230E790FA3",
+        "deviceName" : "iPhone 17",
+        "exportedFileName" : "AE2C0472-CA4E-453B-B325-18DA7F7C4EB8.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "qa-card-swipe-question_0_0F3C8FE7-6448-4152-9206-5D1ED506D673.png",
+        "timestamp" : 1790156285.523
+      }
+    ],
+    "testIdentifier" : "QACardProofTests/testSwipeMovesToSecondQuestion()",
+    "testIdentifierURL" : "test://com.apple.xcode/Heeler/HeelerUITests/QACardProofTests/testSwipeMovesToSecondQuestion"
+  },
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "BA7D68CB-D0F1-491A-851A-E6230E790FA3",
+        "deviceName" : "iPhone 17",
+        "exportedFileName" : "B0089D4D-ACD5-4653-8777-9450692BA934.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "qa-card-unanswered-selected_0_049E912B-A00A-4BF4-97BB-4173730A82F4.png",
+        "timestamp" : 1790156296.717
+      }
+    ],
+    "testIdentifier" : "QACardProofTests/testUnansweredCardRendersAndSelects()",
+    "testIdentifierURL" : "test://com.apple.xcode/Heeler/HeelerUITests/QACardProofTests/testUnansweredCardRendersAndSelects"
+  }
+]
