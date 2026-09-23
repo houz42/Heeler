@@ -376,14 +376,14 @@ enum AgentTree {
 }
 
 /// Fold state for the hierarchical Agents list, persisted per group
-/// identity in the dedicated `dev.houz42.heeler.tree` UserDefaults suite.
+/// identity in the dedicated `dev.houz42.meadow.tree` UserDefaults suite.
 /// Unknown groups default to expanded; folded ids are deliberately
 /// retained when their group disappears so a later return restores the
 /// choice (the same policy as the grouped mode's collapsed Hosts).
 @MainActor
 @Observable
 final class AgentTreeFoldStore {
-    static let suiteName = "dev.houz42.heeler.tree"
+    static let suiteName = "dev.houz42.meadow.tree"
     private static let foldedGroupsKey = "tree.folded-groups"
 
     private(set) var foldedIDs: Set<String>

@@ -81,7 +81,7 @@ def main() -> int:
     # 0. Install + launch in demo mode.
     subprocess.run(["xcrun", "simctl", "install", UDID, APP_PATH], check=True, timeout=300)
     subprocess.run(
-        ["xcrun", "simctl", "launch", UDID, "dev.houz42.heeler", "--demo-screenshots"],
+        ["xcrun", "simctl", "launch", UDID, "dev.houz42.meadow", "--demo-screenshots"],
         check=True, capture_output=True, timeout=60)
     time.sleep(6)  # snapshot convergence
 

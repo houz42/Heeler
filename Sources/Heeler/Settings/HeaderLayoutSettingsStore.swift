@@ -11,7 +11,7 @@ enum HeaderLayoutMode: String, Equatable, Sendable {
     case custom
 }
 
-/// In-Agent header layout persistence in the `dev.houz42.heeler.headerLayout`
+/// In-Agent header layout persistence in the `dev.houz42.meadow.headerLayout`
 /// UserDefaults suite: the `sameAsList`/`custom` mode plus the custom global
 /// layout. The layout itself lives in a nested `AgentRowLayoutStore` under one
 /// fixed Host identity, so the lenient-decode discipline, validation, and the
@@ -20,7 +20,7 @@ enum HeaderLayoutMode: String, Equatable, Sendable {
 @MainActor
 @Observable
 final class HeaderLayoutSettingsStore {
-    static let suiteName = "dev.houz42.heeler.headerLayout"
+    static let suiteName = "dev.houz42.meadow.headerLayout"
     private static let modeKey = "header-layout-mode"
 
     /// The fixed identity the custom layout is stored under in the nested

@@ -12,7 +12,7 @@ import Testing
 @Suite("Chat draft persistence")
 struct ChatDraftPersistenceTests {
     private func makeStore() -> ChatDraftPersistenceStore {
-        let suite = "dev.houz42.heeler.chat.tests.\(UUID().uuidString)"
+        let suite = "dev.houz42.meadow.chat.tests.\(UUID().uuidString)"
         return ChatDraftPersistenceStore(
             defaults: UserDefaults(suiteName: suite) ?? .standard)
     }
