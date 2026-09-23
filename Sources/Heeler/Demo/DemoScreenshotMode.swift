@@ -1254,6 +1254,11 @@
     private struct ChatLifecycleDemoScreen: View {
         @State private var broker = DemoBrokerChatPipe()
         @State private var store: AgentChatStore?
+        /// Drives the send path: tapping Send delivers a plain message
+        /// through the REAL store.send() (echo → ack → send.confirmed →
+        /// history.changed → a streamed reply) — the content-growth
+        /// transition the follow-latest proof exercises.
+        @State private var sendCount = 0
 
         var body: some View {
             Group {
@@ -1267,11 +1272,26 @@
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Refresh") {
-                        // The refresh path: a re-`start()` on the SAME
-                        // store (no teardown) — the transition under
-                        // test. Content exists, so the mount must hold.
-                        Task { await store?.start() }
+                    HStack {
+                        Button("Send") {
+                            // The send path: the REAL store.send() —
+                            // optimistic echo, ack, confirmed record,
+                            // and a streamed reply. Content grows at
+                            // the latest edge while the reader (the
+                            // proof) is following it.
+                            sendCount += 1
+                            Task {
+                                _ = try? await store?.send(
+                                    "Sent message \(sendCount) from the user")
+                            }
+                        }
+                        Button("Refresh") {
+                            // The refresh path: a re-`start()` on the
+                            // SAME store (no teardown) — the transition
+                            // under test. Content exists, so the mount
+                            // must hold.
+                            Task { await store?.start() }
+                        }
                     }
                 }
             }
@@ -1292,7 +1312,6 @@
                 await store.start()
             }
         }
-
 
         /// The SAME projection AgentDetailView uses for .ready —
         /// minimal here (no composer wiring), but the ChatScreen
@@ -1351,6 +1370,15 @@
     private actor DemoBrokerChatPipe: AgentChatBytePipe {
         private var incoming: [Data] = []
         private var waiting: [CheckedContinuation<Data?, any Error>] = []
+        /// Committed records appended by prompt.send — the transcript
+        /// a fresh history.open serves (the store REPLACES its recent
+        /// page on every history.changed, so a static fixture would
+        /// drop the sent message; the record must live in the page).
+        private var committed: [(id: String, role: String, text: String)] = []
+        /// The last watermark the store consumed (each history.open's
+        /// throughSeq): events MUST continue it contiguously — a gap
+        /// is a REOPEN by the reconcile contract.
+        private var lastSeq = 0
 
         func brokerSend(_ text: String) {
             incoming.append(Data((text + "\n").utf8))
@@ -1370,10 +1398,9 @@
         }
 
         private func answerRequests(_ data: Data) {
-            guard let text = String(bytes: data, encoding: .utf8) else {
-                return
-            }
-            let line = text.trimmingCharacters(in: .newlines)
+            guard let frameText = String(bytes: data, encoding: .utf8)
+            else { return }
+            let line = frameText.trimmingCharacters(in: .newlines)
             guard let object = (try? JSONSerialization.jsonObject(
                 with: Data(line.utf8))) as? [String: Any]
             else { return }
@@ -1390,10 +1417,12 @@
             guard let id = object["id"] as? String,
                 let method = object["method"] as? String
             else { return }
-            Task { await respond(id: id, method: method) }
+            let promptText = ((object["params"] as? [String: Any])?["text"]
+                as? String) ?? ""
+            Task { await respond(id: id, method: method, text: promptText) }
         }
 
-        private func respond(id: String, method: String) {
+        private func respond(id: String, method: String, text: String) {
             switch method {
             case "sessions.list":
                 brokerSend(
@@ -1401,7 +1430,39 @@
             case "sessions.subscribe":
                 brokerSend(
                     #"{"type":"response","id":"\#(id)","result":{"subscribed":true}}"#)
+            case "prompt.send":
+                // The send path's real shape: accepted → send.confirmed
+                // (requestKey bound to a committed record id) →
+                // history.changed → a short streamed reply, so content
+                // grows at the latest edge exactly as production. The
+                // committed record is APPENDED to the transcript (the
+                // store's refresh REPLACES its recent page, so the
+                // record must live in history.open's page). Event seqs
+                // MUST continue the page's watermark (throughSeq)
+                // contiguously — a gap is a REOPEN by the reconcile
+                // contract and the store would resync instead of
+                // applying the events.
+                let recordID = "demo-sent-\(id)"
+                committed.append((id: recordID, role: "user", text: text))
+                let requestKey = "demo-key-\(id)"
+                let base = lastSeq
+                brokerSend(
+                    #"{"type":"response","id":"\#(id)","result":{"accepted":true,"requestKey":"\#(requestKey)"}}"#)
+                Task {
+                    try? await Task.sleep(for: .milliseconds(150))
+                    await self.brokerSend(
+                        #"{"type":"event","instanceId":"demo-instance","generation":1,"seq":\#(base + 1),"event":{"type":"send.confirmed","requestKey":"\#(requestKey)","recordId":"\#(recordID)"}}"#)
+                    await self.brokerSend(
+                        #"{"type":"event","instanceId":"demo-instance","generation":1,"seq":\#(base + 2),"event":{"type":"history.changed","revision":"rev-demo"}}"#)
+                    await self.brokerSend(
+                        #"{"type":"event","instanceId":"demo-instance","generation":1,"seq":\#(base + 3),"event":{"type":"message.started","streamId":"demo-stream","author":{"role":"assistant"}}}"#)
+                    await self.brokerSend(
+                        #"{"type":"event","instanceId":"demo-instance","generation":1,"seq":\#(base + 4),"event":{"type":"message.delta","streamId":"demo-stream","blockIndex":0,"blockType":"text","text":"The demo agent's reply lands here."}}"#)
+                    await self.brokerSend(
+                        #"{"type":"event","instanceId":"demo-instance","generation":1,"seq":\#(base + 5),"event":{"type":"message.finished","streamId":"demo-stream"}}"#)
+                }
             case "history.open":
+                lastSeq = 40 + committed.count
                 var items: [String] = []
                 for index in 0..<40 {
                     let role = index % 2 == 0 ? "user" : "assistant"
@@ -1411,8 +1472,12 @@
                     items.append(
                         #"{"kind":"message","id":"demo-rec-\#(index)","author":{"role":"\#(role)"},"createdAt":null,"blocks":[{"type":"text","text":"\#(text)"}]}"#)
                 }
+                for record in committed {
+                    items.append(
+                        #"{"kind":"message","id":"\#(record.id)","author":{"role":"\#(record.role)"},"createdAt":null,"blocks":[{"type":"text","text":"\#(record.text)"}]}"#)
+                }
                 brokerSend(
-                    #"{"type":"response","id":"\#(id)","result":{"sessionId":"demo-session","generation":1,"revision":"rev-demo","throughSeq":40,"items":[\#(items.joined(separator: ","))],"olderCursor":"demo-cursor"}}"#)
+                    #"{"type":"response","id":"\#(id)","result":{"sessionId":"demo-session","generation":1,"revision":"rev-demo","throughSeq":\#(40 + committed.count),"items":[\#(items.joined(separator: ","))],"olderCursor":"demo-cursor"}}"#)
             case "history.before":
                 brokerSend(
                     #"{"type":"response","id":"\#(id)","result":{"sessionId":"demo-session","generation":1,"revision":"rev-demo","throughSeq":0,"items":[{"kind":"message","id":"demo-old-1","author":{"role":"user"},"createdAt":null,"blocks":[{"type":"text","text":"Message -1 from the user"}]},{"kind":"message","id":"demo-old-2","author":{"role":"assistant"},"createdAt":null,"blocks":[{"type":"text","text":"Message -2 from the agent"}]}],"olderCursor":null}}"#)
