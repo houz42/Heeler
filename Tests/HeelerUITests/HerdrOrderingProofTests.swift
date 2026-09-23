@@ -93,19 +93,19 @@ final class HerdrOrderingProofTests: XCTestCase {
         XCTAssertTrue(
             pinnedHeader.waitForExistence(timeout: UITestTimeouts.launch * 2),
             "the seeded pin must render the Pinned section header")
-
         // The pinned row exists twice: once in the section (above) and
-        // once in the canonical rows (below). XCUITest exposes both
-        // buttons; compare their y positions.
-        let pinMatches = app.buttons.matching(
+        // once in the canonical rows (below). The List is lazy, so the
+        // below-the-fold canonical duplicate is not materialized until
+        // the list scrolls — swipe, then count.
+        app.swipeUp(velocity: .fast)
+        let polishQuery = app.buttons.matching(
             NSPredicate(format: "label CONTAINS %@", "Polish the Attach experience"))
         XCTAssertGreaterThanOrEqual(
-            pinMatches.count, 2,
+            polishQuery.count, 2,
             "the pinned row must render in the Pinned section AND the canonical list")
 
-        // The section copy: the header is above the canonical duplicate.
-        let sectionRowY = pinMatches.element(boundBy: 0).frame.minY
-        let canonicalRowY = pinMatches.element(boundBy: 1).frame.minY
+        let sectionRowY = polishQuery.element(boundBy: 0).frame.minY
+        let canonicalRowY = polishQuery.element(boundBy: 1).frame.minY
         XCTAssertLessThan(
             pinnedHeader.frame.minY, sectionRowY,
             "the Pinned header renders above its rows")

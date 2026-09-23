@@ -752,12 +752,12 @@ struct ConsoleView: View {
         }
     }
 
-    /// The canonical rows: the search result minus the pinned
-    /// duplicates, in the chosen order untouched. The pinned section is
-    /// additive.
+    /// The canonical rows (v3 "the canonical list stays herdr-ordered"):
+    /// the FULL chosen-order result, untouched by the Pinned section —
+    /// a pin is a bookmark DUPLICATE above, never a removal or reorder
+    /// down here.
     private var canonicalSectionAgents: [ConsoleAgent] {
-        let pinnedIDs = Set(pinnedSectionAgents.map(\.id))
-        return searchedAgents.filter { !pinnedIDs.contains($0.id) }
+        searchedAgents
     }
 
     /// Groups the (already filtered) result. While searching, matching
