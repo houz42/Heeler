@@ -76,6 +76,15 @@ final class MessageLinksProofTests: XCTestCase {
             "Close must dismiss back to the transcript, position intact")
         XCTAssertFalse(
             app.staticTexts["Local address unavailable"].firstMatch.exists)
+
+        // Review finding 2: dismissal clears the router state, so the
+        // IDENTICAL URL re-triggers the sheet (no stale notice).
+        app.links["http://localhost:4173/preview"].firstMatch.tap()
+        XCTAssertTrue(
+            app.staticTexts["Local address unavailable"].firstMatch
+                .waitForExistence(timeout: UITestTimeouts.standard),
+            "the same localhost link must re-open the sheet after dismissal")
+        app.buttons["Close"].firstMatch.tap()
     }
 
     func testExternalLinkFollowsBrowsePolicyNotLocalSheet() {

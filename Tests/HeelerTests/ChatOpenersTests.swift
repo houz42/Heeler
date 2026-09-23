@@ -538,6 +538,51 @@ struct OpenRouterCoreTests {
         #expect(router.localNotice != nil)
     }
 
+    @Test func loopbackEdgeFormsReviewPins() {
+        // Review finding 1: the trailing-dot root form, the expanded
+        // IPv6 loopback run, and the FALSE positives a prefix match
+        // used to let through.
+        for raw in [
+            "http://localhost.:8080/", "http://app.localhost.:9222",
+            "http://[0:0:0:0:0:0:0:1]:80/", "http://127.0.0.1.:3000",
+        ] {
+            guard case .localAddress = OpenRouter.route(
+                .url(raw), embeddedBrowseAllowed: nil)
+            else {
+                Issue.record("\(raw) must classify as a local address")
+                continue
+            }
+        }
+        // A host that merely STARTS with 127 is an ordinary name —
+        // never blocked.
+        for raw in [
+            "http://127.example.com/x", "http://127.1/x",
+            "http://127.256.0.1/x",
+        ] {
+            guard case .browse = OpenRouter.route(
+                .url(raw), embeddedBrowseAllowed: nil)
+            else {
+                Issue.record("\(raw) must NOT classify as a local address")
+                continue
+            }
+        }
+    }
+
+    @Test func swipeDismissClearsRouterNoticeForRetrigger() throws {
+        // Review finding 2: the sheet's binding writes nil back to
+        // the router on ANY dismissal, so an identical URL re-triggers.
+        let router = OpenRouterCore(
+            allowlist: ChatLinkAllowlistStore(defaults: try makeDefaults()))
+        router.open(.url("http://localhost:4173/preview"))
+        #expect(router.localNotice != nil)
+        // The sheet's set(nil) — what a swipe-down performs.
+        router.dismissLocalNotice()
+        #expect(router.localNotice == nil)
+        // The SAME URL opens again (no stale state left behind).
+        router.open(.url("http://localhost:4173/preview"))
+        #expect(router.localNotice != nil)
+    }
+
 
     @Test func dismissingMarkdownCancelsInflightFetch() async throws {
         let fetcher = RecordingFetcher(files: ["/home/me/README.md": Data("x".utf8)])

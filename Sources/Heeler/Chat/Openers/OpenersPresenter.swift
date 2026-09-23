@@ -25,18 +25,23 @@ struct OpenersPresenter: ViewModifier {
     /// router's read-only `browsing`; nil dismisses).
     @State private var safariLink: PresentedLink?
     /// The loopback-link notice lifted from the router for the sheet's
-    /// item binding (the sheet itself never writes router state except
-    /// through Close).
-    @State private var localNotice: LocalAddressNotice?
+    /// item binding — through a BINDING, not raw state, so ANY
+    /// dismissal (Close button, swipe-down, interactive pop) clears
+    /// the router's state too: an identical URL can then re-trigger.
+    private var localNoticeBinding: Binding<LocalAddressNotice?> {
+        Binding(
+            get: { router.localNotice },
+            set: { newValue in
+                if newValue == nil, router.localNotice != nil {
+                    router.dismissLocalNotice()
+                }
+            }
+        )
+    }
+
 
     func body(content: Content) -> some View {
         content
-            .onChange(of: router.browsing) { _, url in
-                safariLink = url.map { PresentedLink(url: $0) }
-            }
-            .onChange(of: router.localNotice) { _, notice in
-                localNotice = notice
-            }
             .sheet(item: $safariLink) { link in
                 SafariView(url: link.url)
                     .ignoresSafeArea(edges: .bottom)
@@ -49,7 +54,7 @@ struct OpenersPresenter: ViewModifier {
                     target: target, fetch: router.fetch, router: router)
                     .presentationDetents([.medium])
             }
-            .sheet(item: $localNotice) { notice in
+            .sheet(item: localNoticeBinding) { notice in
                 LocalAddressUnavailableSheet(
                     notice: notice,
                     close: { router.dismissLocalNotice() })

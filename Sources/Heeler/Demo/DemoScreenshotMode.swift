@@ -911,38 +911,6 @@
                 toolResults: [todoResult, spawnResult])
         }
 
-        /// The v3 message-links capture surface: one assistant article
-        /// carrying an external link (tap follows the normal
-        /// embedded-vs-ask browse policy) and one localhost link (tap
-        /// presents the honest "Local address unavailable" sheet with
-        /// the originating host's identity — the demo Host, never a
-        /// guess). Read-only deliver so captures are purely visual;
-        /// the tap flows are the real LinkifiedChatRow → router paths.
-        private var chatMessageLinksSurface: some View {
-            ChatScreen(
-                paneID: "demo:message-links",
-                agentName: "checkout",
-                state: .idle,
-                content: ChatContent(
-                    messages: [
-                        ChatMessage(role: .assistant, blocks: [
-                            .text(
-                                """
-                                The deploy finished. Full run report: \
-                                https://build.studio.example/runs/9412
-
-                                The preview also came up on the dev \
-                                box: http://localhost:4173/preview
-                                """),
-                        ]),
-                    ]),
-                initialLevel: .l1,
-                changeLevel: { _, _ in },
-                deliver: { _ in },
-                authorLabel: "Meadow · omp",
-                hostName: DemoScreenshotMode.multipathHost.displayName)
-        }
-
         /// The `--demo-detail-level=<n>` argument's value (0–3);
         /// defaults to L1 so an unspecified run still shows chips.
         private static var demoDetailLevel: DetailLevel {
