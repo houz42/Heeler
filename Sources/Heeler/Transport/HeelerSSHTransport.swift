@@ -787,6 +787,18 @@ actor HeelerSSHTransport: Transport {
         }
     }
 
+    /// The auto-provisioning restart seam: `agent.start` against an
+    /// EXISTING pane whose agent exited, with the same busy-retry.
+    func restartAgent(
+        paneID: String, kind: String, name: String, arguments: [String]
+    ) async throws -> Agent {
+        let response = try await startAgentAwaitingShell(
+            AgentLaunchRequest(
+                kind: kind, name: name, arguments: arguments),
+            paneID: paneID)
+        return Agent(response.agent)
+    }
+
     func startAgentInNewWorkspace(
         _ launch: AgentLaunchRequest,
         workspace: NewWorkspaceSpec
@@ -1881,6 +1893,21 @@ actor HeelerSSHTransport: Transport {
                     detail: "Host command closed before EOF")
             }
             return result.stdout
+        }
+    }
+
+    /// The provisioning seam's SSH realization: the same exec-channel
+    /// admission, `LC_ALL=C` wrapping, and error mapping as every other
+    /// host command, but the command's own exit status is returned to the
+    /// caller rather than classified (see ``Transport/runProvisioningCommand(_:)``).
+    func runProvisioningCommand(_ command: String) async throws -> RemoteCommandResult {
+        try await withRequestDeadline {
+            let result = try await self.runExec(Self.cLocaleCommand(command))
+            guard result.reachedEOF else {
+                throw TransportError.channelFailed(
+                    detail: "Host command closed before EOF")
+            }
+            return RemoteCommandResult(stdout: result.stdout, exitStatus: result.exitStatus)
         }
     }
 

@@ -9,6 +9,10 @@ struct AgentDetailView: View {
     private let terminal: TerminalSettings
     private let inputMode: AgentInputModeSettings
     private let hosts: [Host]
+    /// The live Host catalog (ConsoleView wiring): the connection-time
+    /// broker-path auto-configure and the first-connect flow write the
+    /// Host record through it. Previews/tests may omit it.
+    private let hostCatalog: HostStore?
     private let activity: AppActivityCoordinator
     private let keyboardHandoff: TerminalKeyboardHandoff
     private let keyboardInset: TerminalKeyboardInset
@@ -29,6 +33,7 @@ struct AgentDetailView: View {
     /// backend stays the fallback (and the only backend on Hosts
     /// without a broker).
     @State private var brokerChat: AgentChatStore?
+    @State private var isShowingFirstConnectFlow = false
     /// The chat input's submit router (/ # @ ! routing). Built with the
     /// same per-agent task as the chat store.
     @State private var chatRouter: ComposerRouterStore?
@@ -61,6 +66,7 @@ struct AgentDetailView: View {
         terminal: TerminalSettings,
         inputMode: AgentInputModeSettings,
         hosts: [Host],
+        hostCatalog: HostStore? = nil,
         activity: AppActivityCoordinator,
         keyboardHandoff: TerminalKeyboardHandoff,
         keyboardInset: TerminalKeyboardInset,
@@ -76,6 +82,7 @@ struct AgentDetailView: View {
         self.terminal = terminal
         self.inputMode = inputMode
         self.hosts = hosts
+        self.hostCatalog = hostCatalog
         self.activity = activity
         self.keyboardHandoff = keyboardHandoff
         self.keyboardInset = keyboardInset
@@ -345,6 +352,26 @@ struct AgentDetailView: View {
         guard agent.agent.agentSession?.kind == AgentSessionRefKind.path
         else { return }
 
+        // Connection-time auto-configure: a Host with NO recorded broker
+        // path gets the standard Meadow path resolved host-side,
+        // hello-probed, and written — so the plugin-owned broker (the
+        // consolidation runs it at the standard path) lights up chat
+        // with zero manual edit. One probe per Host per session.
+        if brokerChat == nil, console.host(for: agent.hostID)?.hasBrokerChat != true,
+            let hostCatalog, !hostCatalog.hosts.isEmpty,
+            let hostOnRecord = hostCatalog.hosts.first(where: { $0.id == agent.hostID }),
+            !hostOnRecord.hasBrokerChat
+        {
+            let autoConfigure = MeadowBrokerPathAutoConfiguration(
+                console: console, catalog: hostCatalog)
+            await autoConfigure.autoConfigure(hostID: agent.hostID)
+            if let updated = hostCatalog.hosts.first(where: { $0.id == agent.hostID }),
+                updated.hasBrokerChat
+            {
+                console.setHosts(hostCatalog.hosts)
+            }
+        }
+
         // Broker backend: only when this Host configured a broker socket
         // path. One store per agent identity; started here so surface
         // entry only renders.
@@ -568,9 +595,20 @@ struct AgentDetailView: View {
                 icon: "hourglass", title: "Connecting to the chat broker…",
                 detail: nil)
         case .unavailable(let reason):
-            AgentChatStateBanner(
-                icon: "person.crop.circle.badge.xmark",
-                title: "No chat broker for this agent", detail: reason)
+            VStack(spacing: 12) {
+                AgentChatStateBanner(
+                    icon: "person.crop.circle.badge.xmark",
+                    title: "No chat broker for this agent", detail: reason)
+                // First-connect auto-provisioning: the "no broker"
+                // surface offers the one-tap bring-up. The flow's own
+                // confirmations gate every mutation.
+                Button {
+                    isShowingFirstConnectFlow = true
+                } label: {
+                    Label("Set up chat broker on this Host…", systemImage: "wand.and.stars")
+                }
+                .buttonStyle(.borderedProminent)
+            }
         case .ambiguous:
             AgentChatStateBanner(
                 icon: "arrow.triangle.branch",
@@ -819,6 +857,20 @@ struct AgentDetailView: View {
             Button("OK", role: .cancel) { openTerminal.dismissCloseFailure() }
         } message: {
             Text(openTerminal.closeFailureMessage ?? "")
+        }
+        .sheet(isPresented: $isShowingFirstConnectFlow) {
+            if let host = hosts.first(where: { $0.id == agent.hostID }) {
+                MeadowFirstConnectFlowView(
+                    host: host,
+                    catalog: nil,
+                    onProvisioned: {
+                        // The Host record changed on disk; rebuild the
+                        // chat store so the broker lane connects at the
+                        // new path without a reopen.
+                        brokerChat = nil
+                        Task { await buildChatIfPossible() }
+                    })
+            }
         }
         .modifier(ConsoleDetailPresentationRegistration(
             agentID: agent.id,

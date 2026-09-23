@@ -31,6 +31,7 @@ struct HostOnboardingView: View {
     @State private var isConfirmingHostKeyReplacement = false
     @State private var sessionSelectionError: String?
     @Environment(\.openURL) private var openURL
+    @State private var isShowingBrokerProvisioning = false
 
     init(
         host: Host,
@@ -205,9 +206,15 @@ struct HostOnboardingView: View {
             ToolbarItem(placement: .primaryAction) {
                 Button("Edit") { isEditing = true }
             }
+            ToolbarItem(placement: .primaryAction) {
+                Button("Chat Broker") { isShowingBrokerProvisioning = true }
+            }
         }
         .sheet(isPresented: $isEditing) {
             HostFormView(store: catalog, editing: store.host)
+        }
+        .sheet(isPresented: $isShowingBrokerProvisioning) {
+            BrokerProvisioningView(host: store.host)
         }
         .alert(
             "Trust this Host?",

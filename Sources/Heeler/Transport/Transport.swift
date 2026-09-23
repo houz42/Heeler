@@ -79,14 +79,16 @@ protocol Transport: Sendable {
         _ request: AgentLaunchRequest, worktree: WorktreeSpec
     ) async throws -> Agent
 
-    /// Starts a new Agent in a freshly created Workspace (#230):
-    /// `workspace.create` opens the remote directory as its own Workspace
-    /// (no existing Workspace required) and returns a root pane already
-    /// running a shell, so this variant skips `tab.create` and starts the
-    /// agent in that pane directly (the `agent_pane_busy` readiness retry
-    /// still applies). `request.workspaceID` is unused; the started agent
-    /// lives in the returned Workspace and surfaces through the normal
-    /// snapshot/delta machinery.
+    /// Restarts an agent IN ITS EXISTING PANE after it exited (the
+    /// first-connect auto-provisioning restart loop): `agent.start`
+    /// against the same pane with `arguments` (e.g. `["--resume", id]`),
+    /// with the same shell-readiness busy-retry the fresh-start path
+    /// uses. Returns the restarted Agent.
+    func restartAgent(
+        paneID: String, kind: String, name: String, arguments: [String]
+    ) async throws -> Agent
+
+    /// Starts a new agent in a fresh Workspace (#230).
     func startAgentInNewWorkspace(
         _ request: AgentLaunchRequest, workspace: NewWorkspaceSpec
     ) async throws -> Agent
@@ -233,6 +235,17 @@ protocol Transport: Sendable {
         atPath path: String, offset: UInt64, length: Int
     ) async throws -> Data
 
+    /// Runs one provisioning shell command on the Host and returns its
+    /// stdout plus exit status. PROVISIONING-ONLY seam (the chat surface's
+    /// "no shell-over-SSH for ongoing chat traffic" stands: chat stays
+    /// direct-streamlocal to the broker socket). The SSH transport runs the
+    /// command through the ordinary exec-channel admission and `LC_ALL=C`,
+    /// mirroring `runExec`; the command's own exit status is surfaced instead
+    /// of mapped to `channelFailed`, because provisioning commands
+    /// COMMUNICATE through exit status — `systemctl is-active`'s "inactive"
+    /// answer must not read as a transport failure.
+    func runProvisioningCommand(_ command: String) async throws -> RemoteCommandResult
+
     /// Whether the underlying connection to the Host is still alive. The
     /// reconnect machinery (#18) decides "re-subscribe on this connection or
     /// re-establish it" from this flag.
@@ -241,6 +254,27 @@ protocol Transport: Sendable {
     /// Tears the connection down explicitly, ending every channel it
     /// carries. Terminal: a closed Transport is not reusable.
     func close() async throws
+}
+
+/// Result of one provisioning exec command. The exit status is the
+/// command's own, not the channel's — a nonzero exit is a legitimate
+/// observable answer (missing prerequisite, inactive service), never a
+/// transport failure.
+struct RemoteCommandResult: Sendable, Equatable {
+    let stdout: Data
+    let exitStatus: Int32
+
+    init(stdout: Data, exitStatus: Int32) {
+        self.stdout = stdout
+        self.exitStatus = exitStatus
+    }
+
+    /// The command's stdout as trimmed UTF-8 text, for probes whose answer
+    /// fits one line.
+    var trimmedText: String {
+        String(decoding: stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 extension Transport {
@@ -301,8 +335,17 @@ extension Transport {
         throw AttachmentStagingError.sftpUnavailable
     }
 
-    /// Test doubles and alternative transports without a Host-side plugin
-    /// can report its absence without emulating the plugin CLI.
+    /// Non-SSH test doubles and alternative transports can state the
+    /// restart seam's absence instead of emulating one.
+    func restartAgent(
+        paneID: String, kind: String, name: String, arguments: [String]
+    ) async throws -> Agent {
+        throw TransportError.channelFailed(
+            detail: "This transport cannot restart agents.")
+    }
+
+    /// Test doubles without a Host-side plugin can report its absence
+    /// without emulating the plugin CLI.
     func readNotificationRegistration() async throws -> Data? {
         throw NotificationRegistrationError.pluginNotInstalled
     }
@@ -335,6 +378,13 @@ extension Transport {
     ) async throws -> WorktreeRemovedResponse {
         throw TransportError.channelFailed(
             detail: "This transport cannot remove worktrees.")
+    }
+
+    /// Non-SSH test doubles and alternative transports without a Host shell
+    /// report the seam's absence instead of emulating one.
+    func runProvisioningCommand(_ command: String) async throws -> RemoteCommandResult {
+        throw TransportError.channelFailed(
+            detail: "This transport cannot run provisioning commands.")
     }
 }
 
