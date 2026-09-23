@@ -280,4 +280,66 @@ final class ChatViewportProofTests: XCTestCase {
 
         captureScreenshot(app, "lifecycle-send-at-bottom-reveals-message")
     }
+
+    // MARK: Slow reading while content grows (the reading latch)
+
+    func testSlowReadWhileStreamingHoldsPositionNoYank() {
+        let app = launchLifecycleChat()
+        assertVisibleMessage("Message 39 from the agent", in: app)
+
+        // The user reads mid-history: jump to the oldest LOADED
+        // message (no older page needed — the reading anchor is an
+        // already-loaded record; the reported instability was
+        // content growth yanking the reader off their position once
+        // intent flipped back to following).
+        let oldestButton = app.buttons["Oldest message"]
+        XCTAssertTrue(
+            oldestButton.waitForExistence(timeout: UITestTimeouts.standard))
+        oldestButton.tap()
+
+        // The reading anchor: an OLD message is visible and its frame
+        // is captured. Then content GROWS (Send → committed record +
+        // streamed reply).
+        let anchorMessage = message("Message 0 from the user", in: app)
+        XCTAssertTrue(
+            anchorMessage.waitForExistence(timeout: UITestTimeouts.standard),
+            "the oldest loaded message never appeared after the jump")
+        let anchorFrame = anchorMessage.frame
+        app.buttons["Send"].tap()
+        // Wait for the growth to land (echo → confirm → refresh →
+        // stream → commit) BEFORE asserting the hold: the invariant
+        // is that the yank NEVER happens, even after it all lands.
+        Thread.sleep(forTimeInterval: 2.0)
+
+        // The growth lands at the far bottom edge. The INVARIANT
+        // (checked FIRST, at the reading position): the anchor HOLDS
+        // — the old message stays visible at (essentially) its
+        // position, and no follow-latest command yanked the viewport
+        // to the new bottom. (The reply/sent records are FAR below a
+        // lazy viewport from up here — they materialize only near
+        // it; the hold is asserted before anything can yank.)
+        let window = app.windows.firstMatch
+        let heldMessage = message("Message 0 from the user", in: app)
+        XCTAssertTrue(heldMessage.exists)
+        XCTAssertTrue(
+            window.frame.intersects(heldMessage.frame),
+            "the reading anchor was YANKED — the old message left the viewport when content grew (the slow-read instability)")
+        let drift = abs(heldMessage.frame.midY - anchorFrame.midY)
+        XCTAssertTrue(
+            drift < 200,
+            "the reading anchor moved \(drift)pt when content grew — the viewport jumped")
+        captureScreenshot(app, "lifecycle-slow-read-holds-while-streaming")
+
+        // The growth itself is verified by revealing it: jump to the
+        // bottom — the sent record and the streamed reply both
+        // materialize and intersect the viewport (no blank).
+        let newestButton = app.buttons["Latest message"]
+        XCTAssertTrue(
+            newestButton.waitForExistence(timeout: UITestTimeouts.standard))
+        newestButton.tap()
+        assertVisibleMessage("Sent message 1 from the user", in: app)
+        assertVisibleMessage("The demo agent's reply lands here", in: app)
+        captureScreenshot(app, "lifecycle-slow-read-growth-revealed")
+    }
+
 }
