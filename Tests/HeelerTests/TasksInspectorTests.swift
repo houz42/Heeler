@@ -597,3 +597,276 @@ struct WorkInspectorFixtureTranscriptTests {
         #expect(snapshot.leafProgress.total == 8)
     }
 }
+
+// MARK: - Broker-observed child runs
+
+/// The live child-run observation's unit pins (the v3 child-run
+/// slice). The classification is the omp storage layout observed
+/// live: a child run's session file sits INSIDE the parent's .jsonl
+/// directory; the broker reports it in sessions.list with no paneId.
+/// Registration proves IDENTITY + LIVENESS only — no exit state, no
+/// verdict channel — so linking upgrades runtime state to Running
+/// and NEVER touches the result verdict.
+@Suite
+struct WorkChildRunLinkerTests {
+    private let parentFile =
+        "/sessions/-src/2026-09-19T14-48-58-977Z_01a0ba24.jsonl"
+
+    @Test func directChildOfTheParentClassifiesDirect() {
+        // The live-verified shape: .../<parent>.jsonl/<Child>.jsonl.
+        let link = WorkChildRunLinker.classify(
+            childFile:
+                "/sessions/-src/2026-09-19T14-48-58-977Z_01a0ba24.jsonl/AgentChatProduction-1.jsonl",
+            parentFile: parentFile)
+        #expect(link == .direct)
+    }
+
+    @Test func grandchildNestingClassifiesDescendantDepth2() {
+        // A grandchild's session file nests one .jsonl directory
+        // deeper: .../<parent>.jsonl/<child>.jsonl/<grand>.jsonl.
+        // No live sample exists on disk yet — the shape follows the
+        // layout's own one-dir-per-generation rule.
+        let link = WorkChildRunLinker.classify(
+            childFile:
+                "/sessions/-src/2026-09-19T14-48-58-977Z_01a0ba24.jsonl/AgentChatProduction-1.jsonl/NestedWorker.jsonl",
+            parentFile: parentFile)
+        #expect(link == .descendant(depth: 2))
+    }
+
+    @Test func unrelatedSessionNeverClassifiesAsAChild() {
+        // Another top-level session (a different pane's own file)
+        // shares no nesting with the observed parent.
+        #expect(WorkChildRunLinker.classify(
+            childFile: "/sessions/-src/2026-09-17T04-17-31-715Z_other.jsonl",
+            parentFile: parentFile) == .unrelated)
+        // The parent itself is never its own child.
+        #expect(WorkChildRunLinker.classify(
+            childFile: parentFile, parentFile: parentFile) == .unrelated)
+        // A non-.jsonl terminal path is not a session file at all.
+        #expect(WorkChildRunLinker.classify(
+            childFile:
+                "/sessions/-src/2026-09-19T14-48-58-977Z_01a0ba24.jsonl/not-a-session.txt",
+            parentFile: parentFile) == .unrelated)
+        // Empty/malformed paths classify unrelated, never guessed.
+        #expect(WorkChildRunLinker.classify(
+            childFile: "", parentFile: parentFile) == .unrelated)
+        #expect(WorkChildRunLinker.classify(
+            childFile: parentFile, parentFile: "") == .unrelated)
+    }
+
+    @Test func childrenCollectsOnlyNestedRegistrations() {
+        func reg(
+            _ id: String, file: String, pane: String? = nil
+        ) -> AgentChatRegistration {
+            AgentChatRegistration(
+                instanceId: id, sessionId: "s-\(id)", generation: 1,
+                locator: AgentChatRegistration.Locator(
+                    paneId: pane, sessionFile: file))
+        }
+        let parent = reg("parent", file: parentFile, pane: "w1:pP")
+        let child = reg(
+            "child",
+            file: "/sessions/-src/2026-09-19T14-48-58-977Z_01a0ba24.jsonl/V3SubagentChildRun.jsonl")
+        let stranger = reg("stranger", file: "/sessions/other.jsonl")
+        let children = WorkChildRunLinker.children(
+            of: parentFile, registrations: [parent, child, stranger])
+        // The pane's own registration and the unrelated session
+        // never enter; the nested child does, in registration order.
+        #expect(children.map(\.instanceID) == ["child"])
+        #expect(children[0].sessionID == "s-child")
+        // A registration without a locator yields nothing.
+        let noLocator = AgentChatRegistration(
+            instanceId: "nolocator", sessionId: "s-n", generation: 1)
+        #expect(WorkChildRunLinker.children(
+            of: parentFile, registrations: [noLocator]).isEmpty)
+    }
+}
+
+@Suite
+struct WorkChildRunLinkingTests {
+    private let parentFile =
+        "/sessions/-src/2026-09-19T14-48-58-977Z_01a0ba24.jsonl"
+
+    private func registration(
+        _ id: String, file: String
+    ) -> AgentChatRegistration {
+        AgentChatRegistration(
+            instanceId: id, sessionId: "s-\(id)", generation: 1,
+            locator: AgentChatRegistration.Locator(
+                paneId: nil, sessionFile: file))
+    }
+
+    @Test func liveRegistrationUpgradesSpawnedRowToRunningVerdictUntouched() {
+        // The spawn the transcript carries, and the broker's live
+        // registration for the SAME name (matched by the session
+        // file's base name — the identity the spawn acknowledgment
+        // printed).
+        let spawn = taskSpawnCall(
+            id: "spawn-1", children: [("V3SubagentChildRun", "Do the slice", "task")])
+        let transcript = content([
+            ChatMessage(role: .assistant, blocks: [.toolCall(spawn)]),
+        ])
+        var snapshot = WorkInspectorSnapshotBuilder.build(from: transcript)
+        snapshot = WorkInspectorSnapshotBuilder.linkChildRuns(
+            into: snapshot, parentFile: parentFile,
+            registrations: [
+                registration(
+                    "p", file: parentFile),
+                registration(
+                    "c",
+                    file: "\(parentFile)/V3SubagentChildRun.jsonl"),
+            ])
+
+        #expect(snapshot.childRunObservation == .observed)
+        let row = snapshot.subagents[0]
+        // Registration proves LIVENESS → Running, with the honest
+        // live≠accepted note.
+        #expect(row.runtimeState == .running)
+        #expect(row.observedRun?.instanceID == "c")
+        #expect(row.runtimeStateNote == WorkSubagent.liveRegistrationNote)
+        // The VERDICT is a separate axis: registration is not
+        // acceptance, and the broker carries no verdict channel.
+        #expect(row.resultVerdict == nil)
+        // The linked child did NOT become a broker-only row.
+        #expect(snapshot.observedSubagents.isEmpty)
+    }
+
+    @Test func absenceOfARegistrationProvesNothingRowStaysUnknown() {
+        // The spawn's child has NO live registration: it may have
+        // finished, failed, been cancelled, or never started — the
+        // broker cannot say which, so the row stays honestly Unknown.
+        let spawn = taskSpawnCall(
+            id: "spawn-2", children: [("FinishedChild", "Do work", "scout")])
+        let transcript = content([
+            ChatMessage(role: .assistant, blocks: [.toolCall(spawn)]),
+        ])
+        var snapshot = WorkInspectorSnapshotBuilder.build(from: transcript)
+        snapshot = WorkInspectorSnapshotBuilder.linkChildRuns(
+            into: snapshot, parentFile: parentFile,
+            registrations: [registration("p", file: parentFile)])
+
+        #expect(snapshot.childRunObservation == .observed)
+        let row = snapshot.subagents[0]
+        #expect(row.runtimeState == .unknown)
+        #expect(row.observedRun == nil)
+        #expect(row.resultVerdict == nil)
+        #expect(row.runtimeStateNote == WorkSubagent.transcriptObservationNote)
+    }
+
+    @Test func duplicateChildNamesStayDistinctBySpawnCall() {
+        // Two spawns carrying the SAME child name: their rows stay
+        // distinct (id keyed by spawn call), and the live
+        // registration links the name it matches — never merges rows.
+        let first = taskSpawnCall(id: "spawn-a", children: [("Researcher", "Task A", "scout")])
+        let second = taskSpawnCall(id: "spawn-b", children: [("Researcher", "Task B", "scout")])
+        let transcript = content([ChatMessage(role: .assistant, blocks: [
+            .toolCall(first), .toolCall(second),
+        ])])
+        var snapshot = WorkInspectorSnapshotBuilder.build(from: transcript)
+        snapshot = WorkInspectorSnapshotBuilder.linkChildRuns(
+            into: snapshot, parentFile: parentFile,
+            registrations: [
+                registration("p", file: parentFile),
+                registration(
+                    "c",
+                    file: "\(parentFile)/Researcher.jsonl"),
+            ])
+
+        #expect(snapshot.subagents.count == 2)
+        #expect(Set(snapshot.subagents.map(\.id)).count == 2)
+        // The live Researcher links BOTH duplicate-name rows (the
+        // broker cannot say which spawn it belongs to — a count, not
+        // a guess — so both show Running).
+        #expect(
+            snapshot.subagents.allSatisfy { $0.runtimeState == .running })
+        // And the registration was consumed, not duplicated into the
+        // broker-only section.
+        #expect(snapshot.observedSubagents.isEmpty)
+    }
+
+    @Test func brokerOnlyChildGetsItsOwnRowWithHonestAssignment() {
+        // A live registration whose name no spawn row carries: the
+        // row exists ONLY because the registration proves it, and
+        // its assignment is honestly unobservable from the wire.
+        var snapshot = WorkInspectorSnapshotBuilder.build(from: content([
+            ChatMessage(role: .user, blocks: [.text("hello")]),
+        ]))
+        snapshot = WorkInspectorSnapshotBuilder.linkChildRuns(
+            into: snapshot, parentFile: parentFile,
+            registrations: [
+                registration("p", file: parentFile),
+                registration(
+                    "orphan-run",
+                    file: "\(parentFile)/QueueSyncResearch.jsonl"),
+            ])
+
+        #expect(snapshot.observedSubagents.count == 1)
+        #expect(snapshot.observedSubagents[0].displayName == "QueueSyncResearch")
+        #expect(snapshot.observedSubagents[0].run.instanceID == "orphan-run")
+        // The observed list is registration order, never sorted.
+        #expect(snapshot.observedSubagents.map(\.displayName) == ["QueueSyncResearch"])
+    }
+
+    @Test func emptyRegistrationListStillMarksTheObservationHonest() {
+        // The broker answered but reports nothing nested under this
+        // parent: OBSERVED (not claimed empty without asking).
+        var snapshot = WorkInspectorSnapshotBuilder.build(from: ChatContent())
+        snapshot = WorkInspectorSnapshotBuilder.linkChildRuns(
+            into: snapshot, parentFile: parentFile, registrations: [])
+        #expect(snapshot.childRunObservation == .observed)
+        #expect(snapshot.observedSubagents.isEmpty)
+    }
+
+    @Test func baseNameDerivesFromTheSessionFileName() {
+        // .../<Child>.jsonl → "Child": the identity the parent's
+        // spawn acknowledgment printed.
+        #expect(WorkInspectorSnapshotBuilder.baseName(
+            of: "\(parentFile)/V3SubagentChildRun.jsonl")
+            == "V3SubagentChildRun")
+        #expect(WorkInspectorSnapshotBuilder.baseName(
+            of: parentFile) == "2026-09-19T14-48-58-977Z_01a0ba24")
+        // Non-.jsonl and edge paths return their own base, never a
+        // fabricated identity.
+        #expect(WorkInspectorSnapshotBuilder.baseName(of: "plain") == "plain")
+        #expect(WorkInspectorSnapshotBuilder.baseName(of: "/a/b.txt") == "b.txt")
+    }
+
+    @Test func aCompletedChildNeverMarksItsParentTaskDone() {
+        // Runtime completion of a child is never proof its parent
+        // task is accepted: the todo checklist's own producer-
+        // reported state stays authoritative, and a linked child
+        // carries NO verdict. (Pin: linking touches ONLY subagent
+        // rows — task rows keep their producer states.)
+        let todoResult = ToolResult(
+            toolCallId: "todo:0", toolName: "todo", isError: false,
+            content: realPhasedChecklist)
+        let spawn = taskSpawnCall(
+            id: "spawn-c", children: [("Integration", "Do the integration", "task")])
+        let transcript = content(
+            [ChatMessage(role: .assistant, blocks: [
+                .toolCall(todoCall(id: "todo:0")),
+                .toolCall(spawn),
+            ])],
+            results: [todoResult])
+        var snapshot = WorkInspectorSnapshotBuilder.build(from: transcript)
+        snapshot = WorkInspectorSnapshotBuilder.linkChildRuns(
+            into: snapshot, parentFile: parentFile,
+            registrations: [
+                registration("p", file: parentFile),
+                registration("c", file: "\(parentFile)/Integration.jsonl"),
+            ])
+        // The child is Running (live), but the task hierarchy keeps
+        // its PRODUCER states untouched: Integration is the checklist
+        // producer's ACTIVE phase (reported inProgress — never
+        // inferred from child completion or a live child), and the
+        // leaf totals keep the producer's own counts.
+        #expect(snapshot.childRunObservation == .observed)
+        let integration = snapshot.tasks.first {
+            $0.kind == .group && $0.title == "Integration"
+        }
+        #expect(integration?.state == .inProgress)
+        #expect(
+            snapshot.leafProgress.completed == 6
+                && snapshot.leafProgress.inProgress == 1)
+    }
+}

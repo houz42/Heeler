@@ -92,10 +92,18 @@
             /// a `task` spawn (4 scout children) — the capture and
             /// proof surface (v3 tasks-inspector proofs).
             case tasksInspector
+            /// The v3 work inspector's child-run proof surface: the
+            /// SAME fixture transcript LINKED with a real-shaped
+            /// live registration list (two scouts Running live, one
+            /// honestly Unknown, one broker-only child) — the
+            /// child-run capture and proof surface (v3 child-run
+            /// proofs).
+            case tasksInspectorChildRun
 
             static func fromArguments() -> Route {
                 let arguments = ProcessInfo.processInfo.arguments
-                if arguments.contains(tasksInspectorLaunchArgument) { return .tasksInspector }
+            if arguments.contains(tasksInspectorLaunchArgument) { return .tasksInspector }
+            if arguments.contains(tasksInspectorChildRunLaunchArgument) { return .tasksInspectorChildRun }
                 if arguments.contains(pairingPasteLaunchArgument) { return .pairingPaste }
                 if arguments.contains(chatLiveWorkLaunchArgument) { return .chatLiveWork }
                 if arguments.contains(chatQACardsLaunchArgument) { return .chatQACards }
@@ -127,7 +135,7 @@
         static let chatLiveWorkLaunchArgument = "--demo-chat-live-work"
         static let pairingPasteLaunchArgument = "--demo-pairing-paste"
         static let tasksInspectorLaunchArgument = "--demo-tasks-inspector"
-
+        static let tasksInspectorChildRunLaunchArgument = "--demo-tasks-inspector-childrun"
         /// The multi-path demo Host: the same machine over LAN and VPN.
         static let multipathHost = Host(
             name: "Studio Mac",
@@ -243,6 +251,8 @@
                 chatSpecialSectionsSurface
             case .tasksInspector:
                 tasksInspectorSurface
+            case .tasksInspectorChildRun:
+                tasksInspectorChildRunSurface
             }
         }
 
@@ -800,6 +810,65 @@
         private var tasksInspectorSurface: some View {
             WorkInspectorSheet(
                 content: tasksInspectorFixtureContent)
+        }
+
+        /// The child-run capture surface: the SAME live-linked
+        /// production entrypoint over the same fixture transcript,
+        /// with a real-shaped registration list (the live broker's
+        /// own sessions.list shape): the pane's own registration, a
+        /// live registration for TWO of the four spawned scouts, a
+        /// finished scout (absent — honestly Unknown), and one
+        /// broker-only child no spawn row carries. Read-only — the
+        /// demo never queries or changes live agents; the fixture
+        /// mirrors what the broker reports.
+        private var tasksInspectorChildRunSurface: some View {
+            WorkInspectorSheet(
+                content: tasksInspectorFixtureContent,
+                parentSessionFile: demoPaneSessionFile,
+                liveRegistrations: demoChildRunRegistrations,
+                initialTab: .subagents)
+        }
+
+        /// The demo pane's session file — the production parent the
+        /// registrations classify against (the same locator key the
+        /// store matches).
+        private let demoPaneSessionFile =
+            "/sessions/-src/2026-09-19T14-48-58-977Z_01a0ba24.jsonl"
+
+        /// The live-observed registration fixture: shapes taken from
+        /// the real Meadow broker's sessions.list (a pane-carrying
+        /// parent; pane-less children nested under its .jsonl
+        /// directory).
+        private var demoChildRunRegistrations: [AgentChatRegistration] {
+            func registration(
+                _ id: String, file: String, pane: String? = nil,
+                caps: AgentChatCapabilities = AgentChatCapabilities(
+                    history: true, streaming: true, prompt: true,
+                    interrupt: true)
+            ) -> AgentChatRegistration {
+                AgentChatRegistration(
+                    instanceId: id, sessionId: "s-\(id)", generation: 1,
+                    locator: AgentChatRegistration.Locator(
+                        paneId: pane, sessionFile: file),
+                    agent: AgentChatRegistration.AgentIdentity(
+                        kind: "omp", version: "demo"),
+                    capabilities: caps)
+            }
+            let pane = demoPaneSessionFile
+            return [
+                // The pane's own registration (claims the pane id;
+                // never its own child).
+                registration("demo-parent", file: pane, pane: "w1:pDemo"),
+                // TWO of the spawned scouts are live RIGHT NOW:
+                // registration proves liveness → Running (green
+                // clock + live chip), verdict still Not reported.
+                registration("demo-live-1", file: "\(pane)/DroverInternals.jsonl"),
+                registration("demo-live-2", file: "\(pane)/HeelerInternals.jsonl"),
+                // A broker-only child run: no spawn row carries its
+                // name (the spawn scrolled out of the loaded window);
+                // its own row exists only because it is registered.
+                registration("demo-orphan", file: "\(pane)/QueueSyncResearch.jsonl"),
+            ]
         }
 
         /// The fixture transcript the inspector derives its snapshot

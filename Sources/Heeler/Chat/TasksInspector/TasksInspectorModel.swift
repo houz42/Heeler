@@ -33,19 +33,34 @@ import Foundation
 //   - `task` tool calls + their paired results: STRUCTURED spawn
 //     facts. The call's arguments carry {i, tasks:[{name, task,
 //     agent}]} and the paired result is the spawn acknowledgment. A
-//     task tool-call ID is NOT a child-run identity: the transcript
-//     carries no live child-run channel (the design's proposed
-//     work.snapshot contract is not implemented by the broker yet),
-//     so a spawned row's runtime state stays honestly Unknown and
-//     its result verdict Not reported — NEVER scraped from the
-//     `hub` prose the agent may print later.
+//     task tool-call ID is NOT a child-run identity — and the
+//     transcript alone proves no runtime state, so an UNLINKED
+//     spawn row stays honestly Unknown and its verdict Not reported
+//     — NEVER scraped from the `hub` prose the agent may print later.
+//
+//   - Live broker REGISTRATIONS (the v3 child-run slice's real
+//     observation source, verified against the live Meadow broker):
+//     an omp child run REGISTERS with the chat broker like any
+//     session, carrying its own instanceId/sessionId/generation and
+//     a locator.sessionFile nested INSIDE the parent session's own
+//     .jsonl directory (.../<parent>.jsonl/<Child>.jsonl; the child
+//     file's own header names parentSession). Registration proves
+//     IDENTITY + LIVENESS (the child process is alive and attached):
+//     a linked row's runtime state is Running. The broker carries NO
+//     exit or verdict channel — a child that finishes, fails or is
+//     cancelled simply DEREGISTERS, so absence proves nothing (the
+//     row keeps Unknown) and the verdict stays Not reported. Child
+//     runs register with no paneId, so no pane link is guessed; and
+//     needs-input is not observable (child runs register without the
+//     interactions capability).
 //
 // Stable IDs: the producer's rendered checklist carries no durable
 // task IDs (the proposed protocol adds them), so a row's ID is scoped
 // to the producing tool result (callID + structural position) —
 // position-keyed, never title-keyed, so content edits cannot re-key
 // rows within one snapshot. Different todo results carry different
-// ID scopes, by design.
+// ID scopes, by design. A broker-observed child's row is keyed by
+// its session FILE (run@<sessionFile>) — stable for the run's life.
 
 // MARK: - Task states
 
@@ -176,6 +191,133 @@ enum WorkResultVerdict: String, Sendable, Equatable, CaseIterable {
         }
     }
 }
+// MARK: - Broker-observed child runs
+
+/// One LIVE child-run registration observed through the chat broker
+/// (sessions.list). A registered child proves IDENTITY + LIVENESS:
+/// its omp process is alive and attached. The broker carries no exit
+/// or verdict channel — a child that finishes, fails or is cancelled
+/// simply deregisters — so this type deliberately carries NO terminal
+/// state. Child runs register with no paneId (the omp extension's
+/// isSubagent detection), so no pane link is guessed either.
+struct WorkObservedChildRun: Identifiable, Sendable, Equatable {
+    /// The registration's instanceId — the broker's route identity.
+    let instanceID: String
+    /// The child's own broker sessionId.
+    let sessionID: String
+    /// The child's session file, nested inside the parent session's
+    /// .jsonl directory (.../<parent>.jsonl/<Child>.jsonl).
+    let sessionFile: String
+    var id: String { "run@\(sessionFile)" }
+}
+
+/// How a broker registration was classified against one observed
+/// parent session — the matcher's verdict, kept separate from any
+/// row state so "linked" never silently becomes "running" in data.
+enum WorkChildRunLink: Sendable, Equatable {
+    /// A DIRECT child of the observed parent: its session file sits
+    /// inside the parent's .jsonl directory.
+    case direct
+    /// A DESCENDANT (grandchild and deeper): its session file nests
+    /// below a direct child's own .jsonl file. Derived from the
+    /// path's structure; live grandchildren have not been observed
+    /// yet, so no sample pins the exact depth shape beyond one more
+    /// .jsonl path component.
+    case descendant(depth: Int)
+    /// Unrelated to the observed parent (another top-level session).
+    case unrelated
+}
+
+/// The pure classifier of broker registrations into the observed
+/// parent's child runs. The omp storage layout is the identity:
+/// a child run's session file lives INSIDE a directory named after
+/// its parent session's .jsonl file, one level per generation
+/// (verified against live broker registrations: the parent pane's
+/// own file vs. its children's .../<parent>.jsonl/<Child>.jsonl).
+///
+/// Read-only and total: an absent parent path yields no children;
+/// malformed paths classify unrelated, never guessed.
+enum WorkChildRunLinker: Sendable {
+    /// Classifies one registration's session file against the
+    /// observed parent's session file.
+    static func classify(childFile: String, parentFile: String) -> WorkChildRunLink {
+        let child = normalize(childFile)
+        let parent = normalize(parentFile)
+        guard !child.isEmpty, !parent.isEmpty,
+            child != parent,
+            let parentDir = parent.split(
+                separator: "/", omittingEmptySubsequences: true
+            ).last.map({ "\($0)" })
+        else { return .unrelated }
+        // The child's path must CONTAIN a component equal to the
+        // parent's file name for any nesting to exist at all.
+        let components = child.split(
+            separator: "/", omittingEmptySubsequences: true
+        ).map(String.init)
+        guard let nameIndex = components.firstIndex(of: parentDir)
+        else { return .unrelated }
+        // Depth = how many .jsonl DIRECTORY components sit between
+        // the parent's namesake component and the child's own file
+        // name: 1 nesting = DIRECT child; each extra .jsonl
+        // directory component = one more generation (a grandchild
+        // lives below .../<parent>.jsonl/<child>.jsonl/<grand>.jsonl
+        // → depth 2).
+        let between = components[(nameIndex + 1)...].dropLast()
+        var depth = 1
+        var jsonlDirs = 0
+        for component in between where component.hasSuffix(".jsonl") {
+            jsonlDirs += 1
+        }
+        depth += jsonlDirs
+        // The child's own file name must be a .jsonl FILE (the
+        // layout's terminal component); anything else is not a
+        // session file at all.
+        guard components.last?.hasSuffix(".jsonl") == true else {
+            return .unrelated
+        }
+        return depth == 1 ? .direct : .descendant(depth: depth)
+    }
+
+    /// The children of one observed parent among live registrations,
+    /// in registration (broker) order. Unrelated registrations never
+    /// enter. The pane's OWN registration (its session file IS the
+    /// parent file) is excluded — the parent is not its own child.
+    static func children(
+        of parentFile: String,
+        registrations: [AgentChatRegistration]
+    ) -> [WorkObservedChildRun] {
+        registrations.compactMap { registration in
+            guard let file = registration.locator?.sessionFile,
+                classify(childFile: file, parentFile: parentFile) != .unrelated
+            else { return nil }
+            return WorkObservedChildRun(
+                instanceID: registration.instanceId,
+                sessionID: registration.sessionId,
+                sessionFile: file)
+        }
+    }
+
+    private static func normalize(_ path: String) -> String {
+        path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+}
+
+/// A child-run identity row that exists ONLY because the broker
+/// observed it: a live registration under the parent's session
+/// directory whose name never appeared in any `task` spawn the
+/// transcript carries. Its runtime state is Running (registration
+/// proves liveness); its verdict stays Not reported (no exit
+/// channel). An ASSIGNMENT is not observable from the wire — the
+/// row says so instead of inventing one.
+struct WorkObservedSubagent: Identifiable, Sendable, Equatable {
+    let run: WorkObservedChildRun
+    /// The child's display name: the session file's own base name
+    /// (.../<Name>.jsonl) — the same name the parent's spawn
+    /// acknowledgment printed. Derived from the observed path, never
+    /// guessed from prose.
+    var displayName: String
+    var id: String { run.id }
+}
 
 /// One spawned child — a distinct compact two-line identity row:
 /// display name + assigned work. Identity comes from the spawn
@@ -203,6 +345,20 @@ struct WorkSubagent: Identifiable, Sendable, Equatable {
     /// The paired spawn result arrived (the producer acknowledged
     /// the spawn); false = still unacknowledged in this transcript.
     var spawnAcknowledged: Bool
+    /// The LIVE child-run registration the broker observed for this
+    /// spawned name (matched by the child's session-file base name —
+    /// the same name the spawn acknowledgment prints). nil = no live
+    /// registration carries this child's name: the run may have
+    /// finished, failed, been cancelled, or never started — absence
+    /// proves NOTHING, so the runtime state stays Unknown.
+    var observedRun: WorkObservedChildRun?
+    /// When a registration IS linked: registration proves LIVENESS
+    /// (the child process is alive and attached), so the runtime
+    /// state becomes Running — but the broker has no exit or verdict
+    /// channel, so the verdict STAYS Not reported and this note names
+    /// the observation's limit (live ≠ accepted).
+    static let liveRegistrationNote =
+        "Registered live with the chat broker — the child is running now. Its exit state and result verdict aren't observable here."
 
     /// The honest unsupported note for transcript-derived rows: the
     /// transcript carries no live child-run channel, so runtime

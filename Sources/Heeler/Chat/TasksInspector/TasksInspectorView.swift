@@ -145,11 +145,29 @@ struct WorkInspectorSheet: View {
     @State private var selectedTab: WorkInspectorTab = .tasks
     @State private var expansion = WorkInspectorExpansion()
 
-    /// The header menu's one-call entrypoint: present
-    /// `WorkInspectorSheet(content:)` with the SAME ChatContent the
-    /// chat surface renders — the snapshot derives inside.
-    init(content: ChatContent) {
+    init(content: ChatContent, initialTab: WorkInspectorTab = .tasks) {
         self.snapshot = WorkInspectorSnapshotBuilder.build(from: content)
+        _selectedTab = State(initialValue: initialTab)
+    }
+
+    /// The production entrypoint: the SAME transcript-derived snapshot
+    /// LINKED with the live child-run registrations the chat broker
+    /// reported for THIS pane's session file (the store's
+    /// sessions.list; the pane file is the same locator key the
+    /// store matched against). Spawned rows whose child is currently
+    /// registered show Running (registration proves liveness); live
+    /// children no spawn row carries become their own rows.
+    init(
+        content: ChatContent, parentSessionFile: String,
+        liveRegistrations: [AgentChatRegistration],
+        initialTab: WorkInspectorTab
+    ) {
+        var snapshot = WorkInspectorSnapshotBuilder.build(from: content)
+        snapshot = WorkInspectorSnapshotBuilder.linkChildRuns(
+            into: snapshot, parentFile: parentSessionFile,
+            registrations: liveRegistrations)
+        self.snapshot = snapshot
+        _selectedTab = State(initialValue: initialTab)
     }
 
     var body: some View {
@@ -425,12 +443,95 @@ struct WorkSubagentsList: View {
                     icon: "questionmark.square", title: "Subagents unavailable",
                     detail: reason)
             case .loaded:
-                List(snapshot.subagents) { subagent in
-                    WorkSubagentRow(subagent: subagent)
+                List {
+                    ForEach(snapshot.subagents) { subagent in
+                        WorkSubagentRow(subagent: subagent)
+                    }
+                    // Live broker-observed child runs no spawn row
+                    // carries: rows that exist ONLY because a
+                    // registration proves them. Registration order.
+                    if !snapshot.observedSubagents.isEmpty {
+                        Section("Live child runs") {
+                            ForEach(snapshot.observedSubagents) { child in
+                                WorkObservedSubagentRow(child: child)
+                            }
+                        }
+                    }
+                    // The honest note: which live children the
+                    // broker could NOT name (spawn scrolled out of
+                    // the loaded transcript window, or started
+                    // before this client attached).
+                    if snapshot.childRunObservation == .observed,
+                        snapshot.observedSubagents.isEmpty
+                    {
+                        Section {
+                            Text(verbatim:
+                                "The chat broker reported no other live child runs for this conversation right now."
+                            )
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
                 }
                 .listStyle(.insetGrouped)
             }
         }
+    }
+}
+
+/// One broker-observed child-run row: the same compact two-line
+/// identity shape, but the row exists because a LIVE registration
+/// proves the run — Running state (clock), "live child run" chip,
+/// and an honest assignment line (the wire carries no assignment
+/// text; it says so instead of inventing one). Read-only.
+struct WorkObservedSubagentRow: View {
+    let child: WorkObservedSubagent
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            // Registration proves liveness — the clock (Running).
+            Image(systemName: WorkSubagentRuntimeState.running.iconSystemName)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.green)
+                .frame(width: 26, height: 26)
+                .background(
+                    Circle().fill(Color.green.opacity(0.12)))
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(verbatim: child.displayName)
+                        .font(.body.weight(.medium))
+                        .lineLimit(1)
+                    Text("live child run")
+                        .font(.caption2)
+                        .foregroundStyle(.green)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule().fill(Color.green.opacity(0.1)))
+                }
+                Text(verbatim:
+                    "Observed live with the chat broker — its assignment isn't on this wire."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(minHeight: 52)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var accessibilityLabel: String {
+        [
+            child.displayName,
+            "live child run",
+            "runtime state: Running",
+            "result: Not reported",
+            "assigned: not on this wire",
+        ].joined(separator: ", ")
     }
 }
 
@@ -449,10 +550,16 @@ struct WorkSubagentRow: View {
             HStack(alignment: .center, spacing: 12) {
                 Image(systemName: subagent.runtimeState.iconSystemName)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    // A broker-observed RUNNING child renders the
+                    // clock in green (live); everything else stays
+                    // secondary — the honest unknown.
+                    .foregroundStyle(
+                        subagent.observedRun != nil ? .green : .secondary)
                     .frame(width: 26, height: 26)
                     .background(
-                        Circle().fill(Color.secondary.opacity(0.12)))
+                        Circle().fill(
+                            (subagent.observedRun != nil ? Color.green : Color.secondary)
+                                .opacity(0.12)))
                     .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -467,6 +574,18 @@ struct WorkSubagentRow: View {
                             .padding(.vertical, 2)
                             .background(
                                 Capsule().fill(Color.secondary.opacity(0.1)))
+                        // A broker-observed live run adds its own
+                        // green chip — one visual carrier per fact
+                        // (icon = running, chip = observed live).
+                        if subagent.observedRun != nil {
+                            Text("live")
+                                .font(.caption2)
+                                .foregroundStyle(.green)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(
+                                    Capsule().fill(Color.green.opacity(0.1)))
+                        }
                     }
                     Text(verbatim: subagent.assignedWork)
                         .font(.caption)
@@ -529,6 +648,32 @@ struct WorkSubagentDetailSheet: View {
                         : "The spawn acknowledgment hasn't arrived in this transcript yet.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                }
+                // The broker-observed run — the identity + liveness
+                // the live registration proves. Kept SEPARATE from
+                // the transcript's spawn facts above.
+                if let run = subagent.observedRun {
+                    Section("Observed child run") {
+                        Label("Registered live", systemImage: "clock")
+                            .foregroundStyle(.green)
+                        LabeledContent("Session ID") {
+                            Text(verbatim: run.sessionID)
+                                .font(.footnote.monospaced())
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        LabeledContent("Instance") {
+                            Text(verbatim: run.instanceID)
+                                .font(.footnote.monospaced())
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Text(verbatim:
+                            "Live registration proves the child is running — it carries no exit state or result verdict, and the broker has no channel for either."
+                        )
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    }
                 }
                 Section("Assignment") {
                     Text(verbatim: subagent.assignedWork)
