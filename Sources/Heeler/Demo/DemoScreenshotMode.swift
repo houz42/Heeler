@@ -73,11 +73,18 @@
             /// path) — the remote-pairing reachability capture and
             /// paste→ceremony proof surface.
             case pairingPaste
+            /// The chat surface driven by the REAL AgentChatStore against
+            /// a scripted in-memory broker pipe — the blank-viewport
+            /// slice's transition-capture fixture: the mount renders
+            /// ready content, then the store's RECONNECT path (the
+            /// reported blank-on-refresh bug) runs on tap.
+            case chatLifecycle
 
             static func fromArguments() -> Route {
                 let arguments = ProcessInfo.processInfo.arguments
                 if arguments.contains(pairingPasteLaunchArgument) { return .pairingPaste }
                 if arguments.contains(chatQACardsLaunchArgument) { return .chatQACards }
+                if arguments.contains(chatLifecycleLaunchArgument) { return .chatLifecycle }
                 if arguments.contains(chatBubblesLaunchArgument) { return .chatBubbles }
                 if arguments.contains(chatTablesLaunchArgument) { return .chatTables }
                 if arguments.contains(chatSpecialSectionsLaunchArgument) { return .chatSpecialSections }
@@ -99,6 +106,7 @@
         static let chatSpecialSectionsLaunchArgument = "--demo-chat-special-sections"
         static let hostDetailPickLaunchArgument = "--demo-host-detail-pick"
         static let chatQACardsLaunchArgument = "--demo-chat-qa-cards"
+        static let chatLifecycleLaunchArgument = "--demo-chat-lifecycle"
         static let chatBubblesLaunchArgument = "--demo-chat-bubbles"
         static let chatTablesLaunchArgument = "--demo-chat-tables"
         static let pairingPasteLaunchArgument = "--demo-pairing-paste"
@@ -198,6 +206,8 @@
                 hostListConsoleSurface
             case .hostDetailProbing:
                 multipathDetail(midProbe: true)
+            case .chatLifecycle:
+                chatLifecycleSurface
             case .chatBubbles:
                 chatBubblesSurface
             case .chatTables:
@@ -534,6 +544,18 @@
                 changeLevel: { _, _ in },
                 deliver: { _ in },
                 authorLabel: "Meadow · omp")
+        }
+
+        /// The blank-viewport transition-capture surface: the REAL
+        /// AgentChatStore + ChatScreen over a scripted in-memory broker
+        /// pipe, so UI proofs exercise the production mount/unmount
+        /// path. The toolbar button drives the store's `start()` — the
+        /// reconnect every lock/unlock and refresh takes — WITHOUT a
+        /// new store: held content must keep the transcript mounted.
+        private var chatLifecycleSurface: some View {
+            NavigationStack {
+                ChatLifecycleDemoScreen()
+            }
         }
 
         /// The v3 content-sized-bubble capture surface: a transcript of
@@ -1219,6 +1241,204 @@
                     repoKey: "\(repoRoot)/.git",
                     repoName: repo,
                     repoRoot: repoRoot))
+        }
+    }
+
+    /// The blank-viewport slice's transition-capture screen: the REAL
+    /// AgentChatStore + ChatScreen, driven by an in-memory scripted
+    /// broker (welcome → sessions.list → subscribe → history.open; a
+    /// long 40-message transcript, olderCursor present). The toolbar
+    /// button calls `store.start()` — the SAME path every lock/unlock,
+    /// refresh and transport reconnect takes — and the mount must
+    /// HOLD the readable transcript (the .disconnected-with-content
+    /// branch) instead of blanking to a full-screen banner.
+    @MainActor
+    private struct ChatLifecycleDemoScreen: View {
+        @State private var broker = DemoBrokerChatPipe()
+        @State private var store: AgentChatStore?
+
+        var body: some View {
+            Group {
+                if let store {
+                    chatSurface(store)
+                } else {
+                    ContentUnavailableView(
+                        "Starting demo broker",
+                        systemImage: "hourglass")
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Refresh") {
+                        // The refresh path: a re-`start()` on the SAME
+                        // store (no teardown) — the transition under
+                        // test. Content exists, so the mount must hold.
+                        Task { await store?.start() }
+                    }
+                }
+            }
+            .task {
+                let store = AgentChatStore(
+                    pipeFactory: AgentChatPipeFactory(
+                        open: { [broker] _ in broker },
+                        hostRecord: {
+                            Host(
+                                address: "demo", username: "demo",
+                                brokerChatSocketPath: "/tmp/demo-chat.sock")
+                        }),
+                    paneIdentity: {
+                        HerdrPaneSessionIdentity(
+                            sessionFilePath: "/demo/session.jsonl")
+                    })
+                self.store = store
+                await store.start()
+            }
+        }
+
+
+        /// The SAME projection AgentDetailView uses for .ready —
+        /// minimal here (no composer wiring), but the ChatScreen
+        /// mount/unmount branch is the production `brokerChatSurface`
+        /// shape: renderable phases keep the transcript, others the
+        /// honest banner.
+        @ViewBuilder
+        private func chatSurface(_ store: AgentChatStore) -> some View {
+            switch store.phase {
+            case .ready, .disconnected:
+                ChatScreen(
+                    paneID: "demo:lifecycle",
+                    agentName: "omp",
+                    state: .idle,
+                    content: store.content,
+                    initialLevel: .l1,
+                    changeLevel: { _, _ in },
+                    hasOlder: store.hasOlder,
+                    isLoadingOlder: store.isLoadingOlder,
+                    loadOlder: { await store.loadOlder() },
+                    authorLabel: "Meadow · omp")
+                .overlay(alignment: .bottom) {
+                    if case .disconnected(let reason) = store.phase {
+                        AgentChatStateBanner(
+                            icon: "wifi.exclamationmark",
+                            title: "Reconnecting to the chat broker",
+                            detail: reason)
+                    }
+                }
+            case .idle, .connecting, .loading:
+                AgentChatStateBanner(
+                    icon: "hourglass",
+                    title: "Connecting to the chat broker…",
+                    detail: nil)
+            case .unavailable(let reason):
+                AgentChatStateBanner(
+                    icon: "person.crop.circle.badge.xmark",
+                    title: "No chat broker for this agent", detail: reason)
+            case .ambiguous:
+                AgentChatStateBanner(
+                    icon: "arrow.triangle.branch",
+                    title: "Ambiguous agent mapping",
+                    detail: "More than one agent claims this session; Meadow will not guess.")
+            case .failed(let reason):
+                AgentChatStateBanner(
+                    icon: "exclamationmark.triangle",
+                    title: "The chat broker connection failed", detail: reason)
+            }
+        }
+    }
+
+    /// An in-memory broker pipe: answers the v1 handshake and serves a
+    /// long deterministic transcript. Same discipline as the unit
+    /// suites' ScriptedChatPipe, but always-on (no idle EOF) so the
+    /// mounted store stays parked.
+    private actor DemoBrokerChatPipe: AgentChatBytePipe {
+        private var incoming: [Data] = []
+        private var waiting: [CheckedContinuation<Data?, any Error>] = []
+
+        func brokerSend(_ text: String) {
+            incoming.append(Data((text + "\n").utf8))
+            pump()
+        }
+
+        private func pump() {
+            while !incoming.isEmpty && !waiting.isEmpty {
+                let chunk = incoming.removeFirst()
+                let continuation = waiting.removeFirst()
+                continuation.resume(returning: chunk)
+            }
+        }
+
+        func write(_ data: Data, timeout: Duration) async throws {
+            answerRequests(data)
+        }
+
+        private func answerRequests(_ data: Data) {
+            guard let text = String(bytes: data, encoding: .utf8) else {
+                return
+            }
+            let line = text.trimmingCharacters(in: .newlines)
+            guard let object = (try? JSONSerialization.jsonObject(
+                with: Data(line.utf8))) as? [String: Any]
+            else { return }
+            // EVERY hello (a fresh connect() after a refresh) gets a
+            // welcome. Each connection restarts its request-id
+            // counter, so request LINES repeat across connections —
+            // dedupe would starve later channels of their replies.
+            // Each write IS one frame: answer it once, no dedupe.
+            if object["type"] as? String == "hello" {
+                brokerSend(
+                    #"{"type":"welcome","protocol":1,"maxFrameBytes":1048576}"#)
+                return
+            }
+            guard let id = object["id"] as? String,
+                let method = object["method"] as? String
+            else { return }
+            Task { await respond(id: id, method: method) }
+        }
+
+        private func respond(id: String, method: String) {
+            switch method {
+            case "sessions.list":
+                brokerSend(
+                    #"{"type":"response","id":"\#(id)","result":{"sessions":[{"instanceId":"demo-instance","sessionId":"demo-session","generation":1,"locator":{"sessionFile":"/demo/session.jsonl"},"agent":{"kind":"omp","version":"1"},"capabilities":{"history":true,"streaming":true,"prompt":true,"interrupt":true,"interactions":false,"commands":true,"attachments":false,"branches":false}}]}}"#)
+            case "sessions.subscribe":
+                brokerSend(
+                    #"{"type":"response","id":"\#(id)","result":{"subscribed":true}}"#)
+            case "history.open":
+                var items: [String] = []
+                for index in 0..<40 {
+                    let role = index % 2 == 0 ? "user" : "assistant"
+                    let text = role == "user"
+                        ? "Message \(index) from the user"
+                        : "Message \(index) from the agent with a few words"
+                    items.append(
+                        #"{"kind":"message","id":"demo-rec-\#(index)","author":{"role":"\#(role)"},"createdAt":null,"blocks":[{"type":"text","text":"\#(text)"}]}"#)
+                }
+                brokerSend(
+                    #"{"type":"response","id":"\#(id)","result":{"sessionId":"demo-session","generation":1,"revision":"rev-demo","throughSeq":40,"items":[\#(items.joined(separator: ","))],"olderCursor":"demo-cursor"}}"#)
+            case "history.before":
+                brokerSend(
+                    #"{"type":"response","id":"\#(id)","result":{"sessionId":"demo-session","generation":1,"revision":"rev-demo","throughSeq":0,"items":[{"kind":"message","id":"demo-old-1","author":{"role":"user"},"createdAt":null,"blocks":[{"type":"text","text":"Message -1 from the user"}]},{"kind":"message","id":"demo-old-2","author":{"role":"assistant"},"createdAt":null,"blocks":[{"type":"text","text":"Message -2 from the agent"}]}],"olderCursor":null}}"#)
+            default:
+                brokerSend(
+                    #"{"type":"response","id":"\#(id)","result":{}}"#)
+            }
+        }
+
+        func read(maximumBytes: Int, timeout: Duration) async throws -> Data? {
+            if !incoming.isEmpty {
+                return incoming.removeFirst()
+            }
+            return try await withCheckedThrowingContinuation {
+                (continuation: CheckedContinuation<Data?, any Error>) in
+                waiting.append(continuation)
+            }
+        }
+
+        func close(timeout: Duration) async throws {
+            for continuation in waiting {
+                continuation.resume(returning: nil)
+            }
+            waiting.removeAll()
         }
     }
 

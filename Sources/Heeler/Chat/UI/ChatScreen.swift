@@ -164,6 +164,24 @@ struct ChatScreen: View {
     @State private var keyboardInset = ChatKeyboardInset()
     @State private var topSentinelVisible = false
 
+    /// The viewport's ONE scroll-position/geometry owner (blank-viewport
+    /// slice): every scroll intent — initial open, keyboard cycles,
+    /// older-page prepends, jump pill — routes through it; the view
+    /// binds its `position` and reports geometry/phase/sentinels back.
+    @State private var scrollCoordinator = ChatScrollCoordinator()
+    /// The transcript stack's global frame (the geometry probe).
+    @State private var scrollStackFrame: CGRect = .zero
+    /// The ScrollView's visible rect translated into the stack's
+    /// coordinate space (set by onScrollGeometryChange; consumed by
+    /// the derived-geometry pump below).
+    @State private var scrollVisibleFrame: CGRect = .zero
+    /// The last geometry reported to the coordinator (dedupe; the pump
+    /// must not re-issue identical geometry every layout pass).
+    @State private var lastReportedGeometry: ChatViewportGeometry?
+    /// The ScrollView's bound position (the coordinator's decisions
+    /// land here once each; user scrolls own it afterwards).
+    @State private var scrollPosition = ScrollPosition(idType: String.self)
+
     /// Item 18: per-pane draft persistence (load on appear, save per
     /// edit, clear on successful send).
     private let draftStore = ChatDraftPersistenceStore.shared
@@ -179,79 +197,7 @@ struct ChatScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        topSentinel
-                        ForEach(items) { item in
-                            transcriptView(for: item)
-                                .padding(.horizontal, 12)
-                        }
-                        bottomSentinel
-                    }
-                    .padding(.vertical, 10)
-                    // Reading-size applies here: the transcript's reading
-                    // text only (review finding 4) — the chrome (status
-                    // strip, composer, nav bar) keeps the design's scale.
-                    .modifier(ReadingTextSizeModifier(
-                        size: readingTextSize?.readingSize))
-                }
-                // Chat convention: open on the LATEST message. The
-                // anchor applies to the INITIAL offset only — NOT to
-                // alignment or size changes. A transcript shorter than
-                // the viewport then renders from the TOP (content
-                // where the reader starts; no blank page above it),
-                // while long transcripts still open at the bottom and
-                // prepended older pages keep the visible row anchored
-                // (no jump).
-                .defaultScrollAnchor(.bottom, for: .initialOffset)
-                // A transcript that parsed to zero rows (metadata-only
-                // session file, or a resumed session writing elsewhere)
-                // must not render as a blank screen.
-                .overlay {
-                    if rows.isEmpty {
-                        ContentUnavailableView(
-                            "No Messages Yet",
-                            systemImage: "text.bubble",
-                            description: Text(
-                                "This transcript has no conversation records. The agent may be writing to a different session file."))
-                    }
-                }
-                .onChange(of: pagingInputs) { _, _ in
-                    firePagingIfNeeded()
-                }
-                .modifier(
-                    ChatOpenersSurface(
-                        router: openRouter,
-                        fetch: fetch ?? { _ in throw CocoaError(.fileNoSuchFile) }))
-                // Outside-tap dismisses the open message-actions rail
-                // (taps on a message row win the gesture over this —
-                // they toggle the rail instead).
-                .onTapGesture { dismissActions() }
-                // The terminal Attach surface's jump chrome, adapted: one
-                // floating pill on the trailing edge, up = oldest loaded,
-                // down = latest. Each appears only when its end is offscreen.
-                .overlay(alignment: .trailing) {
-                    ChatJumpControl(
-                        showsOldest: !topSentinelVisible && !rows.isEmpty,
-                        showsNewest: !bottomSentinelVisible,
-                        onOldest: {
-                            if let first = rows.first {
-                                withAnimation(.snappy) {
-                                    proxy.scrollTo(first.id, anchor: .top)
-                                }
-                            }
-                        },
-                        onNewest: {
-                            if let last = rows.last {
-                                withAnimation(.snappy) {
-                                    proxy.scrollTo(last.id, anchor: .bottom)
-                                }
-                            }
-                        })
-                    .padding(.trailing, 8)
-                }
-            }
+            transcriptScrollView
             // The composer is a LAYOUT SIBLING (not a safe-area inset):
             // stock SwiftUI keyboard avoidance follows the two-stage
             // UIKit notifications an accessory-bearing responder
@@ -275,7 +221,29 @@ struct ChatScreen: View {
         // Item 18: the identity's draft loads on appear and on any
         // identity change (host or pane — keyed by draftKey), and
         // every draft/item/caret change persists immediately.
-        .onAppear { loadPersistedDraft() }
+        .onAppear {
+            loadPersistedDraft()
+            reportViewportDiagnostics(reason: "appear")
+        }
+        // The blank-viewport pumps: both geometry probes converge into
+        // ONE coordinator report; the item bounds pump runs on every
+        // content/level change. Geometry reports also cover the
+        // keyboard cycle (the inset changes the viewport height).
+        .onChange(of: scrollStackFrame) { _, _ in
+            pumpGeometryToCoordinator()
+        }
+        .onChange(of: scrollVisibleFrame) { _, _ in
+            pumpGeometryToCoordinator()
+        }
+        .onChange(of: keyboardInset.height) { _, _ in
+            ChatViewportLog.shared.record(
+                .anchor, "keyboard inset \(keyboardInset.height)")
+        }
+        .onChange(of: items.map(\.id), initial: true) { _, _ in
+            reportViewportDiagnostics(reason: "items")
+            pumpItemsToCoordinator()
+            pumpGeometryToCoordinator()
+        }
         .onChange(of: draftKey, initial: false) { _, _ in
             loadPersistedDraft()
         }
@@ -343,6 +311,118 @@ struct ChatScreen: View {
         }
     }
 
+    /// The transcript's scroll region (blank-viewport slice): the ONE
+    /// scroll surface, its geometry probes, and the coordinator's
+    /// position channel. Split out of `body` to keep each expression
+    /// inside the type-checker's budget (the file's standing rule).
+    private var transcriptScrollView: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 12) {
+                topSentinel
+                ForEach(items) { item in
+                    transcriptView(for: item)
+                        .padding(.horizontal, 12)
+                }
+                bottomSentinel
+            }
+            .padding(.vertical, 10)
+            // Reading-size applies here: the transcript's reading
+            // text only (review finding 4) — the chrome (status
+            // strip, composer, nav bar) keeps the design's scale.
+            .modifier(ReadingTextSizeModifier(
+                size: readingTextSize?.readingSize))
+            // The viewport/geometry probes (blank-viewport slice):
+            // the stack's own global frame vs the ScrollView's
+            // visible rect — both in one coordinate space, so the
+            // "a real message must intersect the viewport"
+            // invariant is measurable, not assumed.
+            .background(ContentSizeReader(onChange: { frame in
+                scrollStackFrame = frame
+            }))
+        }
+        .onScrollGeometryChange(for: CGRect.self) { geometry in
+            // Visible rect in GLOBAL space: the geometry reports
+            // content-space; translate by the stack's frame so both
+            // probes share one space for the intersection.
+            CGRect(
+                x: scrollStackFrame.minX,
+                y: scrollStackFrame.minY - geometry.contentOffset.y,
+                width: geometry.containerSize.width,
+                height: geometry.containerSize.height)
+        } action: { _, visible in
+            scrollVisibleFrame = visible
+        }
+        // The coordinator's ONE programmatic position channel: the
+        // view owns the binding (a direct coordinator binding would
+        // let every user-scroll write clobber the decision state);
+        // each new decision is APPLIED once, then the binding is free
+        // for the user's own scrolls.
+        .scrollPosition($scrollPosition)
+        .onChange(of: scrollCoordinator.position) { _, decision in
+            if let decision {
+                scrollPosition = decision
+            }
+        }
+        // Chat convention: open on the LATEST message. The anchor
+        // applies to the INITIAL offset only — NOT to alignment or
+        // size changes. A transcript shorter than the viewport then
+        // renders from the TOP (content where the reader starts; no
+        // blank page above it), while long transcripts still open at
+        // the bottom and prepended older pages keep the visible row
+        // anchored (no jump).
+        .defaultScrollAnchor(.bottom, for: .initialOffset)
+        .onScrollPhaseChange { _, newPhase in
+            scrollCoordinator.scrollPhaseChanged(newPhase)
+        }
+        // A transcript that parsed to zero rows (metadata-only session
+        // file, or a resumed session writing elsewhere) must not
+        // render as a blank screen.
+        .overlay {
+            if rows.isEmpty {
+                ContentUnavailableView(
+                    "No Messages Yet",
+                    systemImage: "text.bubble",
+                    description: Text(
+                        "This transcript has no conversation records. The agent may be writing to a different session file."))
+            }
+        }
+        .onChange(of: pagingInputs) { _, _ in
+            firePagingIfNeeded()
+        }
+        .modifier(
+            ChatOpenersSurface(
+                router: openRouter,
+                fetch: fetch ?? { _ in throw CocoaError(.fileNoSuchFile) }))
+        // Outside-tap dismisses the open message-actions rail (taps
+        // on a message row win the gesture over this — they toggle
+        // the rail instead).
+        .onTapGesture { dismissActions() }
+        // The terminal Attach surface's jump chrome, adapted: one
+        // floating pill on the trailing edge, up = oldest loaded,
+        // down = latest. Each appears only when its end is offscreen.
+        // Routed through the scroll coordinator (the single
+        // scroll-command owner) so a jump can never interleave with a
+        // viewport repair.
+        .overlay(alignment: .trailing) {
+            ChatJumpControl(
+                showsOldest: !topSentinelVisible && !rows.isEmpty,
+                showsNewest: !bottomSentinelVisible,
+                onOldest: {
+                    if let first = items.first {
+                        scrollCoordinator.userJumped(
+                            to: first.id, anchor: .top)
+                    }
+                },
+                onNewest: {
+                    if let last = items.last {
+                        scrollCoordinator.userJumped(
+                            to: last.id, anchor: .bottom)
+                    }
+                })
+            .padding(.trailing, 8)
+        }
+    }
+
     /// The zero-height row above the transcript: presence reports "the user
     /// has reached the top", and the loading affordance rides it.
     @ViewBuilder
@@ -363,19 +443,31 @@ struct ChatScreen: View {
                 }
                 Color.clear
                     .frame(height: 0)
-                    .onAppear { topSentinelVisible = true }
-                    .onDisappear { topSentinelVisible = false }
+                    .onAppear {
+                        topSentinelVisible = true
+                        scrollCoordinator.topSentinelVisibleChanged(true)
+                    }
+                    .onDisappear {
+                        topSentinelVisible = false
+                        scrollCoordinator.topSentinelVisibleChanged(false)
+                    }
             }
         }
     }
 
     /// Zero-height row below the transcript: visibility here means the
-    /// latest message is on screen, which hides the jump pill's down button.
+    /// latest message is on screen, which hides the jump pill's down
+    /// button. The SAME fact feeds the scroll coordinator's
+    /// follow-latest tracking (the one state that decides keyboard and
+    /// refresh geometry preservation).
     private var bottomSentinel: some View {
         Color.clear
             .frame(height: 0)
-            .onAppear { bottomSentinelVisible = true }
-            .onDisappear { bottomSentinelVisible = false }
+            .onScrollVisibilityChange(threshold: 0) { visible in
+                guard visible != bottomSentinelVisible else { return }
+                bottomSentinelVisible = visible
+                scrollCoordinator.bottomEdgeVisibleChanged(visible)
+            }
     }
 
     private var pagingInputs: [Bool] {
@@ -391,6 +483,14 @@ struct ChatScreen: View {
                 hasOlder: hasOlder,
                 isLoadingOlder: isLoadingOlder)
         else { return }
+        // The coordinator pins the CURRENT top row BEFORE the older
+        // page lands (the single scroll-command owner's job): the pin
+        // is issued while the old layout is still current — a no-op
+        // movement that holds the reader's anchor (record + intra-row
+        // offset) when the prepended rows materialize above it.
+        if let first = items.first {
+            scrollCoordinator.olderPageWillPrepend(currentFirstID: first.id)
+        }
         Task { await loadOlder() }
     }
 
@@ -409,6 +509,45 @@ struct ChatScreen: View {
     /// off); every other row keeps its plain shape.
     private var items: [ChatTranscriptItem] {
         ChatFiltering.visibleItems(from: rows, level: level)
+    }
+
+    /// The four-axis viewport diagnostics (design doc: blank-viewport
+    /// diagnosis): fires on mount, content change, geometry change and
+    /// the keyboard cycle — always WITHOUT message text (IDs, counts
+    /// and geometry only).
+    private func reportViewportDiagnostics(reason: String) {
+        ChatViewportLog.shared.record(
+            .records,
+            "pane=\(paneID) rows=\(items.count) reason=\(reason)")
+    }
+
+    /// The derived-geometry pump: both probes (the stack's global
+    /// frame, the ScrollView's translated visible rect) feed ONE
+    /// ChatViewportGeometry for the coordinator. Runs as an onChange
+    /// on the body so both probe updates converge into one report.
+    private func pumpGeometryToCoordinator() {
+        guard scrollStackFrame != .zero else { return }
+        let documentHeight = scrollStackFrame.height
+        let viewportHeight = scrollVisibleFrame.height
+        guard viewportHeight > 0 else { return }
+        let contentTop = scrollStackFrame.minY - scrollVisibleFrame.minY
+        let intersects = scrollStackFrame.intersects(scrollVisibleFrame)
+        let geometry = ChatViewportGeometry(
+            documentHeight: documentHeight,
+            viewportHeight: viewportHeight,
+            contentTop: contentTop,
+            rowsIntersectViewport: intersects && documentHeight > 0)
+        guard geometry != lastReportedGeometry else { return }
+        lastReportedGeometry = geometry
+        scrollCoordinator.geometryChanged(geometry)
+    }
+
+    /// The item-bounds pump: the coordinator sees the transcript's
+    /// first/last stable ids whenever the mounted content changes.
+    private func pumpItemsToCoordinator() {
+        let first = items.first?.id ?? ""
+        let last = items.last?.id ?? ""
+        scrollCoordinator.itemsChanged(first: first, last: last)
     }
 
     @ViewBuilder
@@ -1576,6 +1715,24 @@ private struct PopGestureEnabler: UIViewControllerRepresentable {
             else { return }
             navigation.interactivePopGestureRecognizer?.isEnabled = true
             navigation.interactivePopGestureRecognizer?.delegate = nil
+        }
+    }
+}
+
+/// Reports the content's GLOBAL frame (GeometryReader in the .global
+/// coordinate space) — the transcript stack's own frame probe for the
+/// viewport coordinator's intersection test. Clears is a no-op:
+/// GeometryReader's closure re-runs on any layout change.
+private struct ContentSizeReader: View {
+    let onChange: (CGRect) -> Void
+
+    var body: some View {
+        GeometryReader { geo in
+            Color.clear
+                .onAppear { onChange(geo.frame(in: .global)) }
+                .onChange(of: geo.frame(in: .global)) { _, new in
+                    onChange(new)
+                }
         }
     }
 }

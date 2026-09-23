@@ -294,7 +294,16 @@ final class AgentChatStore {
         // resurrect an answered card.
         resolvedInteractionTombstones = Set(
             interactionResolutions.map(\.requestId))
-        phase = .connecting
+        // The phase holds .disconnected when content was held (the
+        // blank-viewport fix): the view branch for .connecting/.loading
+        // would UNMOUNT the mounted transcript mid-reconnect — exactly
+        // the reported blank-on-refresh/lifecycle bug. The retained page
+        // stays the reading surface; the honest "reconnecting" banner
+        // rides as an overlay. A FRESH open (no held content) shows the
+        // honest initial .connecting state below.
+        if heldContent == nil {
+            phase = .connecting
+        }
         lifecycleTask = Task { [weak self] in
             await self?.run(
                 socketPath: socketPath, pane: pane, storeGeneration: myGeneration,
