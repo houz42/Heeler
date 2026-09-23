@@ -637,6 +637,21 @@
                             id: "mobile", label: "iOS App", repo: "meadow",
                             isLinkedWorktree: true),
                         workspace(id: "docs", label: "Product Docs", repo: "docs-site"),
+                    ],
+                    // Producer geometry (v3 Herdr order proofs): the iOS
+                    // App workspace's tab holds p1 ABOVE p4 (a vertical
+                    // split), so herdr order renders Polish, Audit, then
+                    // the Product Docs workspace's Refresh — visibly
+                    // different from A–Z (Audit first) and from status
+                    // order (done Audit first).
+                    layouts: [
+                        layout(workspaceID: "mobile", panes: [
+                            ("mobile:p1", x: 0, y: 0, width: 80, height: 12),
+                            ("mobile:p4", x: 0, y: 12, width: 80, height: 12),
+                        ]),
+                        layout(workspaceID: "docs", panes: [
+                            ("docs:p2", x: 0, y: 0, width: 80, height: 24),
+                        ]),
                     ]),
                 paneSnippets: [
                     "mobile:p1": "Running AttachViewTests… 24 passed",
@@ -773,11 +788,17 @@
         static func makeConsoleStore() -> ConsoleStore {
             let defaults = makeDefaults()
             let layouts = AgentRowLayoutStore(defaults: defaults)
+            // One seeded pin (v3 Pinned-section proofs): the capture
+            // shows the optional Pinned bookmark section ABOVE the
+            // canonical herdr-ordered rows, the pinned row duplicated
+            // in both places.
+            let pins = PinnedAgentsStore(defaults: defaults)
+            pins.togglePin(hostID: studioHostID, paneID: "mobile:p1")
             // Both demo Hosts follow the seeded global default so the
             // Agents list screenshots exercise the All Hosts (default) path.
             let console = ConsoleStore(
                 snapshotRetryDelay: .seconds(30),
-                pins: PinnedAgentsStore(defaults: defaults),
+                pins: pins,
                 rowLayouts: layouts
             ) { host, subscriptions in
                 EventsSession(
@@ -812,12 +833,19 @@
             [.init(.directory, dim: true)],
         ])
 
+        /// The snapshot builder for demo profiles. `layouts` carries the
+        /// pane geometry the v3 Herdr order's proofs capture: panes with
+        /// layouts place in the producer's arrangement; panes without
+        /// any layout (none in the current fixtures) would render the
+        /// honest "Order unavailable" mark.
         private static func snapshot(
-            agents: [AgentInfo], workspaces: [WorkspaceInfo]
+            agents: [AgentInfo],
+            workspaces: [WorkspaceInfo],
+            layouts: [PaneLayoutSnapshot] = []
         ) -> SessionSnapshot {
             SessionSnapshot(
                 agents: agents,
-                layouts: [],
+                layouts: layouts,
                 panes: [],
                 protocolVersion: 17,
                 tabs: workspaces.map { workspace in
@@ -834,6 +862,30 @@
                 },
                 version: "0.7.5-demo",
                 workspaces: workspaces)
+        }
+
+        /// One demo layout: a vertical split's pane rects, rows then
+        /// columns — the same geometry contract the projection's
+        /// reading order consumes.
+        private static func layout(
+            workspaceID: String,
+            panes: [(paneID: String, x: Int, y: Int, width: Int, height: Int)]
+        ) -> PaneLayoutSnapshot {
+            PaneLayoutSnapshot(
+                area: PaneLayoutRect(height: 24, width: 80, x: 0, y: 0),
+                focusedPaneID: panes.first?.paneID ?? "",
+                panes: panes.map { pane in
+                    PaneLayoutPane(
+                        focused: false,
+                        paneID: pane.paneID,
+                        rect: PaneLayoutRect(
+                            height: pane.height, width: pane.width,
+                            x: pane.x, y: pane.y))
+                },
+                splits: [],
+                tabID: "\(workspaceID):t1",
+                workspaceID: workspaceID,
+                zoomed: false)
         }
 
         private static func agent(

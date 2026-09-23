@@ -29,7 +29,10 @@ struct AgentListLayoutTests {
         paneID: String,
         status: AgentStatus = .idle,
         snapshotOrder: Int? = 0,
-        stateChangeSeq: Int? = 1
+        stateChangeSeq: Int? = 1,
+        workspaceOrder: Int? = nil,
+        tabOrder: Int? = nil,
+        paneOrder: Int? = nil
     ) -> ConsoleAgent {
         ConsoleAgent(
             // One stable Host identity per host NAME: agents on the same
@@ -44,7 +47,8 @@ struct AgentListLayoutTests {
             workspaceLabel: workspace, repositoryCheckout: nil,
             hostSessionName: session,
             tabLabel: tab, tabPosition: 1, workspaceTabCount: 1,
-            snapshotOrder: snapshotOrder)
+            snapshotOrder: snapshotOrder,
+            workspaceOrder: workspaceOrder, tabOrder: tabOrder, paneOrder: paneOrder)
     }
 
     // MARK: Ordering
@@ -105,6 +109,129 @@ struct AgentListLayoutTests {
         ]
         let ordered = AgentListLayout.ordered(agents, by: .title)
         #expect(ordered.map(\.agent.paneID) == ["a", "b", "c"])
+    }
+
+    // MARK: Herdr order (v3 default)
+
+    @Test func herdrOrderUsesProducerWorkspaceTabPaneOrdinals() {
+        // Deliberately adversarial inputs: titles, statuses and pane IDs
+        // all suggest orders OTHER than the producer's arrangement.
+        let agents = [
+            makeAgent(
+                title: "B title", paneID: "z", status: .blocked,
+                workspaceOrder: 1, tabOrder: 1, paneOrder: 0),
+            makeAgent(
+                title: "A title", paneID: "y", status: .done,
+                workspaceOrder: 1, tabOrder: 1, paneOrder: 1),
+            makeAgent(
+                title: "C title", paneID: "x", status: .idle,
+                workspaceOrder: 0, tabOrder: 0, paneOrder: 0),
+        ]
+        let ordered = AgentListLayout.ordered(agents, by: .herdr)
+        #expect(ordered.map(\.agent.paneID) == ["x", "z", "y"],
+                "workspace ordinal first, then tab, then pane — never title, status, or pane id")
+    }
+
+    @Test func herdrOrderWithinTabFollowsPaneGeometry() {
+        // Two panes in one tab: the lower pane (y=12) reads AFTER the
+        // upper one (y=0) — layout geometry, not creation order.
+        let agents = [
+            makeAgent(
+                title: "Lower", paneID: "below",
+                workspaceOrder: 0, tabOrder: 0, paneOrder: 1),
+            makeAgent(
+                title: "Upper", paneID: "above",
+                workspaceOrder: 0, tabOrder: 0, paneOrder: 0),
+        ]
+        let ordered = AgentListLayout.ordered(agents, by: .herdr)
+        #expect(ordered.map(\.agent.paneID) == ["above", "below"])
+    }
+
+    @Test func herdrOrderRenameDoesNotReorderButDesktopMoveDoes() {
+        // A rename changes only LABELS: the producer ordinals are
+        // identity-based, so the row keeps its position.
+        let before = [
+            makeAgent(title: "Zeta work", paneID: "a",
+                workspaceOrder: 0, tabOrder: 0, paneOrder: 0),
+            makeAgent(title: "Alpha work", paneID: "b",
+                workspaceOrder: 0, tabOrder: 0, paneOrder: 1),
+        ]
+        let renamed = [
+            makeAgent(title: "AAA renamed", paneID: "a",
+                workspaceOrder: 0, tabOrder: 0, paneOrder: 0),
+            makeAgent(title: "ZZZ renamed", paneID: "b",
+                workspaceOrder: 0, tabOrder: 0, paneOrder: 1),
+        ]
+        #expect(
+            AgentListLayout.ordered(before, by: .herdr).map(\.agent.paneID)
+                == AgentListLayout.ordered(renamed, by: .herdr).map(\.agent.paneID),
+            "a rename must not reorder a row")
+        // A desktop move re-enumerates: the pane that moved to the front
+        // gets the new ordinal and the row follows it.
+        let moved = [
+            makeAgent(title: "Zeta work", paneID: "a",
+                workspaceOrder: 0, tabOrder: 0, paneOrder: 1),
+            makeAgent(title: "Alpha work", paneID: "b",
+                workspaceOrder: 0, tabOrder: 0, paneOrder: 0),
+        ]
+        #expect(
+            AgentListLayout.ordered(moved, by: .herdr).map(\.agent.paneID)
+                == ["b", "a"],
+            "a desktop move must reorder the row")
+    }
+
+    @Test func herdrOrderMissingOrdinalsKeepArrivalOrderAtTheEnd() {
+        let placed = [
+            makeAgent(title: "Second", paneID: "placed-2",
+                workspaceOrder: 0, tabOrder: 0, paneOrder: 1),
+            makeAgent(title: "First", paneID: "placed-1",
+                workspaceOrder: 0, tabOrder: 0, paneOrder: 0),
+        ]
+        // Two rows the producer could not place (no layout carried
+        // them): arrival order, AFTER every placed row — and no
+        // alphabetical rescue ("Arrived" sorts before "Zulu" but
+        // arrived second).
+        let unplaced = [
+            makeAgent(title: "Zulu", paneID: "unplaced-1"),
+            makeAgent(title: "Arrived", paneID: "unplaced-2"),
+        ]
+        let ordered = AgentListLayout.ordered(
+            unplaced + placed, by: .herdr)
+        #expect(ordered.map(\.agent.paneID)
+            == ["placed-1", "placed-2", "unplaced-1", "unplaced-2"])
+        #expect(!ordered[2].hasProducerOrder && !ordered[3].hasProducerOrder)
+    }
+
+    @Test func herdrOrderHostsKeepCatalogBlockOrderNotNamesOrUUIDs() {
+        // The catalog lists "Zulu Host" FIRST and "Alpha Host" second;
+        // herdr order keeps that block sequence despite the names (and
+        // despite whatever UUIDs the hosts happen to own). Within each
+        // block the producer ordinals still order rows.
+        let zuluFirst = [
+            makeAgent(host: "Zulu Host", title: "z", paneID: "z2",
+                workspaceOrder: 0, tabOrder: 0, paneOrder: 1),
+            makeAgent(host: "Alpha Host", title: "a", paneID: "a1",
+                workspaceOrder: 0, tabOrder: 0, paneOrder: 0),
+            makeAgent(host: "Zulu Host", title: "z", paneID: "z1",
+                workspaceOrder: 0, tabOrder: 0, paneOrder: 0),
+        ]
+        let ordered = AgentListLayout.ordered(zuluFirst, by: .herdr)
+        #expect(ordered.map(\.agent.paneID) == ["z1", "z2", "a1"])
+    }
+
+    @Test func herdrOrderSessionsOnOneHostAreSeparateCatalogBlocks() {
+        // Same machine, two named sessions: distinct blocks, catalog
+        // sequence between them, producer ordinals within.
+        let agents = [
+            makeAgent(host: "devbox", session: "second", title: "s", paneID: "s1",
+                workspaceOrder: 0, tabOrder: 0, paneOrder: 0),
+            makeAgent(host: "devbox", session: "first", title: "f", paneID: "f1",
+                workspaceOrder: 0, tabOrder: 0, paneOrder: 0),
+        ]
+        #expect(
+            AgentListLayout.ordered(agents, by: .herdr).map(\.agent.paneID)
+                == ["s1", "f1"],
+            "the catalog block order (second listed first) holds; ordinals never cross sessions")
     }
 
     // MARK: Grouping
@@ -189,7 +316,7 @@ struct AgentListLayoutTests {
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = AgentListLayoutStore(defaults: defaults)
-        #expect(store.order == .recent && store.grouping == .none)
+        #expect(store.order == .herdr && store.grouping == .none)
         store.select(order: .title)
         store.select(grouping: .host)
         store.toggleCollapsed("g:host/alpha")
@@ -198,8 +325,40 @@ struct AgentListLayoutTests {
         #expect(rehydrated.grouping == .host)
         #expect(rehydrated.isCollapsed("g:host/alpha"))
         rehydrated.reset()
-        #expect(rehydrated.order == .recent && rehydrated.grouping == .none)
+        #expect(rehydrated.order == .herdr && rehydrated.grouping == .none)
         #expect(!rehydrated.isCollapsed("g:host/alpha"))
+        // A deliberately chosen alternate sort survives rehydration —
+        // the v3 migration only touches UNTOUCHED defaults.
+        let preserved = AgentListLayoutStore(defaults: defaults)
+        #expect(preserved.order == .herdr && preserved.grouping == .none)
+        preserved.select(order: .attention)
+        #expect(AgentListLayoutStore(defaults: defaults).order == .attention)
+    }
+
+    @Test func freshInstallsAndUntouchedOldDefaultsMigrateToHerdrOrder() throws {
+        let suite = "agent-list-layout-migrate-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        // Fresh install: nothing stored at all.
+        #expect(AgentListLayoutStore(defaults: defaults).order == .herdr)
+        // Untouched old default: the pre-v3 code never wrote the key
+        // until a choice was made, but a stored "recent" could only be
+        // the old default value — migrate it too.
+        defaults.set("recent", forKey: "agent-list-layout.order")
+        #expect(AgentListLayoutStore(defaults: defaults).order == .herdr)
+    }
+
+    @Test func deliberatelyChosenPreV3SortIsPreservedNotMigrated() throws {
+        let suite = "agent-list-layout-preserve-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        // A pre-v3 user who picked Title A–Z (no marker existed then):
+        // the choice is deliberate and must survive the migration.
+        defaults.set("title", forKey: "agent-list-layout.order")
+        let store = AgentListLayoutStore(defaults: defaults)
+        #expect(store.order == .title)
+        // And it keeps surviving rehydrations.
+        #expect(AgentListLayoutStore(defaults: defaults).order == .title)
     }
 }
 

@@ -666,27 +666,49 @@ final class HostConsoleProjection {
         let paneByID = Dictionary(snapshot.panes.map { ($0.paneID, $0) }) { first, _ in first }
         let workspaceByID = Dictionary(
             snapshot.workspaces.map { ($0.workspaceID, $0) }) { first, _ in first }
-        let tabByID = Dictionary(
+        // The producer's own workspace order (v3 Herdr order): the
+        // snapshot array IS the enumeration — position in it survives
+        // renames and follows desktop moves because the producer
+        // re-enumerates on every layout change.
+        var workspaceOrders: [String: Int] = [:]
+        for (index, workspace) in snapshot.workspaces.enumerated() {
+            if workspaceOrders[workspace.workspaceID] == nil {
+                workspaceOrders[workspace.workspaceID] = index
+            }
+        }
+        // The producer's tab order across the whole window, plus the
+        // workspace/tab counts the row's labels use.
+        var tabByID = Dictionary(
             snapshot.tabs.map { ($0.tabID, $0) }) { first, _ in first }
         var tabCounts: [String: Int] = [:]
         var tabPositions: [String: Int] = [:]
-        for tab in snapshot.tabs where tabPositions[tab.tabID] == nil {
-            tabCounts[tab.workspaceID, default: 0] += 1
-            tabPositions[tab.tabID] = tabCounts[tab.workspaceID]
+        var tabOrders: [String: Int] = [:]
+        for (index, tab) in snapshot.tabs.enumerated() {
+            if tabPositions[tab.tabID] == nil {
+                tabCounts[tab.workspaceID, default: 0] += 1
+                tabPositions[tab.tabID] = tabCounts[tab.workspaceID]
+                tabOrders[tab.tabID] = index
+            }
         }
-        // Pane reading order inside each tab, from the pane layouts: rows
+        // Pane reading order across the host (v3 Herdr order): the
+        // producer's tab enumeration first, then inside each layout rows
         // top-to-bottom, then left-to-right (a full-width row reads as
-        // one line, so y alone suffices; x breaks same-row ties). The
-        // tree's leaf order follows this geometry, not creation order.
-        // Panes unique per session, so the first layout to name a pane
-        // wins any duplicate.
+        // one line, so y alone suffices; x breaks same-row ties). First
+        // layout to name a pane wins any duplicate; panes unique per
+        // session make the map total over the layouts the snapshot
+        // carried.
         var paneOrders: [String: Int] = [:]
-        for layout in snapshot.layouts {
-            for (index, pane) in layout.panes.sorted(by: { lhs, rhs in
+        for layout in snapshot.layouts.sorted(by: { lhs, rhs in
+            let lhsTab = tabOrders[lhs.tabID] ?? Int.max
+            let rhsTab = tabOrders[rhs.tabID] ?? Int.max
+            if lhsTab != rhsTab { return lhsTab < rhsTab }
+            return lhs.workspaceID < rhs.workspaceID
+        }) {
+            for pane in layout.panes.sorted(by: { lhs, rhs in
                 (lhs.rect.y, lhs.rect.x) < (rhs.rect.y, rhs.rect.x)
-            }).enumerated() {
+            }) {
                 if paneOrders[pane.paneID] == nil {
-                    paneOrders[pane.paneID] = index
+                    paneOrders[pane.paneID] = paneOrders.count
                 }
             }
         }
@@ -710,6 +732,8 @@ final class HostConsoleProjection {
                 tabPosition: tab.flatMap { tabPositions[$0.tabID] },
                 workspaceTabCount: max(workspace?.tabCount ?? 0, tabCounts[agent.workspaceID] ?? 0),
                 snapshotOrder: snapshotOrder,
+                workspaceOrder: workspace.map { workspaceOrders[$0.workspaceID] },
+                tabOrder: tab.map { tabOrders[$0.tabID] },
                 paneLabel: paneByID[agent.paneID].flatMap {
                     $0.tabID == agent.tabID && $0.workspaceID == agent.workspaceID ? $0.label : nil
                 },

@@ -63,6 +63,35 @@ struct AgentListCountBarView: View {
     }
 }
 
+/// The optional Pinned bookmark section's heading (v3 "Pins are
+/// bookmarks"): a quiet strip matching the group-header density, with
+/// the pin glyph and the matching count. The section DUPLICATES links
+/// in pin-recency order — the canonical list below stays untouched.
+struct AgentListPinnedHeaderView: View {
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "pin.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text("Pinned")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            Text("\(count)")
+                .font(.caption2.monospacedDigit().weight(.semibold))
+                .foregroundStyle(.secondary)
+                .fixedSize()
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Pinned, \(count) agents")
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
 /// One collapsible group header of the grouped Agents list (v2 layout
 /// directive): the WORKSPACE header line shows the full three-part
 /// context path `host · session · workspace`, with the workspace's own
@@ -204,7 +233,7 @@ struct AgentListViewSheet: View {
                         title: "Order agents",
                         options: AgentListOrder.allCases.map { (label: $0.label, description: $0.description) },
                         selected: layoutStore.order.label,
-                        note: "Controls row order within each group.")
+                        note: "Herdr order is the default — your window's own arrangement. Rows herdr could not place say Order unavailable and keep their last position.")
                     { selected in
                         if let order = AgentListOrder.allCases.first(where: { $0.label == selected }) {
                             layoutStore.select(order: order)

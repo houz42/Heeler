@@ -35,12 +35,20 @@ struct ConsoleAgent: Identifiable, Sendable, Equatable {
     /// The snapshot enumerates workspaces, then tabs, then panes in the
     /// herdr window's order, so this is also the tree's group-order key.
     let snapshotOrder: Int?
-    /// Zero-based reading order of the pane within its tab (rows
-    /// top-to-bottom, then left-to-right), from the snapshot's pane
-    /// layouts; nil when no layout carried the pane. The Agents tree
-    /// orders leaves by it — pane geometry beats `snapshotOrder`, which
-    /// can follow creation order for splits — and falls back to
-    /// `snapshotOrder` when absent.
+    /// The workspace's position in session.snapshot.workspaces — the
+    /// PRODUCER's own workspace order (v3 "Default herdr ordering"),
+    /// retained across snapshot revisions. A rename never changes it; a
+    /// desktop move does (the producer re-enumerates).
+    let workspaceOrder: Int?
+    /// The tab's position in session.snapshot.tabs — the producer's tab
+    /// order within the whole herdr window. Tabs of one workspace are
+    /// contiguous in the producer's enumeration, so workspace order then
+    /// tab order reproduces the window's workspace→tab arrangement.
+    let tabOrder: Int?
+    /// Zero-based reading order of the pane across the WHOLE host's
+    /// layouts (tab order, then rows top-to-bottom, then left-to-right),
+    /// nil when no layout carried the pane. This is the v3 Herdr order's
+    /// pane key; within a tab it is exactly the pane-layout traversal.
     let paneOrder: Int?
     /// Snapshot git metadata when the workspace reported any. Presence does
     /// not mean this is removable: the main checkout is reported with
@@ -51,6 +59,15 @@ struct ConsoleAgent: Identifiable, Sendable, Equatable {
     var lastOutputSnippet: String?
 
     var id: ID { ID(hostID: hostID, paneID: agent.paneID) }
+
+    /// Whether the producer reported enough ordinals for the Herdr
+    /// order to place this row exactly: workspace, tab AND pane layout
+    /// ordinals all present. False rows sort last in their host block
+    /// (missing ordinals keep last-known/arrival order) and surface as
+    /// "Order unavailable" — never an invented alphabetical fallback.
+    var hasProducerOrder: Bool {
+        workspaceOrder != nil && tabOrder != nil && paneOrder != nil
+    }
 
     init(
         hostID: Host.ID,
@@ -65,6 +82,8 @@ struct ConsoleAgent: Identifiable, Sendable, Equatable {
         tabPosition: Int? = nil,
         workspaceTabCount: Int = 0,
         snapshotOrder: Int? = nil,
+        workspaceOrder: Int? = nil,
+        tabOrder: Int? = nil,
         paneLabel: String? = nil,
         paneOrder: Int? = nil
     ) {
@@ -77,8 +96,9 @@ struct ConsoleAgent: Identifiable, Sendable, Equatable {
         self.tabLabel = tabLabel
         self.paneLabel = paneLabel
         self.tabPosition = tabPosition
-        self.workspaceTabCount = workspaceTabCount
         self.snapshotOrder = snapshotOrder
+        self.workspaceOrder = workspaceOrder
+        self.tabOrder = tabOrder
         self.repositoryCheckout = repositoryCheckout
         self.lastOutputSnippet = lastOutputSnippet
         self.paneOrder = paneOrder
@@ -222,6 +242,10 @@ extension [ConsoleAgent] {
     /// Pins always lead by recency. Snapshot policy controls each Host's
     /// remaining Agents; absent snapshots retain the legacy priority order.
     /// Space order uses stable Host blocks even in the flat presentation.
+    /// (The v3 herdr-ordered VIEW projection lives in `AgentListLayout`;
+    /// this remains the raw store order for the legacy surfaces — the
+    /// terminal switcher rail, Live Activities — and the pin-led
+    /// relevance-tie input the search engine sees.)
     func consoleSorted(
         sortByHost: [Host.ID: AgentPanelSort] = [:],
         pinRank: (ConsoleAgent) -> Int? = { _ in nil }
