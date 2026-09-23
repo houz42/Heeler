@@ -76,6 +76,11 @@ enum UITestApp {
         /// surface over the demo fixture transcript — the
         /// tasks-inspector proof surface.
         case tasksInspector
+        /// The chat surface with an external link and a localhost link
+        /// in the transcript (v3 message-links proofs: external tap →
+        /// browse policy; loopback tap → the honest "Local address
+        /// unavailable" sheet).
+        case chatMessageLinks
 
         /// The v3 work inspector over the same fixture LINKED with
         /// live child-run registrations (two scouts Running, one
@@ -118,6 +123,8 @@ enum UITestApp {
                 return ["--demo-screenshots", "--demo-chat-tables"]
             case .chatLifecycle:
                 return ["--demo-screenshots", "--demo-chat-lifecycle"]
+            case .chatMessageLinks:
+                return ["--demo-screenshots", "--demo-chat-message-links"]
             case .chatSpecialSections:
                 return ["--demo-screenshots", "--demo-chat-special-sections"]
 

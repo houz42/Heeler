@@ -753,7 +753,8 @@ struct AgentDetailView: View {
                 // applied to ConsoleAgent.status), never by the
                 // transport phase — connection alone never implies
                 // thinking. Nil (no fresh report) renders nothing.
-                liveWork: liveWorkState)
+                liveWork: liveWorkState,
+                hostName: console.host(for: agent.hostID)?.displayName ?? "")
                 // The honest resolved-ask note (answered elsewhere /
                 // cancelled / expired) now renders IN the transcript
                 // flow as a quiet block (brokerContent.resolvedAsks),

@@ -1,0 +1,29 @@
+{
+  "slice": "v3 message links: tap to open (feat/v3-message-links)",
+  "captured": "2026-09-23",
+  "simulator": "iPhone 18 Pro (iOS 27.0)",
+  "captures": [
+    {
+      "file": "message-links-transcript.png",
+      "surface": "--demo-chat-message-links route: the real ChatScreen with one external link and one localhost link in the transcript",
+      "verified": [
+        "both URLs render linkified (green) in the transcript",
+        "tappability proven by the UI test tap (Link AX elements, identifier = URL)"
+      ]
+    },
+    {
+      "file": "message-links-localhost-sheet.png",
+      "surface": "the honest 'Local address unavailable' sheet after tapping http://localhost:4173/preview",
+      "verified": [
+        "title 'Local address unavailable' + explanation naming the ORIGINATING host (Studio Mac), never the phone",
+        "selectable monospaced URL shown verbatim",
+        "host identity row (Studio Mac, server icon)",
+        "exactly Copy address + Close — no Forward / gateway / Retry / open-on-phone affordances",
+        "footer suggests a reachable URL or opening on the host",
+        "Close dismisses back to the transcript with the links intact (reading position preserved)"
+      ]
+    }
+  ],
+  "external-link-proof": "testExternalLinkFollowsBrowsePolicyNotLocalSheet (MessageLinksProofTests): an external first-seen domain tap presents the embedded-vs-default-browser ask sheet — NEVER the localhost sheet",
+  "unit-pins": "ChatOpenersTests: localhostURLRoutesToLocalNotice, loopbackIPRoutesToLocalNotice, externalURLsNeverClassifyLocal, localhostLinkPresentsNoticeWithHostName, localhostNoticeWithoutHostNameNeverGuesses, dismissingLocalNoticeKeepsRouterClean, allowlistDecisionNeverOverridesLoopbackRefusal"
+}

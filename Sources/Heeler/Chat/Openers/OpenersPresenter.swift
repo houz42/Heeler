@@ -24,12 +24,24 @@ struct OpenersPresenter: ViewModifier {
     /// The URL SFSafariViewController is currently showing (set from the
     /// router's read-only `browsing`; nil dismisses).
     @State private var safariLink: PresentedLink?
+    /// The loopback-link notice lifted from the router for the sheet's
+    /// item binding — through a BINDING, not raw state, so ANY
+    /// dismissal (Close button, swipe-down, interactive pop) clears
+    /// the router's state too: an identical URL can then re-trigger.
+    private var localNoticeBinding: Binding<LocalAddressNotice?> {
+        Binding(
+            get: { router.localNotice },
+            set: { newValue in
+                if newValue == nil, router.localNotice != nil {
+                    router.dismissLocalNotice()
+                }
+            }
+        )
+    }
+
 
     func body(content: Content) -> some View {
         content
-            .onChange(of: router.browsing) { _, url in
-                safariLink = url.map { PresentedLink(url: $0) }
-            }
             .sheet(item: $safariLink) { link in
                 SafariView(url: link.url)
                     .ignoresSafeArea(edges: .bottom)
@@ -40,6 +52,12 @@ struct OpenersPresenter: ViewModifier {
             .sheet(item: shareBinding) { target in
                 RemoteShareFlow(
                     target: target, fetch: router.fetch, router: router)
+                    .presentationDetents([.medium])
+            }
+            .sheet(item: localNoticeBinding) { notice in
+                LocalAddressUnavailableSheet(
+                    notice: notice,
+                    close: { router.dismissLocalNotice() })
                     .presentationDetents([.medium])
             }
             .sheet(item: askBinding) { link in
@@ -185,4 +203,93 @@ struct SafariView: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ controller: SFSafariViewController, context: Context) {}
+}
+
+/// The v3 "Local address unavailable" sheet (design doc: V3 link UX).
+/// Honest by construction: it states that the loopback address belongs
+/// to the ORIGINATING AGENT HOST — not the phone — shows the selectable
+/// URL and the host identity, offers Copy address / Close, and suggests
+/// asking for a reachable URL or opening it on the host. It offers no
+/// Forward, no Install-gateway, no Retry, no "Open on phone" — none of
+/// those exist in v3 — and the URL is never executed or sent anywhere:
+/// the only side effects are the clipboard copy and dismissal.
+/// Dismissal is state-only: the transcript scroll position and the
+/// composer draft live outside the router and are untouched.
+struct LocalAddressUnavailableSheet: View {
+    let notice: LocalAddressNotice
+    let close: () -> Void
+
+    @State private var copied = false
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 16) {
+                    Image(systemName: "wifi.exclamationmark")
+                        .font(.system(size: 36))
+                        .foregroundStyle(.tint)
+                    Text("Local address unavailable")
+                        .font(.headline)
+                        .multilineTextAlignment(.center)
+                    Text(
+                        "This address refers to \(notice.originLabel), "
+                            + "the host Meadow is connected to — not this "
+                            + "phone. Meadow cannot open it from here.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                    // The selectable URL, shown verbatim and copyable.
+                    Text(notice.url.absoluteString)
+                        .font(.system(.footnote, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity)
+                        .padding(10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(.quaternary.opacity(0.4)))
+
+                    // The host identity line: the real originating host,
+                    // never a guess.
+                    Label(notice.originLabel, systemImage: "server.rack")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    VStack(spacing: 10) {
+                        Button {
+                            UIPasteboard.general.string =
+                                notice.url.absoluteString
+                            copied = true
+                        } label: {
+                            Label(
+                                copied ? "Address Copied" : "Copy address",
+                                systemImage: copied ? "checkmark" : "doc.on.doc")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .padding(.horizontal, 24)
+
+                    Text(
+                        "Ask for a reachable URL instead, or open "
+                            + "\(notice.loopbackHost) on \(notice.originLabel) directly."
+                            + "")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                }
+                .padding(.top, 24)
+                .padding(.bottom, 12)
+            }
+            .navigationTitle("Local Address")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { close() }
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
 }

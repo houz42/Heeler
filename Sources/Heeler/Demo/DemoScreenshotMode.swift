@@ -93,6 +93,12 @@
             /// a `task` spawn (4 scout children) — the capture and
             /// proof surface (v3 tasks-inspector proofs).
             case tasksInspector
+            /// The chat surface carrying an external link and a
+            /// localhost link in the transcript — the v3
+            /// message-links capture surface (external tap → browser
+            /// policy; loopback tap → the honest "Local address
+            /// unavailable" sheet).
+            case chatMessageLinks
 
             /// The v3 work inspector's child-run proof surface: the
             /// SAME fixture transcript LINKED with a real-shaped
@@ -116,6 +122,7 @@
                 if arguments.contains(chatLiveWorkLaunchArgument) { return .chatLiveWork }
                 if arguments.contains(chatQACardsLaunchArgument) { return .chatQACards }
                 if arguments.contains(chatLifecycleLaunchArgument) { return .chatLifecycle }
+                if arguments.contains(chatMessageLinksLaunchArgument) { return .chatMessageLinks }
                 if arguments.contains(chatBubblesLaunchArgument) { return .chatBubbles }
 
                 if arguments.contains(chatTablesLaunchArgument) { return .chatTables }
@@ -147,6 +154,8 @@
         static let pairingPasteLaunchArgument = "--demo-pairing-paste"
         static let tasksInspectorLaunchArgument = "--demo-tasks-inspector"
         static let tasksInspectorChildRunLaunchArgument = "--demo-tasks-inspector-childrun"
+        static let chatMessageLinksLaunchArgument = "--demo-chat-message-links"
+
         /// The multi-path demo Host: the same machine over LAN and VPN.
         static let multipathHost = Host(
             name: "Studio Mac",
@@ -250,6 +259,8 @@
                 chatTablesSurface
             case .pairingPaste:
                 pairingPasteSurface
+            case .chatMessageLinks:
+                chatMessageLinksSurface
             case .hostDetailPick:
                 multipathDetail(midProbe: false)
             case .chatPendingAsk:
@@ -815,6 +826,38 @@
                 changeLevel: { _, _ in },
                 deliver: { _ in },
                 authorLabel: "Meadow · omp")
+        }
+
+        /// The v3 message-links capture surface: one assistant article
+        /// carrying an external link (tap follows the normal
+        /// embedded-vs-ask browse policy) and one localhost link (tap
+        /// presents the honest "Local address unavailable" sheet with
+        /// the originating host's identity — the demo Host, never a
+        /// guess). Read-only deliver so captures are purely visual;
+        /// the tap flows are the real LinkifiedChatRow → router paths.
+        private var chatMessageLinksSurface: some View {
+            ChatScreen(
+                paneID: "demo:message-links",
+                agentName: "checkout",
+                state: .idle,
+                content: ChatContent(
+                    messages: [
+                        ChatMessage(role: .assistant, blocks: [
+                            .text(
+                                """
+                                The deploy finished. Full run report: \
+                                https://build.studio.example/runs/9412
+
+                                The preview also came up on the dev \
+                                box: http://localhost:4173/preview
+                                """),
+                        ]),
+                    ]),
+                initialLevel: .l1,
+                changeLevel: { _, _ in },
+                deliver: { _ in },
+                authorLabel: "Meadow · omp",
+                hostName: DemoScreenshotMode.multipathHost.displayName)
         }
 
         /// The v3 work-inspector capture surface: the SAME sheet the
