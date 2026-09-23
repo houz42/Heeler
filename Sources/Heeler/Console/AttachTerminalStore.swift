@@ -451,14 +451,18 @@ final class AttachTerminalStore {
     /// queued for the Host's terminal channel, and teardown must abort that
     /// wait rather than sit behind whoever holds the channel — a stop must
     /// never depend on the channel becoming available.
-    func stop(preservingPendingPaste: Bool = false) async {
+    func stop(
+        preservingPendingPaste: Bool = false,
+        caller: String = "unattributed"
+    ) async {
         stopRequested = true
         preservesPendingPasteOnStop = preservingPendingPaste
         if let session {
             await session.end()
         }
         if let task = sizeFallbackTask {
-            restorationTrace.emitDiagnostic("arm_cancelled site=stop")
+            restorationTrace.emitDiagnostic(
+                "arm_cancelled site=stop caller=\(caller) status=\(Self.diagnosticStatusName(status))")
             task.cancel()
             sizeFallbackTask = nil
         }

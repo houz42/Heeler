@@ -400,7 +400,16 @@ final class AgentAttachStore {
         ownsOnStageLifecycle: Bool = false,
         while isStillWanted: @escaping @MainActor () -> Bool
     ) {
-        guard isStillWanted() else { return }
+        #if DEBUG
+        terminal.restorationTrace.emitDiagnostic(
+            "replace_terminal entry owns_on_stage=\(ownsOnStageLifecycle)")
+        #endif
+        guard isStillWanted() else {
+            #if DEBUG
+            terminal.restorationTrace.emitDiagnostic("replace_terminal aborted unwanted_at_entry")
+            #endif
+            return
+        }
         // Synchronous on purpose. `previous.stop()` can wait on the SSH channel
         // teardown, and the user must see recovery throughout that wait rather
         // than the predecessor's `.live` status and an EmptyView overlay.
@@ -419,7 +428,7 @@ final class AgentAttachStore {
                 return
             }
             let previous = self.terminal
-            await previous.stop(preservingPendingPaste: true)
+            await previous.stop(preservingPendingPaste: true, caller: "replace_terminal")
             guard isStillWanted() else {
                 if !self.isOnStage() {
                     self.abortTerminalRecoveryOffStage(ownedBy: recoveryOwner)
@@ -552,7 +561,7 @@ final class AgentAttachStore {
             // let a drop start while staging is still tearing down.
             self.composer.resumeDroppedImagesAfterRejoin()
             if requiresFullReplacement, self.terminal.status != .stopped {
-                await self.terminal.stop(preservingPendingPaste: true)
+                await self.terminal.stop(preservingPendingPaste: true, caller: "rejoin_replacement")
                 guard self.terminalRecoveryOwner == recoveryOwner else { return }
                 guard self.lifecycleState == .active else {
                     self.finishTerminalRecovery(ownedBy: recoveryOwner)
@@ -709,7 +718,7 @@ final class AgentAttachStore {
         return enqueueLifecycleTransition { [self] in
             composer.abandonDroppedImagesForTeardown()
             await staging.leave()
-            await terminal.stop()
+            await terminal.stop(caller: "leave_transition")
             linkIndex.clear()
         }
     }
