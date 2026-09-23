@@ -61,10 +61,15 @@
             /// spans, links) — the wrapped-cell table capture
             /// surface (v3 table proofs).
             case chatTables
-
+            /// The Scan-to-Pair sheet in its paste-first entry layout
+            /// (the paste entry always mounted, camera-authorized
+            /// path) — the remote-pairing reachability capture and
+            /// paste→ceremony proof surface.
+            case pairingPaste
 
             static func fromArguments() -> Route {
                 let arguments = ProcessInfo.processInfo.arguments
+                if arguments.contains(pairingPasteLaunchArgument) { return .pairingPaste }
                 if arguments.contains(chatBubblesLaunchArgument) { return .chatBubbles }
                 if arguments.contains(chatTablesLaunchArgument) { return .chatTables }
                 if arguments.contains(chatSpecialSectionsLaunchArgument) { return .chatSpecialSections }
@@ -86,6 +91,7 @@
         static let hostDetailPickLaunchArgument = "--demo-host-detail-pick"
         static let chatBubblesLaunchArgument = "--demo-chat-bubbles"
         static let chatTablesLaunchArgument = "--demo-chat-tables"
+        static let pairingPasteLaunchArgument = "--demo-pairing-paste"
 
         /// The multi-path demo Host: the same machine over LAN and VPN.
         static let multipathHost = Host(
@@ -186,6 +192,8 @@
                 chatBubblesSurface
             case .chatTables:
                 chatTablesSurface
+            case .pairingPaste:
+                pairingPasteSurface
             case .hostDetailPick:
                 multipathDetail(midProbe: false)
             case .chatPendingAsk:
@@ -230,6 +238,46 @@
             }
             .onDisappear {
                 console.setHosts([])
+            }
+        }
+
+        /// The paste-path capture/proof surface: the REAL production
+        /// PairingScanView over the demo composition's volatile Host
+        /// catalog, with a scripted connector so a pasted real-format
+        /// code drives the actual parse → ceremony → persist pipeline
+        /// with no SSH. The camera-authorized layout is forced by the
+        /// `--uitest-pairing-authorized-camera` launch argument the
+        /// proof passes (the simulator has no camera hardware; UI
+        /// tests must not depend on the system permission prompt).
+        private var pairingPasteSurface: some View {
+            PairingScanView(
+                catalog: hosts,
+                connector: DemoPairingConnector(),
+                onPaired: { _ in },
+                onAddManually: {})
+        }
+
+        /// The scripted ceremony: every well-formed pasted code pairs
+        /// against the demo Host over its only address, same shape as
+        /// the unit-test fake. The connector seam is what keeps the
+        /// production view mountable without SSH.
+        private struct DemoPairingConnector: PairingConnector {
+            func pair(
+                code: PairingCode,
+                deviceKey: DeviceKey,
+                onStep: @escaping @Sendable (PairingStep) -> Void
+            ) async throws -> PairingResult {
+                onStep(.reach)
+                onStep(code.bootstrap == nil ? .verify : .authenticate)
+                if code.bootstrap != nil {
+                    onStep(.enroll)
+                }
+                onStep(.verify)
+                return PairingResult(
+                    address: code.addresses.first ?? "demo.demo.invalid",
+                    port: code.port,
+                    username: code.username,
+                    hostKeyFingerprint: code.hostKeyFingerprint)
             }
         }
 

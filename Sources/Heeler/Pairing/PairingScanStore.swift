@@ -79,6 +79,12 @@ final class PairingScanStore {
         // Paste (and a trailing newline from pbcopy/manual selection) is the
         // same parse path as a scan; trim so the two cannot disagree.
         let scanned = scannedCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !scanned.isEmpty else {
+            // An empty paste is honest feedback, not a silent no-op: the
+            // user asked to pair with nothing.
+            scanFailureMessage = Self.emptyPasteCopy
+            return
+        }
         do {
             let code = try PairingCode.decode(scanned)
             pairingCode = code
@@ -188,7 +194,12 @@ final class PairingScanStore {
     // MARK: Failure copy
 
     private static let expiredCopy =
-        "This Pairing Code has expired. Generate a new one on the computer and scan it."
+        "This Pairing Code has expired. Generate a new one on the computer and "
+        + "scan or paste it."
+
+    private static let emptyPasteCopy =
+        "Nothing was pasted. Copy the Pairing Code first — herdr shows it next "
+        + "to its QR code, with a Copy action."
 
     private static func failure(
         for error: PairingCeremonyError, isConfigOnly: Bool
@@ -206,7 +217,7 @@ final class PairingScanStore {
                 step: .authenticate,
                 message: "The Host rejected this Pairing Code. It may have been used already, "
                     + "expired, or its popup was closed. Generate a new Pairing Code on the "
-                    + "computer and scan it.",
+                    + "computer and scan or paste it.",
                 canRetry: false)
         case .enrollmentRefused(.expired):
             PairingFailure(step: .enroll, message: expiredCopy, canRetry: false)
@@ -214,7 +225,7 @@ final class PairingScanStore {
             PairingFailure(
                 step: .enroll,
                 message: "The Host has no pairing in progress for this code. Generate a new "
-                    + "Pairing Code on the computer and scan it.",
+                    + "Pairing Code on the computer and scan or paste it.",
                 canRetry: false)
         case .enrollmentRefused(.invalidKey):
             PairingFailure(
@@ -258,12 +269,13 @@ final class PairingScanStore {
     private static func message(for error: PairingCodeError) -> String {
         switch error {
         case .badPrefix:
-            "That QR code is not a herdr Pairing Code."
+            "That code is not a herdr Pairing Code."
         case .unsupportedVersion(let found):
             "This Pairing Code uses version \(found), which this app does not "
                 + "understand. Update the app and the pairing plugin so they match."
         case .badEncoding, .badPayload:
-            "The Pairing Code could not be read. Regenerate it in herdr and scan again."
+            "The Pairing Code could not be read. Regenerate it in herdr and scan "
+                + "or paste it again."
         }
     }
 }

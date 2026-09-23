@@ -49,15 +49,20 @@ enum UITestApp {
         /// The chat surface with special sections in the transcript (v2
         /// special-sections proofs: chip / L0 hide / expansion).
         case chatSpecialSections
-        /// The chat surface with v3 content-sized own-message bubbles
-        /// (one-word / emoji / multiline / long prose / fenced code
-        /// cases) — the bubble width capture surface.
+        /// The chat surface with own-message bubbles of every v3
+        /// sizing case (one-word, emoji, multiline, long-prose wrap,
+        /// fenced code) — the content-sized bubble capture surface
+        /// (v3 width proofs).
         case chatBubbles
-        /// The chat surface with v3 wrapped-cell markdown tables
-        /// (long multi-column cells, code spans, links) — the
-        /// phone-width table capture surface.
+        /// The chat surface with markdown tables that stress the
+        /// phone-width contract (long multi-column cells, code spans,
+        /// links) — the wrapped-cell table capture surface (v3 table
+        /// proofs).
         case chatTables
-
+        /// The Scan-to-Pair sheet, camera-authorized, with the
+        /// always-mounted paste entry — the remote-pairing paste path
+        /// proof surface.
+        case pairingPaste
 
         var launchArguments: [String] {
             switch self {
@@ -80,7 +85,12 @@ enum UITestApp {
                 return ["--demo-screenshots", "--demo-chat-tables"]
             case .chatSpecialSections:
                 return ["--demo-screenshots", "--demo-chat-special-sections"]
-        }
+            case .pairingPaste:
+                return [
+                    "--demo-screenshots", "--demo-pairing-paste",
+                    "--uitest-pairing-authorized-camera",
+                ]
+            }
         }
     }
 
