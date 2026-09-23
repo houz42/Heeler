@@ -732,8 +732,8 @@ final class HostConsoleProjection {
                 tabPosition: tab.flatMap { tabPositions[$0.tabID] },
                 workspaceTabCount: max(workspace?.tabCount ?? 0, tabCounts[agent.workspaceID] ?? 0),
                 snapshotOrder: snapshotOrder,
-                workspaceOrder: workspace.map { workspaceOrders[$0.workspaceID] },
-                tabOrder: tab.map { tabOrders[$0.tabID] },
+                workspaceOrder: workspace.flatMap { workspaceOrders[$0.workspaceID] },
+                tabOrder: tab.flatMap { tabOrders[$0.tabID] },
                 paneLabel: paneByID[agent.paneID].flatMap {
                     $0.tabID == agent.tabID && $0.workspaceID == agent.workspaceID ? $0.label : nil
                 },
