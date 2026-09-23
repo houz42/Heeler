@@ -158,7 +158,11 @@ struct ChatLiveWorkSpark: View {
         Canvas { context, size in
             let center = CGPoint(x: size.width / 2, y: size.height / 2)
             let radius = min(size.width, size.height) / 2
-            let ink = Color(AgentStatusPalette.yellowInk)
+            // The app's ONE accent (Meadow green) — the spark is an
+            // accent element like the Q/A card chips, never a second
+            // hue (amber is the agent-LIST status-badge ink, not the
+            // live-edge spark's).
+            let ink = Color.accentColor
 
             // The core dot.
             let core = radius * Self.coreFraction(frame: frame)
