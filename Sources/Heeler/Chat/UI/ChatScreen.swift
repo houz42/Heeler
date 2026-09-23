@@ -171,9 +171,8 @@ struct ChatScreen: View {
     @State private var scrollCoordinator = ChatScrollCoordinator()
     /// The transcript stack's global frame (the geometry probe).
     @State private var scrollStackFrame: CGRect = .zero
-    /// The ScrollView's visible rect translated into the stack's
-    /// coordinate space (set by onScrollGeometryChange; consumed by
-    /// the derived-geometry pump below).
+    /// The ScrollView's own on-screen frame (the fixed window probe —
+    /// direct global-space, no coordinate arithmetic).
     @State private var scrollVisibleFrame: CGRect = .zero
     /// The last geometry reported to the coordinator (dedupe; the pump
     /// must not re-issue identical geometry every layout pass).
@@ -193,6 +192,7 @@ struct ChatScreen: View {
     /// finding 4): applied to the TRANSCRIPT content only — reading
     /// text, never the chrome (status strip, composer, nav bar keep
     /// the design's scale).
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.appReadingTextSize) private var readingTextSize
 
     var body: some View {
@@ -238,6 +238,16 @@ struct ChatScreen: View {
         .onChange(of: keyboardInset.height) { _, _ in
             ChatViewportLog.shared.record(
                 .anchor, "keyboard inset \(keyboardInset.height)")
+        }
+        // Unlock/foreground: UIKit can swallow the keyboard's will-hide
+        // across the lock cycle (the responder is silently dropped),
+        // leaving the measured inset PINNED with the keyboard gone — the
+        // reported half-height chat. The window's keyboard layout guide
+        // is ground truth: reconcile, clear on zero coverage.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                keyboardInset.reconcileAfterSceneActivation()
+            }
         }
         .onChange(of: items.map(\.id), initial: true) { _, _ in
             reportViewportDiagnostics(reason: "items")
@@ -331,27 +341,27 @@ struct ChatScreen: View {
             // strip, composer, nav bar) keeps the design's scale.
             .modifier(ReadingTextSizeModifier(
                 size: readingTextSize?.readingSize))
-            // The viewport/geometry probes (blank-viewport slice):
-            // the stack's own global frame vs the ScrollView's
-            // visible rect — both in one coordinate space, so the
-            // "a real message must intersect the viewport"
-            // invariant is measurable, not assumed.
+            // The content probe (blank-viewport slice): the transcript
+            // STACK's own global frame. The stack is the scroll
+            // content's root — its frame MOVES under the fixed
+            // on-screen window as the user scrolls, so this one probe
+            // is always the exact content placement. (The previous
+            // arithmetic — reconstructing the visible rect from
+            // contentOffset — moved the WINDOW with the content and
+            // mis-measured every bottom-anchored layout: the
+            // reported "blank until scroll".)
             .background(ContentSizeReader(onChange: { frame in
                 scrollStackFrame = frame
             }))
         }
-        .onScrollGeometryChange(for: CGRect.self) { geometry in
-            // Visible rect in GLOBAL space: the geometry reports
-            // content-space; translate by the stack's frame so both
-            // probes share one space for the intersection.
-            CGRect(
-                x: scrollStackFrame.minX,
-                y: scrollStackFrame.minY - geometry.contentOffset.y,
-                width: geometry.containerSize.width,
-                height: geometry.containerSize.height)
-        } action: { _, visible in
-            scrollVisibleFrame = visible
-        }
+        // The window probe: the ScrollView's own on-screen frame —
+        // fixed in global space. Both probes are direct global-space
+        // measurements; the "a real message must intersect the
+        // viewport" invariant is their plain intersection, with no
+        // coordinate arithmetic to get wrong.
+        .background(ContentSizeReader(onChange: { frame in
+            scrollVisibleFrame = frame
+        }))
         // The coordinator's ONE programmatic position channel: the
         // view owns the binding (a direct coordinator binding would
         // let every user-scroll write clobber the decision state);

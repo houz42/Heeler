@@ -70,9 +70,24 @@ final class ChatViewportProofTests: XCTestCase {
 
         // The 40-message fixture overflows the phone viewport; the
         // chat convention opens at the LATEST edge: the newest
-        // messages must be VISIBLE immediately, no manual scroll.
+        // messages must be VISIBLE immediately, no manual scroll
+        // (the reported "blank until scroll" — entry/unlock must
+        // render content on its own).
         assertVisibleMessage("Message 39 from the agent", in: app)
         assertVisibleMessage("Message 38 from the user", in: app)
+
+        // The half-height symptom's pin: with NO keyboard, the chat
+        // content occupies (nearly) the FULL window height — the
+        // read-only surface has no composer, so a pinned keyboard
+        // inset is the only way the visible message region could be
+        // squeezed. The newest message sits at the bottom of a full-
+        // height scroll view: its frame must reach the lower half of
+        // the window.
+        let window = app.windows.firstMatch
+        let newest = message("Message 39 from the agent", in: app)
+        XCTAssertTrue(
+            newest.frame.midY > window.frame.midY,
+            "the newest message sits in the TOP half with no keyboard — the half-height surface symptom")
 
         captureScreenshot(app, "lifecycle-initial-open-latest-visible")
     }
