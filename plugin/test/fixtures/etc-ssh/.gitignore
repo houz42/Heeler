@@ -1,0 +1,4 @@
+# Generated test host key pair (created by pair-cli.test.js runs and CI);
+# only this ignore file is tracked.
+*
+!.gitignore

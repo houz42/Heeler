@@ -24,6 +24,13 @@ contexts = ["global"]
 command = ["sh", "scripts/node-trampoline.sh", "src/pair-action.js"]
 
 [[actions]]
+id = "pair-stdout"
+title = "Pair a mobile device (foreground stdout)"
+description = "Print a Pairing Code QR and the HERDR-PAIR payload directly in the invoking terminal"
+contexts = ["global"]
+command = ["sh", "scripts/node-trampoline.sh", "src/pair-cli.js"]
+
+[[actions]]
 id = "setup"
 title = "Meadow host setup"
 description = "Install the broker runtime, start the shared broker (one per host), install agent adapter shims"

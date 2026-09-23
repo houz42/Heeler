@@ -1,0 +1,78 @@
+#!/bin/sh
+# meadow — installed foreground entrypoint for the Meadow host package.
+#
+# Design (v3 "Native cold start and Meadow Host helper"): the public pairing
+# entrypoint is a FOREGROUND CLI, not a herdr plugin-action dispatch. This
+# launcher must work:
+#   - from any cwd (no checkout-relative paths),
+#   - when invoked from a checkout/worktree AND when installed by herdr
+#     (plugin install copies the tree) or symlinked into ~/.local/bin,
+#   - under herdr/SSH scrubbed PATHs (no bare `node` assumption),
+#   - without /usr/bin/node specifically: it resolves a real node the same
+#     way scripts/node-trampoline.sh does.
+#
+# Plugin tree resolution order:
+#   1. $MEADOW_PLUGIN_DIR (explicit override)
+#   2. the tree this script lives in (checkout/worktree/installed copy),
+#      when src/pair-cli.js sits next to it
+#   3. herdr's plugin registry (~/.config/herdr/plugins.json, or
+#      $HERDR_CONFIG_DIR), which records the plugin_root for both
+#      `herdr plugin install` copies and `herdr plugin link` worktrees
+
+set -eu
+
+subcommand="${1-}"
+if [ "$subcommand" != "pair" ] && [ "$subcommand" != "--help" ] && [ "$subcommand" != "-h" ] && [ -n "$subcommand" ]; then
+  echo "meadow: unknown subcommand '$subcommand' (try: meadow pair)" >&2
+  exit 2
+fi
+
+find_plugin_dir() {
+  if [ -n "${MEADOW_PLUGIN_DIR:-}" ]; then
+    printf '%s' "$MEADOW_PLUGIN_DIR"
+    return 0
+  fi
+  self_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+  if [ -f "$self_dir/../src/pair-cli.js" ]; then
+    printf '%s' "$self_dir/.."
+    return 0
+  fi
+  config_dir="${HERDR_CONFIG_DIR:-$HOME/.config/herdr}"
+  registry="$config_dir/plugins.json"
+  if [ -f "$registry" ]; then
+    for root in $(grep '"plugin_root"' "$registry" | sed 's/.*: *"//;s/".*//' 2>/dev/null); do
+      if [ -f "$root/src/pair-cli.js" ]; then
+        printf '%s' "$root"
+        return 0
+      fi
+    done
+  fi
+  return 1
+}
+
+if ! PLUGIN_DIR=$(find_plugin_dir); then
+  echo "meadow: cannot locate the Meadow host package (no src/pair-cli.js beside me, in \$MEADOW_PLUGIN_DIR, or in herdr's plugins.json)" >&2
+  exit 127
+fi
+PLUGIN_DIR=$(CDPATH= cd -- "$PLUGIN_DIR" && pwd -P)
+
+NODE="${MEADOW_NODE:-${HEELER_NODE:-}}"
+if [ -z "$NODE" ] && [ -f "$PLUGIN_DIR/node-path" ]; then
+  P=$(cat "$PLUGIN_DIR/node-path" 2>/dev/null || true)
+  if [ -n "$P" ] && [ -x "$P" ]; then NODE="$P"; fi
+fi
+if [ -z "$NODE" ]; then
+  for c in "$HOME/.local/share/mise/shims/node" "$HOME/.local/bin/node" \
+           /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node; do
+    if [ -x "$c" ] && "$c" -e 'process.exit(0)' >/dev/null 2>&1; then
+      NODE="$c"
+      break
+    fi
+  done
+fi
+if [ -z "$NODE" ]; then
+  echo "meadow: no working node found (tried MEADOW_NODE, HEELER_NODE, node-path override, mise shim, ~/.local/bin, Homebrew, /usr/bin)" >&2
+  exit 127
+fi
+
+exec "$NODE" "$PLUGIN_DIR/src/pair-cli.js" "$@"
