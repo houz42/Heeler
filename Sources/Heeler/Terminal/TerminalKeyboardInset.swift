@@ -124,6 +124,28 @@ final class TerminalKeyboardInset {
         self.window = window
     }
 
+    /// Reconciles against the window's keyboard layout guide on scene
+    /// activation (unlock/foreground): UIKit can swallow the will-hide
+    /// when the responder is dropped across a lock/unlock, leaving the
+    /// measured height PINNED with the keyboard gone (the reported
+    /// half-height terminal). The guide is the ground truth — zero
+    /// coverage clears the pin (the design doc's "clear on zero
+    /// coverage"); a measured keyboard keeps/restores the height.
+    func reconcileAfterSceneActivation() {
+        // A responder handoff freezes the inset by contract; its own
+        // exit reconcile owns that window.
+        guard !isHoldingHandoffHeight else { return }
+        guard let measured = measureWindowKeyboard() else { return }
+        coalesceTask?.cancel()
+        coalesceTask = nil
+        if measured > 0 {
+            apply(measured)
+        } else {
+            apply(0)
+            isSoftwareKeyboardDismissed = true
+        }
+    }
+
     private func measure(_ endFrame: CGRect) -> CGFloat? {
         if let measureOverride {
             return measureOverride(endFrame)

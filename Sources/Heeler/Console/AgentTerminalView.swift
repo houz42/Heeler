@@ -1409,6 +1409,13 @@ struct AgentTerminalView: View {
         let afterPossibleSuspension = activity.lastAbsenceMayHaveSuspended
         if afterPossibleSuspension {
             armDirectKeyboardClaimIfNeeded()
+            // Unlock/foreground is exactly the window in which UIKit can
+            // swallow the keyboard's will-hide (the responder is silently
+            // dropped), leaving the measured inset PINNED with no keyboard
+            // — the reported half-height surface. The window's keyboard
+            // layout guide is ground truth: reconcile and clear on zero
+            // coverage (design doc: keyboard layout has one owner).
+            keyboardInset.reconcileAfterSceneActivation()
         }
         attach.didBecomeActive(afterPossibleSuspension: afterPossibleSuspension)
     }

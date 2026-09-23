@@ -101,6 +101,24 @@ final class ChatKeyboardInset {
         self.window = window
     }
 
+    /// Reconciles the inset against the window's keyboard layout guide
+    /// (the design doc's "clear on zero coverage"): called on scene
+    /// activation (unlock/foreground) — exactly the moment UIKit can
+    /// drop or swallow keyboard notifications, leaving a measured height
+    /// PINNED with no keyboard visible (the reported half-height
+    /// surface: content squeezed to the top half with the keyboard
+    /// down). The guide rests on the bottom safe area while no keyboard
+    /// is docked, so a zero guide coverage clears the stale inset.
+    func reconcileAfterSceneActivation() {
+        guard measureOverride == nil, let window else { return }
+        let measured = TerminalKeyboardInset.layoutGuideHeight(in: window)
+        if let measured {
+            coalesceTask?.cancel()
+            coalesceTask = nil
+            apply(measured)
+        }
+    }
+
     private func keyboardWillPresent(endFrame: CGRect?) {
         guard let endFrame else { return }
         // The measurement seam (tests inject geometry; production reads

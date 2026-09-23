@@ -68,6 +68,11 @@ enum UITestApp {
         /// proof surface.
         case pairingPaste
 
+        /// The chat surface driven by the REAL AgentChatStore over a
+        /// scripted in-memory broker pipe — the blank-viewport slice's
+        /// transition-capture fixture.
+        case chatLifecycle
+
         var launchArguments: [String] {
             switch self {
             case .console: return ["--demo-screenshots"]
@@ -89,6 +94,8 @@ enum UITestApp {
                 return ["--demo-screenshots", "--demo-chat-bubbles"]
             case .chatTables:
                 return ["--demo-screenshots", "--demo-chat-tables"]
+            case .chatLifecycle:
+                return ["--demo-screenshots", "--demo-chat-lifecycle"]
             case .chatSpecialSections:
                 return ["--demo-screenshots", "--demo-chat-special-sections"]
             case .pairingPaste:
