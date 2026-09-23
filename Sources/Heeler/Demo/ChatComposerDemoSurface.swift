@@ -78,10 +78,22 @@
 
         /// The attachment-capture route's launch argument.
         static let attachmentLaunchArgument = "--demo-composer-attachment"
+        /// The draft-restore capture route's launch argument: keeps
+        /// the persisted draft across relaunches (the reconnect
+        /// analog for the writing-assist proofs) instead of clearing
+        /// the pane at init.
+        static let persistDraftLaunchArgument = "--demo-composer-persist"
 
         /// True when the attachment capture route is active.
         private static var wantsAttachmentSeed: Bool {
             ProcessInfo.processInfo.arguments.contains(attachmentLaunchArgument)
+        }
+
+        /// True when the persisted draft must SURVIVE the launch —
+        /// the restore proofs type a draft, relaunch, and expect it
+        /// back through the real item-18 load path.
+        private static var keepsPersistedDraft: Bool {
+            ProcessInfo.processInfo.arguments.contains(persistDraftLaunchArgument)
         }
 
         init() {
@@ -103,11 +115,12 @@
                                 author: nil)
                         ]),
                     paneID: "demo:composer")
-            } else {
+            } else if !Self.keepsPersistedDraft {
                 // The plain capture route opens the RESTING row: a
                 // stale seed from a previous attachment capture must
                 // not bleed in (the draft suite persists across
-                // relaunches by design).
+                // relaunches by design). The persist route keeps
+                // whatever is on disk — the restore proof's premise.
                 ChatDraftPersistenceStore.shared.clear(paneID: "demo:composer")
             }
             _model = StateObject(wrappedValue: ChatComposerDemoModel())

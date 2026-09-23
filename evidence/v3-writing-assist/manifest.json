@@ -1,0 +1,56 @@
+[
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "20A4823F-3394-41D4-BA63-84E4CD870663",
+        "deviceName" : "iPhone 18 Pro Max",
+        "exportedFileName" : "EEBAC530-D6F7-4714-8F17-7EAADE60AA6F.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "writing-assist-empty-after-send-relaunch_0_F17BCF71-D3C2-4E36-9138-3530E248372E.png",
+        "timestamp" : 1790175408.88
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "20A4823F-3394-41D4-BA63-84E4CD870663",
+        "deviceName" : "iPhone 18 Pro Max",
+        "exportedFileName" : "ACB5C0AD-96FA-4860-B2A2-4F529D242970.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "writing-assist-draft-restored-after-relaunch_0_D03D745B-338D-4738-B9A3-5B6C5970FE94.png",
+        "timestamp" : 1790175398.787
+      }
+    ],
+    "testIdentifier" : "WritingAssistProofTests/testDraftRestoreAcrossRelaunchKeepsExactlyOneCopyAndCaret()",
+    "testIdentifierURL" : "test://com.apple.xcode/Heeler/HeelerUITests/WritingAssistProofTests/testDraftRestoreAcrossRelaunchKeepsExactlyOneCopyAndCaret"
+  },
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "20A4823F-3394-41D4-BA63-84E4CD870663",
+        "deviceName" : "iPhone 18 Pro Max",
+        "exportedFileName" : "C024C6BE-ACE1-45D2-B6AE-20A93E23DF3B.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "writing-assist-placeholder-cycle_0_498E0242-5AC8-4A7E-9029-394DD62653C2.png",
+        "timestamp" : 1790175423.634
+      }
+    ],
+    "testIdentifier" : "WritingAssistProofTests/testPlaceholderFollowsOnlyText()",
+    "testIdentifierURL" : "test://com.apple.xcode/Heeler/HeelerUITests/WritingAssistProofTests/testPlaceholderFollowsOnlyText"
+  },
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "20A4823F-3394-41D4-BA63-84E4CD870663",
+        "deviceName" : "iPhone 18 Pro Max",
+        "exportedFileName" : "7CA63378-A8C4-41D9-96BD-89BFF661B450.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "writing-assist-suggestion-accept_0_F4DF9A67-83C8-4ABF-9BC9-E3ADA3A0D41E.png",
+        "timestamp" : 1790175434.719
+      }
+    ],
+    "testIdentifier" : "WritingAssistProofTests/testSuggestionAcceptAppliesTextAndCaret()",
+    "testIdentifierURL" : "test://com.apple.xcode/Heeler/HeelerUITests/WritingAssistProofTests/testSuggestionAcceptAppliesTextAndCaret"
+  }
+]

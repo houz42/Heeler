@@ -1181,9 +1181,43 @@ struct ChatScreen: View {
     /// pendingAccept, and the next edit tracks the settled result.
     @State private var draftCaret = 0
 
-    private func applyComposerEdit(_ newText: String, caret: Int = 0) {
+    /// The ONE editor synchronization path (v3 design doc, "Writing
+    /// assistance and placeholder restoration"): every draft
+    /// installation — typing, suggestion accept, programmatic
+    /// restore, clear-after-send, reconnect/identity switch — goes
+    /// through here, never through scattered `draft =` writes. The
+    /// representable's update pass is the sole bridge between this
+    /// SwiftUI state and the installed UIKit text: it installs the
+    /// text, then places the caret (one-shot request, clamped to
+    /// the text's UTF-16 bounds by both sides), and its coordinator
+    /// re-syncs the placeholder and intrinsic size — so every caller
+    /// of this method gets the same placeholder/height/caret
+    /// treatment for free.
+    ///
+    /// `caretRequest` carries the target location as a fresh
+    /// identity each time, so a restore is applied exactly once and
+    /// never fights a later user selection; a caret of nil keeps the
+    /// current selection where it is (ordinary typing reports its
+    /// own settled caret). `items` nil keeps the current rail
+    /// (typing never touches it); a restore/clear passes the exact
+    /// restored set.
+    private func installDraft(
+        _ newText: String,
+        items: [ChatDraftItem]? = nil,
+        caret: Int?
+    ) {
         draft = newText
-        draftCaret = caret
+        if let items {
+            draftItems = items
+        }
+        if let caret {
+            draftCaret = min(max(caret, 0), newText.utf16.count)
+            caretRequest = ChatCaretRequest(location: draftCaret)
+        }
+    }
+
+    private func applyComposerEdit(_ newText: String, caret: Int = 0) {
+        installDraft(newText, caret: caret)
     }
 
     /// Return with the suggestion menu open accepts the highlighted
@@ -1194,7 +1228,10 @@ struct ChatScreen: View {
     private func composerReturnKey(_ router: ComposerRouterStore) -> Bool {
         let result = router.handleReturnKey(into: draft)
         if let accepted = result.accepted {
-            draft = accepted.draft
+            // The accept is a draft installation like any restore:
+            // ONE path (installDraft), with the representable applying
+            // text+caret together through pendingAccept.
+            installDraft(accepted.draft, caret: accepted.caret)
             pendingAccept = accepted
         }
         return result.consumedKey
@@ -1359,7 +1396,7 @@ struct ChatScreen: View {
                             // accept's caret — end of the insertion,
                             // after its trailing space — is the new
                             // draft's end.
-                            draft = newDraft
+                            installDraft(newDraft, caret: newDraft.utf16.count)
                             pendingAccept = (newDraft, newDraft.utf16.count)
                         })
                 }
@@ -1485,10 +1522,12 @@ struct ChatScreen: View {
 
     /// A successful Send clears the composer AND its persisted draft
     /// (item 18: the next message starts clean; a cleared composer stays
-    /// cleared across surfaces).
+    /// cleared across surfaces). The editor update rides the ONE
+    /// synchronization path — an installed empty draft hides the
+    /// placeholder and restores the one-line frame exactly like a
+    /// restore does.
     private func clearDraftAfterSend() {
-        draft = ""
-        draftItems = []
+        installDraft("", items: [], caret: 0)
         draftStore.clear(paneID: draftKey)
         // Round 4, finding 3: a successful send resolved every
         // attachment — the tile mark and its error clear with the draft.
@@ -1499,31 +1538,30 @@ struct ChatScreen: View {
     /// The pane's persisted draft (item 18): loaded on appear (and on
     /// identity change) so a half-typed message survives leaving and
     /// returning to the chat. A MISSING entry installs the EMPTY
-    /// state — the review's case: switching identities in the same
-    /// view must not leave the previous identity's text/items/caret on
-    /// screen. The caret rides the draft via a one-shot placement so
-    /// the restore never fights an in-progress selection.
+    /// state — never the previous identity's content (the design
+    /// doc's rule). Every restore is ONE editor update through the
+    /// same ``installDraft`` path the typing/accept/clear flows use:
+    /// text + items + caret together, selection clamped to the
+    /// text's UTF-16 bounds, placeholder and intrinsic size
+    /// re-synced by the representable's update pass.
     private func loadPersistedDraft() {
         guard let saved = draftStore.draft(paneID: draftKey) else {
             // No draft for THIS identity: empty composer, no stale
             // caret request from the previous identity.
-            draft = ""
-            draftItems = []
-            draftCaret = 0
+            installDraft("", items: [], caret: 0)
             return
         }
-        draft = saved.text
         // Defensive: never restore an in-flight (empty-path) image
         // item — its upload belonged to a previous surface and will
         // never complete here.
-        draftItems = saved.items.map(ChatDraftItem.init).filter { item in
+        let restoredItems = saved.items.map(ChatDraftItem.init).filter {
+            item in
             if case .image(_, let path, _) = item {
                 return !path.isEmpty
             }
             return true
         }
-        draftCaret = saved.caretLocation
-        caretRequest = ChatCaretRequest(location: saved.caretLocation)
+        installDraft(saved.text, items: restoredItems, caret: saved.caretLocation)
     }
 
     /// Persists the live draft per edit (item 18). An EMPTY draft clears
