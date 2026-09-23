@@ -163,8 +163,62 @@ enum TerminalKeyboardHandoffOutcome: Equatable {
     case cancelled
 }
 
+/// Keeps the emulator, including offscreen output and scrollback, with a
+/// retained connection. A new feed always gets a new surface.
+///
+/// Ported from upstream Heeler (b7de27d1 + the c6135ec5/e4239f31/74864560
+/// hardening) for the chat↔terminal surface swap: once the terminal's
+/// UIKit surface has mounted (on the user's icon tap — the fork keeps
+/// chat as the default detail surface), retaining it across the swap's
+/// unmount/remount preserves the laid-out grid, the scrollback, and
+/// the size reports the pipeline opened on — the remount returns the SAME
+/// surface instead of a cold one that never reports a grid (#device).
+@MainActor
+final class TerminalSurfaceRetention {
+    private var feed: TerminalByteFeed?
+    private var surface: HeelerTerminalView?
+
+    func surface(for feed: TerminalByteFeed, make: () -> HeelerTerminalView) -> HeelerTerminalView {
+        if self.feed === feed, let surface { return surface }
+        clear()
+        let surface = make()
+        self.feed = feed
+        self.surface = surface
+        return surface
+    }
+
+    func clear() {
+        detachCallbacks()
+        surface = nil
+        feed = nil
+    }
+
+    /// Callbacks come off synchronously so a retired surface can never write
+    /// into a store it no longer belongs to; the keyboard is released a turn
+    /// later, because this runs inside `makeUIView` when a surface is
+    /// replaced (see `HeelerTerminalView.retireLocalInput`).
+    ///
+    /// `keepingKeyboard` leaves first responder with the surface for the
+    /// screen that is taking the keyboard over; see
+    /// `HeelerTerminalView.retireLocalInput(keepingKeyboard:)`.
+    func detachCallbacks(keepingKeyboard: Bool = false) {
+        surface?.updateCallbacks(
+            onSizeChanged: nil, onViewportTextChanged: nil,
+            onSend: nil, onScroll: nil, onPaste: nil)
+        surface?.onOpenLink = nil
+        surface?.onFontSizeChanged = nil
+        surface?.onKeyboardHandoffEnded = nil
+        surface?.retireLocalInput(keepingKeyboard: keepingKeyboard)
+    }
+}
+
 struct TerminalScreenView: UIViewRepresentable {
     let feed: TerminalByteFeed
+    /// Retains the UIKit surface across SwiftUI identity changes (the
+    /// chat↔terminal surface swap). The surface mounts once (on the user's
+    /// terminal-icon tap) and survives every subsequent toggle; nil keeps
+    /// the stock make-and-discard behavior. Ported from upstream.
+    var retention: TerminalSurfaceRetention?
     /// Reports creation and feed attachment of the concrete UIKit surface.
     /// It does not claim that Ghostty presented a frame. Available in every
     /// build: the surface-attach is the pipeline's appearance signal — the
@@ -208,7 +262,8 @@ struct TerminalScreenView: UIViewRepresentable {
     @Environment(\.openURL) private var openURL
 
     func makeUIView(context: Context) -> HeelerTerminalView {
-        let view = Self.makeConfiguredTerminal(
+        let openURL = openURL
+        let make = { Self.makeConfiguredTerminal(
             onSizeChanged: onSizeChanged,
             onViewportTextChanged: onViewportTextChanged,
             onSend: onSend,
@@ -216,7 +271,16 @@ struct TerminalScreenView: UIViewRepresentable {
             onPaste: onPaste,
             theme: theme,
             fontSize: fontSize,
-            fontFamily: fontFamily)
+            fontFamily: fontFamily) }
+        let view = retention?.surface(for: feed, make: make) ?? make()
+        // A retained surface returns with its previous callbacks and
+        // settings; re-point everything at THIS pipeline before use.
+        view.updateCallbacks(
+            onSizeChanged: onSizeChanged, onViewportTextChanged: onViewportTextChanged,
+            onSend: onSend, onScroll: onScroll, onPaste: onPaste)
+        view.applyTheme(theme)
+        view.applyFontSize(fontSize)
+        view.applyFontFamily(fontFamily)
         view.onOpenLink = { url in openURL(url) }
         // Only here, never in updateUIView: the intent belongs to this
         // terminal's first appearance, not to every state change after it.
@@ -1233,6 +1297,41 @@ final class HeelerTerminalView: UITerminalView, TerminalByteSink {
         }
         if !isEnabled, isFirstResponder {
             _ = dismissKeyboard()
+        }
+    }
+
+    /// Ends local input for a surface leaving the stage or being replaced,
+    /// without resigning first responder on the spot.
+    ///
+    /// `TerminalSurfaceRetention` retires a surface from inside
+    /// `makeUIView`, which SwiftUI runs during its attribute-graph update.
+    /// Resigning there makes UIKit look for the next responder and ask the
+    /// hosting view `canBecomeFirstResponder`, which re-enters the graph and
+    /// aborts in AttributeGraph (crash seen live on iOS 27 while switching
+    /// between an Agent and a Workspace terminal). Input is refused at once;
+    /// the responder itself is released on the next run-loop turn, and only
+    /// if nothing re-enabled the surface in between. Ported from upstream
+    /// (c6135ec5).
+    ///
+    /// `keepingKeyboard` is the surface leaving for a screen that takes the
+    /// keyboard over: it must not resign at all, or the keyboard drops before
+    /// the destination can claim it. Leaving the window ends its responder
+    /// status regardless, and the destination's claim moves the keyboard
+    /// across without a hide.
+    func retireLocalInput(keepingKeyboard: Bool = false) {
+        setLocalInputEnabledWithoutResigning(false)
+        guard !keepingKeyboard else { return }
+        DispatchQueue.main.async { [self] in
+            guard !isLocalInputEnabled else { return }
+            _ = dismissKeyboard()
+        }
+    }
+
+    private func setLocalInputEnabledWithoutResigning(_ isEnabled: Bool) {
+        guard isLocalInputEnabled != isEnabled else { return }
+        isLocalInputEnabled = isEnabled
+        if !isEnabled {
+            cancelKeyboardTransitionLayoutDeferral()
         }
     }
 

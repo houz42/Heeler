@@ -176,6 +176,13 @@ struct AgentTerminalView: View {
     /// Whether this screen's presentations gate the window's keyboard
     /// commands; defaults to `isOnStage`.
     private let isCommandOnStage: () -> Bool
+    /// Retains the terminal's UIKit surface across the chat↔terminal toggle
+    /// (the detail keeps chat as its default surface): the surface mounts once
+    /// — on the user's terminal-icon tap — and every later toggle returns the
+    /// SAME laid-out surface, so the grid, scrollback, and the size reports
+    /// the pipeline opened on are never lost. Owned by the detail; nil keeps
+    /// the stock make-and-discard behavior. Ported from upstream.
+    private let surfaceRetention: TerminalSurfaceRetention?
     /// Opens another Agent from the terminal's switcher strip. The owner moves
     /// the selection, exactly as a tap in the Agent list would.
     private let onSwitch: (ConsoleAgent.ID) -> Void
@@ -277,6 +284,7 @@ struct AgentTerminalView: View {
         openTerminal: @escaping () -> Void = {},
         composer: AgentComposerStore,
         attachStore: AgentAttachStore? = nil,
+        retention: TerminalSurfaceRetention? = nil,
         interactionProbe: AgentTerminalInteractionProbe? = nil
     ) {
         self.agent = agent
@@ -298,6 +306,7 @@ struct AgentTerminalView: View {
         self.openTerminal = openTerminal
         self.composer = composer
         self.interactionProbe = interactionProbe.map(WeakAgentTerminalInteractionProbe.init)
+        self.surfaceRetention = retention
         _attach = State(
             initialValue: attachStore ?? AgentAttachStore(
                 target: agent.agent.paneID,
@@ -340,6 +349,7 @@ struct AgentTerminalView: View {
 
     private var terminalScreen: TerminalScreenView {
         var screen = TerminalScreenView(feed: attach.terminalFeed)
+        screen.retention = surfaceRetention
         screen.onSurfaceAttached = {
             // The surface REALLY mounted — arm the pipeline's bounded
             // default-geometry fallback here, on the device-proven signal

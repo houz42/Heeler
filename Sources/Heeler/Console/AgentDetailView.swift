@@ -38,6 +38,14 @@ struct AgentDetailView: View {
     /// Which surface the detail shows. Set on first appearance from the
     /// agent's session shape; the picker is the only other writer.
     @State private var surface: AgentDetailSurface?
+    /// Retains the terminal's UIKit surface across chat↔terminal toggles.
+    /// The terminal mounts only on the user's terminal-icon tap (chat stays
+    /// the default surface on agent-open); once mounted, every later toggle
+    /// returns the SAME laid-out surface — the grid, scrollback, and the
+    /// pipeline's size reports are never lost (#device). Cleared when the
+    /// DETAIL itself departs; the toggle never clears it. Ported from
+    /// upstream's TerminalSurfaceRetention.
+    @State private var terminalSurfaceRetention = TerminalSurfaceRetention()
     /// The chat pane's rendered rows' detail level persistence.
     @State private var chatLevels = ChatDetailLevelStore.shared
     /// The in-Agent header's layout mode + custom layout persistence.
@@ -701,7 +709,8 @@ struct AgentDetailView: View {
                     isOpeningTerminal: openTerminal.isOpening,
                     openTerminal: { openTerminal.open() },
                     composer: composer,
-                    attachStore: attach)
+                    attachStore: attach,
+                    retention: terminalSurfaceRetention)
                 .id(openTerminal.destination)
             }
         }
@@ -766,6 +775,9 @@ struct AgentDetailView: View {
             // The chat store's poll loop must not outlive the detail view.
             chatRouter = nil
             chatAttachments = nil
+            // The retained UIKit surface belongs to THIS detail; a real
+            // departure releases it (the chat↔terminal toggle never does).
+            terminalSurfaceRetention.clear()
         }
         .onChange(of: console.hostConnectionGenerations[agent.hostID]) { _, generation in
             openTerminal.transportGenerationDidChange(generation)
