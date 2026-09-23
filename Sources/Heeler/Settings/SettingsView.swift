@@ -245,7 +245,7 @@ struct SettingsView: View {
                 // pushed sub-page shows only its own back button.
                 if appDestination != nil, path.isEmpty {
                     ToolbarItem(placement: .topBarLeading) {
-                        AppDestinationHeading(pageTitle: "Settings")
+                        AppDestinationHeading()
                     }
                 } else if appDestination == nil {
                     ToolbarItem(placement: .confirmationAction) {

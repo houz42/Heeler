@@ -182,14 +182,15 @@ struct HostListView: View {
                 focusReport?(.hosts, !newPath.isEmpty)
             }
             .toolbar {
-                // Handoff §A revision: the root heading (trigger + plain
-                // title) replaces the selector when the app root mounts
-                // this page; sheets keep the plain title.
+                // Handoff §A revision; v3 header directive: the root
+                // heading (icon-only hamburger trigger) replaces the
+                // selector when the app root mounts this page; sheets
+                // keep the plain title.
                 // Visibility driven by the page's OWN path state —
                 // toolbar items can miss environment updates (#A v2).
                 if appDestination != nil, path.isEmpty {
                     ToolbarItem(placement: .topBarLeading) {
-                        AppDestinationHeading(pageTitle: "Hosts")
+                        AppDestinationHeading()
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {

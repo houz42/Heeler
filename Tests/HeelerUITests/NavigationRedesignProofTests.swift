@@ -43,20 +43,21 @@ final class NavigationRedesignProofTests: XCTestCase {
         return app.otherElements["Navigation"].firstMatch
     }
 
-    /// The drawer opens from the trigger: plain title beside it, 184 pt
+    /// The drawer opens from the trigger: icon-only heading (v3 header
+    /// directive: no text label beside the hamburger), 184 pt
     /// overlay (page viewport unchanged), destinations with the current one
     /// checked, close × and scrim dismissal, and — through an actual
     /// selection — a round trip preserving the Agents list's scroll.
     func testDrawerSwitchesPreservingAgentsListState() {
-        // The root page heading: trigger + PLAIN title (the former
-        // title-dropdown is gone).
+        // The root page heading: the trigger is ICON ONLY (the v3 header
+        // directive removed the plain-title text; the drawer carries
+        // the page names).
         let trigger = app.buttons["Open navigation"].firstMatch
         XCTAssertTrue(
             trigger.waitForExistence(timeout: UITestTimeouts.launch))
-        XCTAssertTrue(
-            app.staticTexts["Agents"].firstMatch.waitForExistence(
-                timeout: UITestTimeouts.launch),
-            "the page title must be plain text")
+        XCTAssertFalse(
+            app.staticTexts["Agents"].firstMatch.exists,
+            "the heading must be icon-only — no title text beside the trigger")
 
         // The fixture overflows the phone viewport; scroll until a NEW row
         // enters the viewport at the top row's old position — DISPLACEMENT
