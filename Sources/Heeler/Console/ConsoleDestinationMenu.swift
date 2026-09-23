@@ -68,11 +68,12 @@ struct AppDestinationRow: View {
     }
 }
 
-/// The root pages' top-left heading (#A revision): a small hamburger
-/// trigger (the prototype's 3-line icon, AX "Open navigation" on phone,
-/// "Collapse/Expand navigation sidebar" on wide layouts) followed by the
-/// page's PLAIN title text. The former title-dropdown is gone — the
-/// trigger opens the drawer (phone) or folds the sidebar (wide) instead.
+/// The root pages' top-left heading (#A revision; v3 header directive):
+/// a small hamburger trigger, ICON ONLY — no text label beside it. AX
+/// "Open navigation" on phone, "Collapse/Expand navigation sidebar" on
+/// wide layouts. The former title-dropdown and the plain page-title text
+/// are gone; the trigger opens the drawer (phone) or folds the sidebar
+/// (wide).
 
 /// The drawer trigger's identity and action, computed by the root for the
 /// current width and surface.
@@ -83,7 +84,6 @@ struct AppNavigationTriggerContext {
 }
 
 struct AppDestinationHeading: View {
-    let pageTitle: String
     /// The trigger's action and AX identity come from the root — the pages
     /// never know which surface (drawer vs sidebar) they are steering.
     @Environment(\.appNavigationTrigger) private var trigger
@@ -96,45 +96,36 @@ struct AppDestinationHeading: View {
         // While a pushed detail owns the window, ALL global destination
         // chrome is hidden — trigger included (#A).
         if !isSuppressed, let trigger {
-            HStack(spacing: 10) {
-                let triggerButton = Button {
-                    triggerFocus?.wrappedValue = true
-                    trigger.action()
-                } label: {
-                    Image(systemName: "line.3.horizontal")
-                        .font(.system(size: 16, weight: .medium))
-                        .frame(width: 40, height: 40)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .hoverEffect(.highlight)
-                .accessibilityLabel(trigger.accessibilityLabel)
-                .accessibilityValue(trigger.accessibilityValue)
-                // Assistive-focus return note (review round): VoiceOver
-                // lands on the trigger after dismissal via the root's
-                // .screenChanged post — the trigger is the page's FIRST
-                // accessible element (topBarLeading), so the
-                // notification's default focus target IS this button.
-                // (Binding an AccessibilityFocusState through environment
-                // into a toolbar item suppresses the item's rendering —
-                // verified: the trigger vanished from the AX tree — so
-                // the notification is the mechanism here.)
-                if let triggerFocus {
-                    // Keyboard focus return.
-                    triggerButton.focused(triggerFocus)
-                } else {
-                    triggerButton
-                }
-                // The plain page title. Fixed layout + a measured frame so
-                // the toolbar NEVER collapses it (review finding 1: the
-                // title must RENDER beside the trigger on every page).
-                Text(pageTitle)
-                    .font(.headline.weight(.semibold))
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .frame(minWidth: 60, alignment: .leading)
+            let triggerButton = Button {
+                triggerFocus?.wrappedValue = true
+                trigger.action()
+            } label: {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 16, weight: .medium))
+                    // A real 44pt-scale hit region, not a contentShape
+                    // enlarging a smaller frame (v3 header rule).
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
             }
-            .fixedSize(horizontal: true, vertical: false)
+            .buttonStyle(.plain)
+            .hoverEffect(.highlight)
+            .accessibilityLabel(trigger.accessibilityLabel)
+            .accessibilityValue(trigger.accessibilityValue)
+            // Assistive-focus return note (review round): VoiceOver
+            // lands on the trigger after dismissal via the root's
+            // .screenChanged post — the trigger is the page's FIRST
+            // accessible element (topBarLeading), so the
+            // notification's default focus target IS this button.
+            // (Binding an AccessibilityFocusState through environment
+            // into a toolbar item suppresses the item's rendering —
+            // verified: the trigger vanished from the AX tree — so
+            // the notification is the mechanism here.)
+            if let triggerFocus {
+                // Keyboard focus return.
+                triggerButton.focused(triggerFocus)
+            } else {
+                triggerButton
+            }
         }
     }
 }

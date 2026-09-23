@@ -146,7 +146,12 @@ struct AgentListGroupHeaderView: View {
 /// model as typed state: chips — both surfaces agree by construction.
 /// "Needs you is a filter, not a permanent reorder": rows keep the
 /// chosen sort.
-struct AgentQuickStateChips: View {
+///
+/// v3 header directive: each chip is its OWN control — never wrapped in
+/// another button — with a 44pt-scale hit region grown by the frame, not
+/// a contentShape enlarging a smaller frame.
+struct AgentQuickStateChip: View {
+    let label: String
     @Bindable var searchStore: AgentSearchBarStore
 
     /// The quick labels map onto the state filter's search values.
@@ -156,7 +161,7 @@ struct AgentQuickStateChips: View {
             .map { AgentFuzzyMatcher.normalize($0.value) })
     }
 
-    private func isSelected(_ label: String) -> Bool {
+    private var isSelected: Bool {
         activeStateValues.contains(AgentFuzzyMatcher.normalize(label))
     }
 
@@ -164,7 +169,11 @@ struct AgentQuickStateChips: View {
         activeStateValues.isEmpty
     }
 
-    private func setQuickState(_ label: String) {
+    private var isOn: Bool {
+        isSelected || (label == "All" && allSelected)
+    }
+
+    private func setQuickState() {
         if label == "All" {
             // Remove every state filter.
             for filter in searchStore.engine.filters where filter.field == .state {
@@ -177,32 +186,29 @@ struct AgentQuickStateChips: View {
     }
 
     var body: some View {
-        HStack(spacing: 6) {
-            ForEach(["All", "Needs you", "Working"], id: \.self) { label in
-                Button {
-                    setQuickState(label)
-                } label: {
-                    Text(label)
-                        .font(.caption.weight(.medium))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(
-                            isSelected(label) || (label == "All" && allSelected)
-                                ? Color.accentColor.opacity(0.15)
-                                : Color(.tertiarySystemFill),
-                            in: Capsule())
-                        .foregroundStyle(
-                            isSelected(label) || (label == "All" && allSelected)
-                                ? Color.primary
-                                : Color.secondary)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("\(label) filter")
-                .accessibilityAddTraits(
-                    isSelected(label) || (label == "All" && allSelected)
-                        ? [.isSelected] : [])
-            }
+        Button {
+            setQuickState()
+        } label: {
+            Text(label)
+                .font(.caption.weight(.medium))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.horizontal, 10)
+                // The v3 header rule: a real 44pt-scale hit region via
+                // the FRAME, never a contentShape enlarging a smaller
+                // frame. The height grows (Dynamic Type), the width hugs
+                // the text — no wrap, no clip.
+                .frame(minHeight: 44)
+                .background(
+                    isOn
+                        ? Color.accentColor.opacity(0.15)
+                        : Color(.tertiarySystemFill),
+                    in: Capsule())
+                .foregroundStyle(isOn ? Color.primary : Color.secondary)
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(label) filter")
+        .accessibilityAddTraits(isOn ? [.isSelected] : [])
     }
 }
 

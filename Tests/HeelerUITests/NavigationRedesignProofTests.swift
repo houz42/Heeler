@@ -43,20 +43,31 @@ final class NavigationRedesignProofTests: XCTestCase {
         return app.otherElements["Navigation"].firstMatch
     }
 
-    /// The drawer opens from the trigger: plain title beside it, 184 pt
+    /// The drawer opens from the trigger: icon-only heading (v3 header
+    /// directive: no text label beside the hamburger), 184 pt
     /// overlay (page viewport unchanged), destinations with the current one
     /// checked, close × and scrim dismissal, and — through an actual
     /// selection — a round trip preserving the Agents list's scroll.
     func testDrawerSwitchesPreservingAgentsListState() {
-        // The root page heading: trigger + PLAIN title (the former
-        // title-dropdown is gone).
+        // The root page heading: the trigger is ICON ONLY (the v3 header
+        // directive removed the plain-title text; the drawer carries
+        // the page names). Scoped to the trigger's own row — a global
+        // staticText query also matches the drawer's destination rows
+        // and the hidden pages' mounted labels, which are not the
+        // heading.
         let trigger = app.buttons["Open navigation"].firstMatch
         XCTAssertTrue(
             trigger.waitForExistence(timeout: UITestTimeouts.launch))
-        XCTAssertTrue(
-            app.staticTexts["Agents"].firstMatch.waitForExistence(
-                timeout: UITestTimeouts.launch),
-            "the page title must be plain text")
+        let titles = app.staticTexts
+            .matching(NSPredicate(format: "label == 'Agents'"))
+        let headingBand = trigger.frame.insetBy(dx: 0, dy: -8)
+        for index in 0..<titles.count {
+            let title = titles.element(boundBy: index)
+            XCTAssertFalse(
+                title.frame.intersects(headingBand),
+                "the heading must be icon-only — no title text beside the "
+                    + "trigger (found at \(title.frame))")
+        }
 
         // The fixture overflows the phone viewport; scroll until a NEW row
         // enters the viewport at the top row's old position — DISPLACEMENT

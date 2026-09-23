@@ -105,6 +105,17 @@ struct ConsoleView: View {
                 set: { splitVisibility.systemDidChangeVisibility($0, presentation: presentation) })
             ) {
                 content
+                    // The header/search-gap fix (v3 design, "Header/search
+                    // gap" acceptance): the column sets NO navigation title,
+                    // so SwiftUI's default .automatic display mode still
+                    // reserves the 52pt large-title strip — measured in the
+                    // UIKit hierarchy as an EMPTY NavigationBarLargeTitleView
+                    // sitting between the toolbar row and the search field,
+                    // the unexplained gap itself. .inline keeps the bar to
+                    // its single 54pt toolbar row; system safe areas stay
+                    // intact, and the search row (the VStack's first
+                    // content) becomes the first content row.
+                    .navigationBarTitleDisplayMode(.inline)
                     .navigationSplitViewColumnWidth(
                         min: presentation.sidebarWidth.minimum,
                         ideal: presentation.sidebarWidth.ideal,
@@ -261,20 +272,28 @@ struct ConsoleView: View {
     // graph small enough for the type-checker.
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        // The root page's heading (#A v2 revision): hamburger trigger +
-        // PLAIN page title, one ToolbarItem so the native toolbar keeps
-        // them adjacent. The v1 destination title-dropdown is gone. The
-        // host-filter menu is gone too — search's host: chip subsumed it
-        // (user directive). Ordering/grouping live in the list's own
-        // view sheet (§B).
+        // The root page's heading (#A v2 revision): hamburger trigger,
+        // ICON ONLY — no text label beside it (v3 header directive; the
+        // page's identity is the drawer/sidebar content's job, not a
+        // toolbar caption). The v1 title-dropdown and the plain-title
+        // text are gone; the trigger keeps its own AX label so
+        // VoiceOver/keyboard users still get "Open navigation".
         ToolbarItem(placement: .topBarLeading) {
-            AppDestinationHeading(pageTitle: "Agents")
+            AppDestinationHeading()
         }
         // The quick-state chips in the HEADER row (v2 directive, per the
-        // design's inbox(): chips at the trailing side of the title row,
-        // before the New Agent +; the search field stays its own row).
-        ToolbarItem(placement: .primaryAction) {
-            AgentQuickStateChips(searchStore: agentSearch)
+        // design's inbox()): chips at the trailing side of the title row,
+        // before the New Agent +. Each chip is its OWN ToolbarItem (v3
+        // header directive: "the needs you/working buttons in the top are
+        // wrapped in another button... they shall not be wrapped") — one
+        // item per control keeps every chip its own separate tappable
+        // region with a 44pt-scale hit target, not a shared capsule.
+        ForEach(["All", "Needs you", "Working"], id: \.self) { label in
+            ToolbarItem(placement: .primaryAction) {
+                AgentQuickStateChip(
+                    label: label,
+                    searchStore: agentSearch)
+            }
         }
         if !hosts.hosts.isEmpty {
             ToolbarItem(placement: .primaryAction) {
