@@ -326,25 +326,77 @@ struct AgentDetailView: View {
             "Opens the Agent menu: context, statistics, actions, and agent switching.")
     }
 
-    /// The header menu's model, projected live from the console's row and
-    /// the Host's connection state so a status change or reconnect
-    /// re-renders the menu in place.
+    /// The header menu's model, projected live from the console's row,
+    /// the Host's ACTUAL snapshot freshness (connected is not proof of
+    /// current data — a host still awaiting its first post-reconnect
+    /// snapshot reads Last known), and the broker chat store's
+    /// registration capabilities where a chat store exists.
     private var headerMenuModel: AgentHeaderMenuModel {
         AgentHeaderMenuModel(
             agent: agent,
-            hostIsConnected: console.hostStatuses[agent.hostID] == .connected)
+            hostSnapshotFreshness: AgentHeaderMenuModel.SnapshotFreshness(
+                hostIsConnected: console.hostStatuses[agent.hostID] == .connected,
+                hostIsAwaitingSnapshot: console.hostsAwaitingSnapshot.contains(agent.hostID)),
+            interruptSupport: headerMenuInterruptSupport)
     }
 
-    /// Interrupt stops only the current turn (herdr's `agent.send_keys`
-    /// with the canonical Esc key) — never guaranteed reversible, so the
-    /// action is presented as interrupt, not stop. Failures surface on
-    /// the same failure banner the detail already owns.
+    /// Interrupt support from the broker registration's capability flag:
+    /// the broker's own interrupt contract (AgentChatStore.interrupt,
+    /// guarded by capabilities.interrupt) — never a generic Esc
+    /// keystroke whose meaning per agent is unverified.
+    private var headerMenuInterruptSupport: AgentHeaderMenuModel.InterruptSupport {
+        guard let brokerChat, brokerChat.capabilities?.interrupt == true else {
+            let hasStore = brokerChat != nil
+            return .unsupported(
+                reason: hasStore
+                    ? "This agent's registration did not advertise interrupt support, "
+                        + "so Meadow does not send a generic interrupt."
+                    : "No chat registration for this agent — interrupt support is "
+                        + "unverified, so Meadow does not send a generic interrupt.")
+        }
+        return .supported
+    }
+
+    /// Interrupt stops only the current turn through the broker's
+    /// capability-gated interrupt contract — never guaranteed
+    /// reversible, so the action is presented as interrupt, not stop.
+    /// EXECUTION-TIME recheck (not just menu-construction time): the
+    /// live agent row must still be the same runtime (pane identity),
+    /// still connected, and still have a turn in flight; the broker
+    /// store re-validates its own registration/generation against the
+    /// session it targets.
     private func interruptTurn() async {
+        // Re-resolve the LIVE row: the menu could have been constructed
+        // before a status change, agent switch, or disconnect.
+        guard let live = console.agents.first(where: { $0.id == agent.id }) else {
+            interruptionFailure = "This agent is no longer in the Console list."
+            return
+        }
+        guard console.hostStatuses[live.hostID] == .connected else {
+            interruptionFailure = "The Host is not connected."
+            return
+        }
+        let turnInFlight =
+            live.agent.status == .working || live.agent.status == .blocked
+        guard turnInFlight else {
+            interruptionFailure = "No turn is in flight to interrupt."
+            return
+        }
+        guard let brokerChat else {
+            interruptionFailure =
+                "No chat registration for this agent — interrupt is not verified."
+            return
+        }
         do {
-            try await console.sendAgentKeys(
-                agent.agent.paneID, key: "esc", on: agent.hostID)
-        } catch let error as TransportError {
-            interruptionFailure = error.presentation.message
+            // The store re-validates registration + capabilities
+            // (stale generation / missing capability throw honestly).
+            try await brokerChat.interrupt()
+        } catch let error as AgentChatError {
+            if case .wire(_, let message, _) = error {
+                interruptionFailure = message
+            } else {
+                interruptionFailure = "Interrupt failed."
+            }
         } catch {
             interruptionFailure = error.localizedDescription
         }
