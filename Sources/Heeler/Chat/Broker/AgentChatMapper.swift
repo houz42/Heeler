@@ -19,7 +19,7 @@ enum AgentChatMapper: Sendable {
 
     static func map(item: AgentChatItem) -> Mapped {
         switch item {
-        case .message(let id, let author, let createdAt, let blocks):
+        case .message(let id, let author, let createdAt, let blocks, _):
             return mapMessage(id: id, author: author, createdAt: createdAt, blocks: blocks)
         case .boundary:
             // Boundaries carry their own shape the row model has no kind
@@ -181,7 +181,7 @@ enum AgentChatToolResultCollector: Sendable {
     static func collect(from items: [AgentChatItem]) -> [ToolResult] {
         var results: [ToolResult] = []
         for item in items {
-            guard case .message(_, _, _, let blocks) = item else { continue }
+            guard case .message(_, _, _, let blocks, _) = item else { continue }
             for block in blocks {
                 guard case .toolResult(let callId, let name, let isError, let content) = block
                 else { continue }
