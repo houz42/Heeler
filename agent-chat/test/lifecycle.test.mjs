@@ -12,9 +12,10 @@ import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import {
+  InterprocessLock,
   LifecycleCoordinator,
   HerdrApi,
   declaredLifecycleCapabilities,
@@ -895,7 +896,6 @@ const c = new LifecycleCoordinator({
   hostLabel: 'host-race',
   stateRoot: ${JSON.stringify(stateRoot)},
   lockTimeoutMs: 10000,
-  lockStaleMs: 30000,
 });
 const env = await c.start({ conversationKey: 'conv-child', kind: 'pi', cwd: '/tmp' });
 process.stdout.write(JSON.stringify(env));
@@ -926,4 +926,74 @@ process.stdout.write(JSON.stringify(env));
   assert.equal(probe.max, 1, 'the lock file must serialize mutations across real processes');
   assert.equal(probe.count, 2, 'both starts ran (serialized)');
   assert.equal(fake.callLog.filter((x) => x.method === 'tab.create').length, 2, 'one tab each');
+});
+
+// The reviewer's case, pinned: a LIVE-but-SLOW holder must NEVER have its
+// lock taken. Process A binds the lock and stays alive, blocked, far past
+// any stale budget; process B must time out (lock_timeout refusal), never
+// acquire. Then A dies and B's NEXT attempt acquires — crash recovery is
+// kernel-side (fds reaped), not an age guess.
+test('interprocess lock: a live slow holder is never stolen from; death releases instantly', async () => {
+  const lockPath = path.join(dir, 'holder-test.lock');
+  // A: bind the lock exactly the way InterprocessLock does, then block
+  // (alive, event-loop busy) far longer than B's acquisition budget.
+  const holder = spawn(process.execPath, ['--input-type=module', '-e', `
+import net from 'node:net';
+import fs from 'node:fs';
+const srv = net.createServer(() => {});
+await new Promise((resolve, reject) => {
+  srv.once('error', reject);
+  srv.listen(${JSON.stringify(lockPath)}, resolve);
+});
+process.stdout.write('held');
+setInterval(() => {}, 1000); // stay alive, loop busy
+`]);
+  let held = '';
+  holder.stdout.on('data', (d) => (held += d.toString()));
+  for (let i = 0; i < 100 && held !== 'held'; i++) await new Promise((r) => setTimeout(r, 50));
+  assert.equal(held, 'held', 'the child holder must confirm it bound the lock');
+
+  // B: a contender with a SHORT budget. The holder is alive (kernel accepts
+  // probe connections). B must NOT acquire — timeout refusal, never a steal.
+  const contender = new InterprocessLock(lockPath, { timeoutMs: 800 });
+  const acquired = await contender.acquire();
+  assert.ok(acquired !== true, 'a live slow holder must never be stolen from');
+  assert.match(acquired.error, /live host-package process holds/);
+  assert.match(acquired.error, /never stolen/);
+
+  // Still held: a second contender also cannot acquire.
+  const contender2 = new InterprocessLock(lockPath, { timeoutMs: 300 });
+  const acquired2 = await contender2.acquire();
+  assert.ok(acquired2 !== true);
+
+  // The holder dies (SIGKILL — no release code runs). The kernel reaps its
+  // bound socket; the very next acquisition must succeed with NO timeout.
+  const killed = await new Promise((resolve) => {
+    holder.kill('SIGKILL');
+    holder.once('exit', (code, sig) => resolve({ code, sig }));
+  });
+  assert.equal(killed.sig, 'SIGKILL');
+  const recovered = new InterprocessLock(lockPath, { timeoutMs: 5000 });
+  const got = await recovered.acquire();
+  assert.equal(got, true, 'a dead holder releases the lock instantly (kernel fd reaping, no age guess)');
+  recovered.release();
+});
+
+// In-process: the same guarantee holds for two InterprocessLock instances
+// in one process (the second contender sees the first's live bound socket).
+test('interprocess lock: second in-process contender cannot acquire a held lock', async () => {
+  const lockPath = path.join(dir, 'inproc.lock');
+  const a = new InterprocessLock(lockPath, { timeoutMs: 2000 });
+  const gotA = await a.acquire();
+  assert.equal(gotA, true);
+  const b = new InterprocessLock(lockPath, { timeoutMs: 400 });
+  const gotB = await b.acquire();
+  assert.ok(gotB !== true, 'a held lock cannot be acquired again');
+  assert.match(gotB.error, /live host-package process holds/);
+  a.release();
+  await new Promise((r) => setTimeout(r, 150)); // release is async (close callback)
+  const c = new InterprocessLock(lockPath, { timeoutMs: 2000 });
+  const gotC = await c.acquire();
+  assert.equal(gotC, true, 'after release the next acquisition succeeds');
+  c.release();
 });

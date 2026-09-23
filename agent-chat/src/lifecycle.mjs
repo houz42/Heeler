@@ -292,68 +292,139 @@ function validatedAgentList(result) {
 }
 
 // ---------------------------------------------------------------------------
-// Interprocess whole-host mutation lock.
+// Interprocess whole-host mutation lock — a BOUND UNIX SOCKET.
 //
-// Exclusive-create lock FILE (the consolidation owner-socket's model: the
-// filesystem is the arbiter; a crashed owner's lock goes stale and is
-// taken over after lockStaleMs). The lock is held only for the duration of
-// one mutation, never for a coordinator's lifetime. lockStaleMs must
-// exceed the longest possible held mutation (startShellWaitMs + rpc
-// timeouts) or a takeover could overlap a still-running mutation.
+// The lock is not a file with an age heuristic; it is a socket bound by the
+// holder (the consolidation's broker owner-socket mechanism, which is
+// kernel-enforced mutual exclusion, not a timeout guess):
+//   - BIND is the atomic acquire: exactly one process can ever bind the
+//     path; every other contender gets EADDRINUSE. There is no takeover
+//     while the holder lives — the kernel releases the name only when
+//     the holder's socket closes (explicit release, or process death:
+//     the kernel reaps its fds). A live-but-slow holder can never be
+//     robbed, however long it holds.
+//   - LIVENESS is proved by connect probes, which the KERNEL answers even
+//     while the holder's event loop is blocked: if anything accepts, the
+//     holder is alive and the contender keeps waiting until its budget
+//     expires (then refuses lock_timeout — it never steals).
+//   - CRASH RECOVERY is kernel-side and instant: a dead holder's bound
+//     name disappears with its fds; the next contender's bind succeeds.
+//     A stale PATH (holder crashed leaving the file) is removed only
+//     after a connect probe proves nothing answers, and a bind race on
+//     the removed name is settled by EADDRINUSE — still atomic.
+//
+// The lock is held only for the duration of one mutation, never for a
+// coordinator's lifetime.
 
+const LOCK_PROBE_TIMEOUT_MS = 500;
 const LOCK_RETRY_DELAY_MS = 50;
+
+// AF_UNIX sun_path is 104 bytes on macOS, 108 on Linux. A lock path longer
+// than the platform limit cannot be bound at all (listen EINVAL), so when
+// the state dir is too deep the lock falls back to a deterministic SHORT
+// path in the OS tmpdir: the name is a hash of the full intended path, so
+// every process derives the same lock for the same host domain. The tmpdir
+// is user-scoped on macOS (/var/folders/<user>/T) and sticky /tmp on Linux
+// — the same-UID discipline the broker's socket hygiene relies on.
+const LOCK_PATH_MAX = process.platform === 'darwin' ? 104 : 108;
+
+function resolveLockPath(intended) {
+  if (Buffer.byteLength(intended, 'utf8') <= LOCK_PATH_MAX - 1) return intended;
+  const hash = crypto.createHash('sha256').update(intended, 'utf8').digest('hex').slice(0, 24);
+  return path.join(os.tmpdir(), `mdc-lock-${hash}.sock`);
+}
 
 export class InterprocessLock {
   constructor(lockPath, opts = {}) {
     this.lockPath = lockPath;
     this.timeoutMs = positiveInt(opts.timeoutMs, 15_000);
-    this.staleMs = positiveInt(opts.staleMs, 30_000);
     this.token = `${process.pid}-${crypto.randomBytes(8).toString('hex')}`;
+    this.server = null; // the bound listening socket WHILE we hold the lock
+  }
+
+  /** Is anything alive at the lock path? A connect probe the KERNEL answers
+   *  even if the holder's JS event loop is blocked. */
+  async #probeAlive() {
+    return new Promise((resolve) => {
+      const sock = net.connect(this.lockPath);
+      let done = false;
+      const finish = (alive) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        sock.destroy();
+        resolve(alive);
+      };
+      const timer = setTimeout(() => finish(false), LOCK_PROBE_TIMEOUT_MS);
+      sock.on('error', () => finish(false)); // ENOENT/ECONNREFUSED: no live holder
+      sock.on('connect', () => finish(true)); // the live holder accepts (probe connection)
+    });
   }
 
   async acquire() {
     const deadline = Date.now() + this.timeoutMs;
     fs.mkdirSync(path.dirname(this.lockPath), { recursive: true });
     for (;;) {
-      try {
-        fs.writeFileSync(this.lockPath, JSON.stringify({ token: this.token, pid: process.pid, acquiredAt: isoNow() }), { flag: 'wx' });
-        return true;
-      } catch (err) {
-        if (err.code !== 'EEXIST') return { error: `cannot create lock file ${this.lockPath}: ${err.message}` };
+      // Atomic acquire attempt: binding is exclusive by kernel guarantee.
+      const bound = await this.#tryBind();
+      if (bound === true) return true;
+      if (bound === 'EADDRINUSE') {
+        // someone holds the name: fall through to the liveness probe
+      } else if (typeof bound === 'string') {
+        return { error: bound }; // fatal bind failure (permissions, bad path, ...)
       }
-      // Held. Stale takeover: only when the holder's file has aged past
-      // staleMs (a crashed owner) — never while a live mutation may run.
-      let st;
-      try {
-        st = fs.statSync(this.lockPath);
-      } catch {
-        continue; // vanished between stat and now: retry the create
-      }
-      if (Date.now() - st.mtimeMs > this.staleMs) {
-        try {
-          fs.rmSync(this.lockPath, { force: true });
-        } catch {}
-        this.#note(`took over stale lock ${this.lockPath} (age ${Math.round(Date.now() - st.mtimeMs)}ms)`);
+      // EADDRINUSE: someone holds the name. Prove whether it is ALIVE
+      // (kernel answers regardless of the holder's event-loop state) —
+      // a live holder is NEVER stolen from; a dead one's leftover path is
+      // cleaned and retried, with the bind race still atomic.
+      const alive = await this.#probeAlive();
+      if (alive) {
+        if (Date.now() >= deadline) {
+          return { error: `a live host-package process holds ${this.lockPath}; timed out after ${this.timeoutMs}ms (the lock is never stolen from a live holder)` };
+        }
+        await sleep(LOCK_RETRY_DELAY_MS);
         continue;
       }
-      if (Date.now() >= deadline) {
-        return { error: `another host-package process holds ${this.lockPath}; timed out after ${this.timeoutMs}ms` };
-      }
-      await sleep(LOCK_RETRY_DELAY_MS);
+      // Nothing answers: the path is a leftover from a dead holder. Remove
+      // ONLY the stale socket file (lstat: never follow symlinks), then
+      // retry the bind; if a contender raced us to the name meanwhile, its
+      // EADDRINUSE still decides atomically.
+      try {
+        const st = fs.lstatSync(this.lockPath);
+        if ((st.mode & 0o170000) === 0o140000) fs.rmSync(this.lockPath, { force: true });
+      } catch {} // vanished already
     }
   }
 
-  release() {
-    try {
-      const raw = fs.readFileSync(this.lockPath, 'utf8');
-      const parsed = JSON.parse(raw);
-      if (parsed && parsed.token === this.token) fs.rmSync(this.lockPath, { force: true });
-      // A foreign token means a takeover already happened: not ours to remove.
-    } catch {}
+  /** Bind the lock path. true = acquired; 'EADDRINUSE' = held; string = fatal. */
+  #tryBind() {
+    return new Promise((resolve) => {
+      const srv = net.createServer(() => {}); // accept (probe connections) and drop them
+      srv.once('error', (err) => {
+        srv.close();
+        if (err.code === 'EADDRINUSE') return resolve('EADDRINUSE');
+        resolve(`cannot bind lock socket ${this.lockPath}: ${err.message}`);
+      });
+      srv.listen(this.lockPath, () => {
+        this.server = srv;
+        resolve(true);
+      });
+    });
   }
 
-  #note(msg) {
-    if (typeof this.onNote === 'function') this.onNote(msg);
+  release() {
+    // Closing the bound socket releases the name atomically; unlinking the
+    // file afterwards removes the leftover path so the next contender's
+    // bind does not depend on the probe path. If we no longer hold it
+    // (impossible with bind semantics, but defensive), remove nothing.
+    const srv = this.server;
+    this.server = null;
+    if (!srv) return;
+    srv.close(() => {
+      try {
+        fs.rmSync(this.lockPath, { force: true });
+      } catch {}
+    });
   }
 }
 
@@ -568,9 +639,10 @@ export class LifecycleCoordinator {
    *   lock and persisted registry (default: XDG_STATE_HOME/meadow).
    * @param {number} [opts.startShellWaitMs]  agent_pane_busy retry budget
    * @param {number} [opts.busyRetryDelayMs]  delay between retries
-   * @param {number} [opts.lockTimeoutMs]  interprocess lock acquisition budget
-   * @param {number} [opts.lockStaleMs]  interprocess lock stale-takeover age;
-   *   must exceed the longest held mutation (startShellWaitMs + rpc budgets)
+   * @param {number} [opts.lockTimeoutMs]  interprocess lock acquisition
+   *   budget; on expiry the mutation refuses lock_timeout — the lock is
+   *   never stolen from a live holder, so this is a queue wait, not a
+   *   safety valve.
    */
   constructor(opts = {}) {
     if (!opts.herdr || typeof opts.herdr.rpc !== 'function') {
@@ -585,9 +657,8 @@ export class LifecycleCoordinator {
     this.stateDir = hostStateDir(this.stateRoot, this.hostLabel);
     this.startShellWaitMs = positiveInt(opts.startShellWaitMs, 10_000);
     this.busyRetryDelayMs = positiveInt(opts.busyRetryDelayMs, 250);
-    this.lock = new InterprocessLock(path.join(this.stateDir, 'mutation.lock'), {
+    this.lock = new InterprocessLock(resolveLockPath(path.join(this.stateDir, 'mutation.lock')), {
       timeoutMs: positiveInt(opts.lockTimeoutMs, 15_000),
-      staleMs: positiveInt(opts.lockStaleMs, 30_000),
     });
     this.log = typeof opts.log === 'function' ? opts.log : null;
     this.#server = null; // cached ping result once a compatible server answered
