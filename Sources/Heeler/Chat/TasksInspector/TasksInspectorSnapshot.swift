@@ -34,6 +34,30 @@ struct WorkInspectorSnapshot: Sendable, Equatable {
     var subagents: [WorkSubagent] = []
     /// The subagent observation state.
     var subagentObservation: Observation = .notLoaded
+    /// Child runs observed LIVE through the broker whose names never
+    /// appeared in any spawn the transcript carries (a spawned child
+    /// whose spawn scrolled out of the loaded window, or a run the
+    /// parent started before this client attached). Rows exist ONLY
+    /// because a live registration proves them; registration order.
+    var observedSubagents: [WorkObservedSubagent] = []
+    /// True when live broker registrations were consulted for this
+    /// snapshot at all — false (the transcript-only demo and
+    /// pre-attach states) renders the honest "not observed" note,
+    /// never an empty-children claim.
+    var childRunObservation: ChildRunObservation = .notObserved
+
+    /// What the broker could say about this conversation's child runs.
+    enum ChildRunObservation: Sendable, Equatable {
+        /// No live registrations were consulted (transcript-only
+        /// snapshot, broker not reachable) — the children list is
+        /// not claimed to be complete or empty.
+        case notObserved
+        /// Live registrations were consulted; the lists are what the
+        /// broker can prove RIGHT NOW (a child that deregistered is
+        /// gone — no exit state survives on the wire).
+        case observed
+    }
+
 
     enum Observation: Sendable, Equatable {
         /// No transcript was consulted yet.
@@ -170,6 +194,75 @@ enum WorkInspectorSnapshotBuilder: Sendable {
         }
 
         return snapshot
+    }
+
+
+    /// Links LIVE broker registrations into a transcript-built
+    /// snapshot: every spawned row whose name matches a live child
+    /// run's session-file base name gains its observedRun (and
+    /// Running state, with the honest live≠accepted note); live
+    /// children NO spawn row carries become their own
+    /// observedSubagents rows. Pure and total — a nil parent file
+    /// links nothing.
+    static func linkChildRuns(
+        into snapshot: WorkInspectorSnapshot,
+        parentFile: String,
+        registrations: [AgentChatRegistration]
+    ) -> WorkInspectorSnapshot {
+        var snapshot = snapshot
+        let children = WorkChildRunLinker.children(
+            of: parentFile, registrations: registrations)
+        snapshot.childRunObservation = .observed
+        guard !children.isEmpty else { return snapshot }
+        // Base names are the spawn identity: .../<Child>.jsonl's own
+        // file name minus its extension.
+        let childrenByName = Dictionary(
+            grouping: children,
+            by: { Self.baseName(of: $0.sessionFile) })
+
+        // Link spawned rows: a live registration carrying the SAME
+        // name as a spawned child proves that child is running NOW.
+        // Two live runs sharing one spawned name (the duplicate-name
+        // case) both link — the row shows the count, never a guess
+        // about which is which.
+        var linkedRunFiles = Set<String>()
+        for index in snapshot.subagents.indices {
+            guard let runs = childrenByName[snapshot.subagents[index].displayName],
+                let run = runs.first
+            else { continue }
+            snapshot.subagents[index].observedRun = run
+            snapshot.subagents[index].runtimeState = .running
+            snapshot.subagents[index].runtimeStateNote =
+                WorkSubagent.liveRegistrationNote
+            // resultVerdict stays nil — registration is not
+            // acceptance, and the broker has no verdict channel.
+            linkedRunFiles.insert(run.sessionFile)
+        }
+
+        // Live children with NO spawned row: the broker observed a
+        // run the loaded transcript's spawns never named. Their rows
+        // exist only because the registration proves them; duplicate
+        // base names stay separate rows (one per registration).
+        snapshot.observedSubagents = children
+            .filter { !linkedRunFiles.contains($0.sessionFile) }
+            .map { run in
+                WorkObservedSubagent(
+                    run: run,
+                    displayName: Self.baseName(of: run.sessionFile))
+            }
+        return snapshot
+    }
+
+    /// The session file's own base name (…/<Name>.jsonl → "Name") —
+    /// the identity the parent's spawn acknowledgment printed.
+    static func baseName(of sessionFile: String) -> String {
+        let trimmed = sessionFile.trimmingCharacters(
+            in: CharacterSet(charactersIn: "/"))
+        guard let base = trimmed.split(separator: "/").last else {
+            return trimmed
+        }
+        guard base.hasSuffix(".jsonl") else { return String(base) }
+        return String(base.dropLast(".jsonl".count))
     }
 
     /// The spawn call's structured children: `tasks:[{name, task,

@@ -34,6 +34,9 @@ struct AgentDetailView: View {
     /// without a broker).
     @State private var brokerChat: AgentChatStore?
     @State private var isShowingFirstConnectFlow = false
+    /// The work inspector's requested tab (nil = not presented).
+    /// Opened from the agent menu's Tasks/Subagents rows.
+    @State private var showsWorkInspectorTab: WorkInspectorTab?
     /// The chat input's submit router (/ # @ ! routing). Built with the
     /// same per-agent task as the chat store.
     @State private var chatRouter: ComposerRouterStore?
@@ -316,6 +319,22 @@ struct AgentDetailView: View {
                     } else {
                         Text(candidate.agent.displayName)
                     }
+                }
+            }
+            // The work inspector entry (design: "Tap the existing
+            // chat header to open the Agent menu, then choose Tasks
+            // or Subagents"): read-only rows, opening the inspector
+            // on the matching tab.
+            Section {
+                Button {
+                    showsWorkInspectorTab = .tasks
+                } label: {
+                    Label("Tasks", systemImage: "checklist")
+                }
+                Button {
+                    showsWorkInspectorTab = .subagents
+                } label: {
+                    Label("Subagents", systemImage: "person.2")
                 }
             }
         } label: {
@@ -871,6 +890,20 @@ struct AgentDetailView: View {
                         Task { await buildChatIfPossible() }
                     })
             }
+        }
+        // The work inspector (Tasks/Subagents rows in the agent
+        // menu): read-only. The snapshot derives from the SAME
+        // ChatContent the chat surface renders, LINKED with the
+        // live broker registrations the store observed — so child
+        // runs registered right now show Running, and live children
+        // no spawn row carries get their own rows. Re-derives on
+        // every open (a fresh snapshot of what is provable NOW).
+        .sheet(item: $showsWorkInspectorTab) { tab in
+            WorkInspectorSheet(
+                content: brokerChat?.content ?? ChatContent(),
+                parentSessionFile: agent.agent.agentSession?.value ?? "",
+                liveRegistrations: brokerChat?.liveRegistrations ?? [],
+                initialTab: tab)
         }
         .modifier(ConsoleDetailPresentationRegistration(
             agentID: agent.id,

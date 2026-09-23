@@ -184,6 +184,13 @@ final class AgentChatStore {
     /// entry drops the moment its record renders in the page; rejected
     /// / unknown entries keep their affordances until the user acts.
     private(set) var outbox: [AgentChatOutboxEntry] = []
+    /// Every registration the broker reported at this connection's
+    /// sessions.list — the live child-run observation source (a
+    /// child run registers with its sessionFile nested under the
+    /// pane's own .jsonl directory). Read-only projection; refreshed
+    /// on every start()/reconnect. Empty when no connection has
+    /// completed a handshake yet.
+    private(set) var liveRegistrations: [AgentChatRegistration] = []
     var askSupported: Bool { capabilities?.interactions == true }
 
     // MARK: Wiring
@@ -420,6 +427,14 @@ final class AgentChatStore {
             let sessions = try Self.decode(
                 AgentChatSessionsResult.self, from: sessionsValue).sessions
             guard generation == storeGeneration else { return }
+            // Child-run observation (read-only): retain the FULL
+            // registration list the broker just reported. A child
+            // run of this session registers with a locator.sessionFile
+            // nested inside this pane's own .jsonl directory, so the
+            // work inspector derives live children from these — no
+            // extra request, no protocol change. Refreshed on every
+            // start()/reconnect by construction.
+            liveRegistrations = sessions
 
             // 2. match — locator exact, duplicates fail closed.
             switch AgentChatMatcher.match(pane: pane, registrations: sessions) {
