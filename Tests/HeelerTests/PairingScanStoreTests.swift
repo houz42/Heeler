@@ -159,6 +159,39 @@ struct PairingScanStoreTests {
         #expect(env.store.scanFailureMessage == nil)
     }
 
+    /// The paste entry's empty-clipboard guard moved from the view into
+    /// the store: an empty/whitespace submit is honest feedback now, not
+    /// a silent no-op.
+    @Test func emptyPasteShowsGuidanceInsteadOfSilentlyDoingNothing() throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+
+        env.store.submit(scannedCode: "  \n\t ")
+
+        #expect(env.store.pairingCode == nil)
+        #expect(env.store.scanFailureMessage?.contains("Nothing was pasted") == true)
+    }
+
+    /// The full paste pipeline: a real-format pasted code (trailing
+    /// newline included, as pbcopy/manual selection leaves it) parses,
+    /// runs the ceremony, and the Host lands in the catalog — the exact
+    /// path a remote user's code takes.
+    @Test func pastedCodeRunsTheFullCeremonyAndPersistsTheHost() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+
+        env.store.submit(scannedCode: Self.bootstrapVector.code + "\n")
+
+        await env.store.pair()
+
+        #expect(env.store.pairedHost != nil)
+        #expect(env.catalog.hosts.count == 1)
+        let host = try #require(env.catalog.hosts.first)
+        #expect(host.address == "10.0.0.7")
+        #expect(host.username == "lin")
+        #expect(host.authMethod == .deviceKey)
+    }
+
     @Test func rescanReturnsToAFreshScanningState() throws {
         let env = try makeEnv()
         defer { env.cleanup() }

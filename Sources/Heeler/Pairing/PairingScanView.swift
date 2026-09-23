@@ -13,17 +13,22 @@ struct PairingScanView: View {
     let onPaired: (Host) -> Void
     let onAddManually: () -> Void
     @State private var store: PairingScanStore
+    @State private var isPastingPairingCode = false
     @State private var cameraAccess: CameraAccess = .undetermined
     @Environment(\.dismiss) private var dismiss
 
     init(
         catalog: HostStore,
+        connector: (any PairingConnector)? = nil,
         onPaired: @escaping (Host) -> Void = { _ in },
         onAddManually: @escaping () -> Void = {}
     ) {
         self.onPaired = onPaired
         self.onAddManually = onAddManually
-        _store = State(initialValue: PairingScanStore(catalog: catalog))
+        _store = State(
+            initialValue: connector.map {
+                PairingScanStore(catalog: catalog, connector: $0)
+            } ?? PairingScanStore(catalog: catalog))
     }
 
     private enum CameraAccess {
@@ -32,6 +37,18 @@ struct PairingScanView: View {
         case denied
     }
 
+    /// Simulator-only launch argument (DEBUG simulator builds): forces
+    /// the camera-authorized scanning layout without the system
+    /// camera-permission prompt, which XCUITest cannot answer. Keeps the
+    /// paste-path proofs on the same layout a real phone shows after
+    /// granting camera access.
+    static var forceCameraAuthorizedForTesting: Bool {
+        #if DEBUG && targetEnvironment(simulator)
+        ProcessInfo.processInfo.arguments.contains("--uitest-pairing-authorized-camera")
+        #else
+        false
+        #endif
+    }
     var body: some View {
         NavigationStack {
             Group {
@@ -48,6 +65,9 @@ struct PairingScanView: View {
                     Button("Cancel") { dismiss() }
                 }
             }
+            .sheet(isPresented: $isPastingPairingCode) {
+                PairingPasteView(store: store)
+            }
             .task { await resolveCameraAccess() }
             .onChange(of: store.pairedHost) { _, paired in
                 guard let paired else { return }
@@ -59,17 +79,33 @@ struct PairingScanView: View {
 
     @ViewBuilder
     private var scanner: some View {
+        // The paste entry is NOT a camera fallback: a remote user who
+        // cannot see the Host's screen pairs from a code sent to them,
+        // so it stays mounted in every scanning state — including the
+        // healthy camera path, where it used to ride only in the
+        // scanner's bottom overlay and was easy to miss (or never
+        // reached at all when the camera permission prompt interrupted
+        // the flow).
         switch cameraAccess {
         case .undetermined:
-            // The system permission prompt is up (or about to be).
-            ProgressView()
+            // The system permission prompt is up (or about to be). The
+            // paste entry must be usable even while (or instead of)
+            // answering it — answering is optional for pasting.
+            VStack(spacing: 16) {
+                ProgressView()
+                Text("Waiting for camera permission…")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                pasteEntryButton
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .denied:
             ContentUnavailableView {
                 Label("Camera Access Needed", systemImage: "camera")
             } description: {
                 Text(store.scanFailureMessage ?? deniedCameraCopy)
             } actions: {
-                pastePairingCodeButton
+                pasteEntryButton
                 Button("Open Settings") { openSettings() }
                 Button("Add Manually") { addManually() }
             }
@@ -85,7 +121,7 @@ struct PairingScanView: View {
                             ?? "This device cannot scan QR codes. "
                             + "Paste a Pairing Code, or add the Host manually instead.")
                 } actions: {
-                    pastePairingCodeButton
+                    pasteEntryButton
                     Button("Add Manually") { addManually() }
                 }
             }
@@ -104,7 +140,7 @@ struct PairingScanView: View {
             .ignoresSafeArea(edges: .bottom)
             .overlay(alignment: .bottom) {
                 VStack(spacing: 12) {
-                    pastePairingCodeButton
+                    pasteEntryButton
                     Text(
                         store.scanFailureMessage
                             ?? "Point the camera at the Pairing Code shown by herdr.")
@@ -117,11 +153,15 @@ struct PairingScanView: View {
             }
     }
 
-    /// User-initiated paste so iOS can show its pasteboard prompt against a
-    /// tap, not against a background read (#204). Feeds the same `submit`
-    /// path a scan uses; empty clipboard is a no-op, not a new error.
-    private var pastePairingCodeButton: some View {
-        Button("Paste Pairing Code") { pastePairingCode() }
+    /// The always-mounted paste entry ("Paste Pairing Code"). One tap opens
+    /// a sheet with both ways to bring the code in: paste from the
+    /// clipboard (a user-initiated paste so iOS shows its pasteboard
+    /// prompt against a tap, not a background read — #204) and a text
+    /// field to type or paste the code by hand. A remote user's code
+    /// arrives over any channel; the sheet keeps both within reach
+    /// without dismissing the scanner.
+    private var pasteEntryButton: some View {
+        Button("Paste Pairing Code") { isPastingPairingCode = true }
             .buttonStyle(.borderedProminent)
     }
 
@@ -130,14 +170,11 @@ struct PairingScanView: View {
             + "paste a Pairing Code, or add the Host manually instead."
     }
 
-    private func pastePairingCode() {
-        let pasted = UIPasteboard.general.string?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !pasted.isEmpty else { return }
-        store.submit(scannedCode: pasted)
-    }
-
     private func resolveCameraAccess() async {
+        if Self.forceCameraAuthorizedForTesting {
+            cameraAccess = .authorized
+            return
+        }
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
             cameraAccess = .authorized
@@ -152,6 +189,113 @@ struct PairingScanView: View {
     private func openSettings() {
         guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
         UIApplication.shared.open(url)
+    }
+}
+
+/// The paste entry sheet (#204, remote pairing): both ways to bring a
+/// Pairing Code in without the camera. "Paste from Clipboard" is a
+/// user-initiated paste so iOS shows its pasteboard prompt against the
+/// tap (never a background read); the field covers codes typed by hand
+/// or arriving over any other channel. A code pasted here rides the
+/// SAME `submit` path a scan uses — decode, ceremony, Host persisted —
+/// and the sheet closes itself once the code parses.
+private struct PairingPasteView: View {
+    let store: PairingScanStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var typedCode = ""
+    @State private var pasteFromClipboardFailed = false
+    @FocusState private var fieldIsFocused: Bool
+
+    /// The clipboard was empty (or whitespace). Shown inline instead of
+    /// surfacing a decode error for a non-code.
+    private var clipboardEmptyCopy: String {
+        "The clipboard is empty. Copy the Pairing Code first — herdr shows it "
+            + "next to its QR code, with a Copy action."
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Button {
+                        pasteFromClipboardTapped()
+                    } label: {
+                        Label("Paste from Clipboard", systemImage: "clipboard")
+                    }
+                    if pasteFromClipboardFailed {
+                        Text(clipboardEmptyCopy)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Pairing Code")
+                } footer: {
+                    Text(
+                        "Remote setup: ask the person at the computer to run herdr's "
+                        + "pair command and send you the code. It is the same code as "
+                        + "the QR; pasting it here pairs exactly like scanning it.")
+                }
+
+                Section("Or type / paste the code") {
+                    TextField(
+                        "HERDR-PAIR:1:…",
+                        text: $typedCode,
+                        axis: .vertical
+                    )
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.asciiCapable)
+                    .focused($fieldIsFocused)
+                    .lineLimit(2...4)
+                    Button("Pair with This Code") { submitTyped() }
+                        .disabled(typedCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+
+                if let failure = store.scanFailureMessage {
+                    // Honest parse feedback from the same submit path —
+                    // this is where a malformed / expired / wrong QR's
+                    // copy surfaces.
+                    Section {
+                        Text(failure)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("Paste Pairing Code")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+            .onChange(of: store.pairingCode) { _, parsed in
+                // The code parsed: the ceremony starts behind this sheet.
+                // Close so the user sees it; keep the parse failure up
+                // otherwise.
+                if parsed != nil { dismiss() }
+            }
+            .onAppear { fieldIsFocused = true }
+        }
+    }
+
+    /// A user-initiated paste (the tap is the user gesture iOS requires
+    /// for the pasteboard prompt, #204). An empty clipboard is honest
+    /// inline feedback, not a silent no-op the old single button had.
+    private func pasteFromClipboardTapped() {
+        let pasted = UIPasteboard.general.string?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !pasted.isEmpty else {
+            pasteFromClipboardFailed = true
+            return
+        }
+        pasteFromClipboardFailed = false
+        store.submit(scannedCode: pasted)
+    }
+
+    private func submitTyped() {
+        let code = typedCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !code.isEmpty else { return }
+        store.submit(scannedCode: code)
     }
 }
 

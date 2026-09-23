@@ -74,6 +74,16 @@ Entries reference the issue that motivated them.
   table's content hidden right of the viewport). Wide layouts render
   the same tables wrapped at their larger width.
 
+- Pairing without the Host's screen is now a first-class path: "Paste
+  Pairing Code" is always reachable on the Scan to Pair screen —
+  including while the camera permission prompt is up, where the screen
+  previously showed only a spinner — and opens a paste sheet with a
+  clipboard button plus a type/paste field, so a remote user can pair
+  from a code sent over any channel. Pasted codes ride the same
+  decode → ceremony → Host-persisted path a scan does; empty,
+  malformed, and expired codes get honest recovery guidance instead
+  of a silent no-op.
+
 - Agents tree follows the herdr window's pane order: workspaces, tabs,
   and panes read the way the user arranged them (the snapshot's
   collection order, and pane geometry within a tab), instead of
