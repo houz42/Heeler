@@ -354,6 +354,17 @@ struct AgentChatCommandsResult: Decodable, Sendable, Equatable {
     let commands: [Command]
 }
 
+/// command.invoke result — acceptance-only (§4a of the v3 design):
+/// `accepted` is the terminal delivery state; no send.confirmed
+/// correlation exists for commands (a command lands no user record
+/// or transformed text, so the prompt path's requestKey→record
+/// commitment proof cannot apply). Mirrors the
+/// feat/slash-command-structural PoC shape exactly.
+struct AgentChatCommandResult: Decodable, Sendable, Equatable {
+    let accepted: Bool
+    let requestKey: String
+}
+
 // MARK: - Interactions (optional capability; gate stays closed without it)
 
 /// One question inside a pending interaction. Multi-question and
