@@ -81,6 +81,13 @@ enum AgentChatChannelEvidence {
 #else
 
 enum AgentChatChannelEvidence {
+    /// Release stub: evidence logging is harness-only. Same shape as the
+    /// debug variant's `record` so ungated call sites compile in every
+    /// configuration (the release stub was missing it — the v2 tip's
+    /// Release build did not compile).
+    static func record(
+        channel: String, event: String, detail: String = ""
+    ) {}
     static func harnessEvent(_ event: String, detail: String = "") {}
 }
 

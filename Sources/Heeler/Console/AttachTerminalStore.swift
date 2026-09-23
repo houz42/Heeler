@@ -387,10 +387,12 @@ final class AttachTerminalStore {
             generation: transportGeneration)
         #endif
         guard cols > 0, rows > 0, cols != self.cols || rows != self.rows else { return }
+        #if DEBUG
         if sizeFallbackTask != nil {
             restorationTrace.emitDiagnostic(
                 "arm_cancelled site=viewDidResize cols=\(cols) rows=\(rows)")
         }
+        #endif
         sizeFallbackTask?.cancel()
         sizeFallbackTask = nil
         self.cols = cols
@@ -433,9 +435,11 @@ final class AttachTerminalStore {
 
     /// Reattaches after the session ended remotely.
     func retry() {
+        #if DEBUG
         if sizeFallbackTask != nil {
             restorationTrace.emitDiagnostic("arm_cancelled site=retry")
         }
+        #endif
         sizeFallbackTask?.cancel()
         sizeFallbackTask = nil
         guard case .ended = status, runTask == nil else { return }
@@ -460,12 +464,20 @@ final class AttachTerminalStore {
         if let session {
             await session.end()
         }
+        #if DEBUG
         if let task = sizeFallbackTask {
             restorationTrace.emitDiagnostic(
                 "arm_cancelled site=stop caller=\(caller) status=\(Self.diagnosticStatusName(status))")
             task.cancel()
             sizeFallbackTask = nil
+        } else {
+            sizeFallbackTask?.cancel()
+            sizeFallbackTask = nil
         }
+        #else
+        sizeFallbackTask?.cancel()
+        sizeFallbackTask = nil
+        #endif
         if let task = runTask {
             task.cancel()
             await task.value
@@ -600,6 +612,11 @@ final class AttachTerminalStore {
                 // the bytes on screen.
                 if status == .connecting {
                     status = .live
+                    // The session the fallback opened WENT LIVE: a later
+                    // ordinary end (the remote closed) must not re-arm the
+                    // failed-open recovery — only a pipeline that never
+                    // produced output earns that.
+                    fallbackOpenedThisPipeline = false
                 }
                 #if DEBUG
                 restorationTrace.emit(.firstOutputBytes, generation: acquiredTransportGeneration)

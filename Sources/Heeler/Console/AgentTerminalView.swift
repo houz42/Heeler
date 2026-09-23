@@ -698,10 +698,18 @@ struct AgentTerminalView: View {
         .onDisappear {
             interactionProbe?.value?.disconnect()
             messageJump.resetSession()
+            // A preserving leave: surface churn must not tear the pipeline
+            // down, and the stage read at THIS instant is unreliable (it
+            // lags the SwiftUI transaction). The deferred block below reads
+            // the stage AFTER the churn settles — the reliable signal — and
+            // forces a real (non-preserving) teardown for a genuine
+            // departure, so Back/dismiss during the fallback's grace
+            // window cannot leave an offscreen pipeline opening a PTY.
             attach.leave()
             Task { @MainActor in
                 await Task.yield()
                 guard !isOnStage() else { return }
+                attach.leaveForTerminalHandoff()
                 directKeyboardIntent.setWantsKeyboard(false)
                 keyboardControl.dismissKeyboard()
                 usesDirectToolsKeyboard = false

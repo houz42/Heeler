@@ -923,3 +923,54 @@ extension AgentSurfaceReplacementTests {
         #expect(stopped, "the handoff leave did not stop the preserved pipeline")
     }
 }
+
+// MARK: - Release/lifecycle blocker: departure during the grace window
+
+extension AgentSurfaceReplacementTests {
+    /// Back/dismiss during the fallback's grace window must not leave an
+    /// offscreen pipeline opening a PTY: the churn-preserving leave survives
+    /// (as designed), but the deferred REAL departure (the reliable
+    /// post-churn stage read) forces a non-preserving teardown that cancels
+    /// the armed grace. The store-level contract: leave() preserves the arm,
+    /// leaveForTerminalHandoff() (the deferred departure's path) tears it
+    /// down before the grace fires.
+    @MainActor
+    @Test(.timeLimit(.minutes(1)))
+    func realDepartureDuringTheGraceWindowTearsDownTheArmedFallback() async throws {
+        let transport = ScriptedTransport()
+        let composer = AgentComposerStore(target: "w1:p1") { params in
+            try await transport.promptAgent(params)
+        }
+        let attach = AgentAttachStore(
+            target: "w1:p1",
+            paneTitle: "pane",
+            transportGeneration: 1,
+            isOnStage: { false },
+            runTerminal: { request, handler in
+                let session = try await transport.attachTerminal(request)
+                try await handler.runEndingSession(session)
+            },
+            stageImage: { _, _ in throw TransportError.cancelled },
+            stageFile: { _, _ in throw TransportError.cancelled },
+            composer: composer,
+            closePane: {})
+
+        // The arm (the grace window opens).
+        attach.terminalViewDidAppear()
+        // The churn leave: preserves the arm (this is the surface swap).
+        await attach.leave().value
+        #expect(attach.terminalStatus == .waitingForSize)
+
+        // The deferred real departure: forces the non-preserving teardown
+        // well inside the 1.5s grace window.
+        attach.leaveForTerminalHandoff()
+        try await Self.eventually(
+            timeout: .seconds(3),
+            condition: { attach.terminalStatus == .stopped })
+
+        // The grace never fired: the attach NEVER opened.
+        try await Task.sleep(for: .milliseconds(2200))
+        let opened = await transport.attachRequests.count > 0
+        #expect(!opened, "the armed fallback opened a PTY after the real departure")
+    }
+}
