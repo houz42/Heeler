@@ -434,3 +434,105 @@ test('send.confirmed: token-proven origin — real record id, foreign messages, 
   await rm(dir,{recursive:true,force:true});
  }
 });
+
+// Regression (omp 18.2.6 live failure): omp dispatches message_end to
+// extensions with the event's OWN message (attribution echoed verbatim),
+// but persists the session-tree record ASYNCHRONOUSLY — at event time the
+// tree's leaf is STALE (the token-bearing record is not in getEntry yet).
+// The leaf-based correlateCommittedSend silently returned early (no marker,
+// no send.confirmed). The event-message path must confirm immediately when
+// the tree already has the record, and via the turn_end retry when the
+// record only lands mid-turn.
+test('send.confirmed: stale session tree at message_end — event token proves origin, turn_end retry resolves the real id', {timeout:5000}, async () => {
+ const dir=await mkdtemp(join(tmpdir(),'chat-send-stale-'));
+ const socketPath=join(dir,'broker.sock');
+ const old=process.env.HEELER_CHAT_SOCKET;
+ process.env.HEELER_CHAT_SOCKET=socketPath;
+ const handlers=new Map();
+ const events=[]; // send.confirmed payloads
+ const markers=[]; // durable marker entries
+ const mk=(id,parentId,type,message)=>({id,parentId,type,...(message!==undefined?{message}:{})});
+ const entries=new Map([
+  ['a1',mk('a1',null,'message',{role:'assistant',content:[{type:'text',text:'prior turn'}]})],
+ ]);
+ let leafId='a1';
+ let nextId=0;
+ const ctx={sessionManager:{
+  getSessionId:()=>'test-session',
+  getLeafId:()=>leafId,
+  getEntry:id=>entries.get(id),
+  appendCustomEntry:(customType,data)=>{const id=`marker-${++nextId}`;entries.set(id,mk(id,leafId,'custom'));markers.push({id,customType,data});return id;},
+ },abort(){}};
+ let conn;
+ const registered=Promise.withResolvers();
+ const server=net.createServer(socket=>{
+  conn=socket;let buffer='';socket.setEncoding('utf8');
+  socket.on('data',chunk=>{
+   buffer+=chunk;
+   for(;;){const end=buffer.indexOf('\n');if(end<0)break;
+    const frame=JSON.parse(buffer.slice(0,end));buffer=buffer.slice(end+1);
+    if(frame.type==='hello')socket.write(JSON.stringify({type:'welcome',protocol:1,maxFrameBytes:1048576})+'\n');
+    if(frame.type==='register'){socket.write(JSON.stringify({type:'registered'})+'\n');registered.resolve();}
+    if(frame.type==='event'&&frame.event?.type==='send.confirmed')events.push(frame.event);
+   }
+  });
+ });
+ const request=(params)=>{
+  const {promise,resolve}=Promise.withResolvers();
+  const id='req-'+Math.random().toString(36).slice(2);
+  let buf='';
+  const onData=chunk=>{
+   buf+=chunk;
+   for(;;){const end=buf.indexOf('\n');if(end<0)break;
+    const frame=JSON.parse(buf.slice(0,end));buf=buf.slice(end+1);
+    if(frame.type==='response'&&frame.id===id){conn.off('data',onData);resolve(frame);}
+   }
+  };
+  conn.on('data',onData);
+  conn.write(JSON.stringify({type:'request',id,method:'prompt.send',params})+'\n');
+  return promise;
+ };
+ try {
+  server.listen(socketPath);await once(server,'listening');
+  let committedToken=null;
+  extension({
+   on:(name,fn)=>handlers.set(name,fn),
+   // omp 18.2.6 sendUserMessage: attribution rides the committed message.
+   sendUserMessage(content,options){
+    committedToken=typeof options?.attribution==='string'?options.attribution:'user';
+   },
+   getCommands:()=>[],
+   appendEntry:(customType,data)=>ctx.sessionManager.appendCustomEntry(customType,data),
+  });
+  handlers.get('session_start')({},ctx);
+  await registered.promise;
+  const r1=await request({text:'stale-tree probe',requestKey:'k-stale'});
+  assert.equal(r1.result?.accepted,true);
+  assert.equal(committedToken,'heeler-chat:send:k-stale');
+  // omp 18.2.6 dispatch order: message_end carries the REAL message (token
+  // included) while the session-tree append is still in flight — the leaf is
+  // the OLD assistant record. The old leaf-based code confirmed NOTHING here.
+  handlers.get('message_end')({message:{role:'user',content:[{type:'text',text:'stale-tree probe'}],attribution:committedToken}},ctx);
+  await new Promise(r=>setTimeout(r,100));
+  assert.equal(events.length,0,'record id must not be guessed while the tree is stale');
+  assert.equal(markers.length,0,'no durable marker before the real record id is known');
+  // Persistence lands the record; the turn ends. turn_end must resolve the
+  // REAL record id from the tree and fire marker + send.confirmed.
+  const recordId=`u-${++nextId}`;
+  entries.set(recordId,mk(recordId,leafId,'message',{role:'user',content:[{type:'text',text:'stale-tree probe'}],attribution:committedToken}));
+  leafId=recordId;
+  handlers.get('turn_end')();
+  await new Promise(r=>setTimeout(r,100));
+  assert.equal(events.length,1,'turn_end retry must emit send.confirmed for the stale-tree send');
+  assert.equal(events[0].requestKey,'k-stale');
+  assert.equal(events[0].recordId,recordId,'recordId must be the real committed record, resolved from the tree');
+  assert.equal(markers.length,1,'durable marker must bind requestKey to the real record id');
+  assert.equal(markers[0].data.requestKey,'k-stale');
+  assert.equal(markers[0].data.recordId,recordId);
+ } finally {
+  handlers.get('session_shutdown')?.({},ctx);conn?.destroy();
+  const closed=Promise.withResolvers();server.close(closed.resolve);await closed.promise;
+  if(old===undefined)delete process.env.HEELER_CHAT_SOCKET;else process.env.HEELER_CHAT_SOCKET=old;
+  await rm(dir,{recursive:true,force:true});
+ }
+});

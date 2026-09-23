@@ -116,6 +116,8 @@ const RECONNECT_MAX_MS = 5_000;
 const DEDUP_MAX = 512;
 /** Bound on pending send-correlation markers (a stuck FIFO cannot grow unbounded). */
 const PENDING_SENDS_MAX = 64;
+/** Bound on the session-branch walk when resolving a committed record id. */
+const RECORD_SCAN_MAX = 200;
 
 export default function ompChatAdapterExtension(pi: LocalPi): void {
 	const log = (...args: unknown[]) => pi.logger?.warn("[omp-chat-adapter]", ...args);
@@ -166,6 +168,80 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 		const requestKey = attribution.slice(SEND_TOKEN_PREFIX.length);
 		return requestKey.length > 0 ? requestKey : undefined;
 	}
+	/** The most recent user-role message_end EVENT payload (this generation). */
+	let lastUserMessageEnd: { message?: { role?: string; attribution?: unknown; content?: unknown; timestamp?: unknown } } | null = null;
+
+	/**
+	 * Token-proven sends whose record id could not be resolved at message_end
+	 * time (omp persists the session tree ASYNCHRONOUSLY after dispatching
+	 * message_end to extensions — the leaf can be stale mid-persistence).
+	 * Bounded by PENDING_SENDS_MAX; retried once at turn_end, when persistence
+	 * has settled; dropped honestly (with a log) if still unresolvable.
+	 */
+	const deferredConfirmations: Array<{ requestKey: string; message: unknown }> = [];
+
+	/**
+	 * Resolve the REAL committed record id for a token-proven send.
+	 *
+	 * Ladder: (1) session-tree lookup — the newest user entry whose attribution
+	 * equals the event message's token IS the committed record (the token is
+	 * unguessable per send; same-text twins carry different tokens); (2) a
+	 * bounded scan over the session branch from the leaf (getEntry/parentId
+	 * walk) when the newest-token entry is not the leaf (marker/other entries
+	 * can sit newer); (3) give up for now and defer to turn_end — never bind a
+	 * provisional id.
+	 */
+	function resolveRecordId(
+		ctx: LocalCtx | null,
+		requestKey: string,
+		eventMessage: { attribution?: unknown },
+		diagnoseSend: (where: string, detail: Record<string, unknown>) => void,
+	): string | undefined {
+		const sm = ctx?.sessionManager ?? currentCtx?.sessionManager;
+		if (sm === undefined) {
+			diagnoseSend("no-sessionManager", {});
+			return undefined; // deferring is useless without a session manager
+		}
+		const token = eventMessage.attribution;
+		if (typeof token !== "string") return undefined;
+		// Walk the branch newest->oldest from the leaf; the first message entry
+		// whose attribution equals the token is the committed record. Bounded by
+		// RECORD_SCAN_MAX; a token entry deeper than that defers to turn_end.
+		let entryId: string | null | undefined = sm.getLeafId();
+		for (let i = 0; i < RECORD_SCAN_MAX && typeof entryId === "string"; i++) {
+			const entry = sm.getEntry(entryId);
+			if (entry === undefined) break;
+			if (entry.type === "message" && entry.message?.role === "user" && entry.message.attribution === token) {
+				return entryId;
+			}
+			entryId = (entry as { parentId?: string | null }).parentId;
+		}
+		diagnoseSend("record-not-in-tree-yet", { scanned: RECORD_SCAN_MAX });
+		return undefined;
+	}
+
+	/**
+	 * Bind a token-proven send to its REAL committed record id: durable hidden
+	 * marker (pi.appendEntry, consumed by the read-side history attach) plus
+	 * the live send.confirmed event. Absent appendEntry (older host) the live
+	 * event still fires; only the durable read-side attach degrades.
+	 */
+	function confirmSend(
+		recordKey: string,
+		recordId: string,
+		diagnoseSend: (where: string, detail: Record<string, unknown>) => void,
+	): void {
+		if (pi.appendEntry !== undefined) {
+			try {
+				pi.appendEntry("heeler-chat.send.confirmed", { requestKey: recordKey, recordId, timestamp: new Date().toISOString() });
+			} catch (error) {
+				diagnoseSend("marker-write-failed", { error: String(error) });
+				log("send-correlation marker write failed:", String(error));
+			}
+		}
+		diagnoseSend("confirmed", { requestKey: recordKey, recordId });
+		emitEvent("send.confirmed", { requestKey: recordKey, recordId });
+	}
 
 	/**
 	 * Correlate the just-committed user record to its broker-originated send.
@@ -181,31 +257,89 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 	 */
 	function correlateCommittedSend(ctx: LocalCtx | null): void {
 		if (pendingSends.length === 0) return; // terminal-origin: nothing to confirm
-		const sm = ctx?.sessionManager ?? currentCtx?.sessionManager;
-		if (sm === undefined) return;
-		const leafId = sm.getLeafId();
-		const entry = leafId === null ? undefined : sm.getEntry(leafId);
-		if (entry === undefined || entry.type !== "message" || entry.message?.role !== "user") return; // not a committed user record
-		const recordKey = tokenRequestKey(entry);
-		if (recordKey === undefined) return; // not broker-originated (no token)
+		// Live diagnostics for the silent failure observed against omp 18.2.6
+		// (committed record carried the token, yet no marker/confirmed fired):
+		// pi.logger is absent in embedded hosts, so log() was a no-op and every
+		// early return invisible. Each guard now mirrors its inputs to stderr.
+		// Gated by HEELER_CHAT_DEBUG=1; production pays one env check.
+		const debug = process.env.HEELER_CHAT_DEBUG === "1";
+		const diagnoseSend = (where: string, detail: Record<string, unknown>) => {
+			if (!debug) return;
+			try {
+				process.stderr.write(
+					`[omp-chat-adapter] correlateCommittedSend/${where} pending=${pendingSends.length} ${JSON.stringify(detail)}\n`,
+				);
+			} catch {
+				// stderr is best-effort; never break the correlation path.
+			}
+		};
+		const eventMessage = lastUserMessageEnd?.message; // the event's OWN user message
+		if (eventMessage === undefined) {
+			// No user message_end seen this generation (should not happen: the
+			// handler is only invoked from the user message_end path).
+			diagnoseSend("no-user-message_end", {});
+			return;
+		}
+		const eventKey = tokenRequestKey({ type: "message", message: eventMessage as { attribution?: unknown } });
+		if (eventKey === undefined) {
+			// The event message carries no token — either a terminal-typed message
+			// (expected; confirms nothing) or a host that strips attribution from
+			// event messages. Fall back to the committed LEAF entry: the newest
+			// session record, whose attribution (omp persists it verbatim) is the
+			// same origin proof. A stale leaf simply fails the token check and
+			// confirms nothing — the send stays pending for its own record.
+			const sm = ctx?.sessionManager ?? currentCtx?.sessionManager;
+			if (sm === undefined) {
+				diagnoseSend("tokenless-event-no-sessionManager", {});
+				return;
+			}
+			const leafId = sm.getLeafId();
+			const leafEntry = leafId === null ? undefined : sm.getEntry(leafId);
+			if (leafEntry === undefined || leafEntry.type !== "message" || leafEntry.message?.role !== "user") {
+				diagnoseSend("tokenless-event-bad-leaf", { leafId: leafId ?? null });
+				return;
+			}
+			const leafKey = tokenRequestKey(leafEntry as { type: string; message?: { attribution?: unknown } });
+			if (leafKey === undefined) {
+				diagnoseSend("tokenless-user-record", { attribution: String(leafEntry.message?.attribution ?? "?") });
+				return; // terminal message (no token): confirms nothing
+			}
+			const leafMatch = pendingSends.findIndex(s => s.requestKey === leafKey);
+			if (leafMatch === -1) {
+				diagnoseSend("unknown-requestKey", { recordKey: leafKey });
+				log("send-correlation token for unknown requestKey:", leafKey);
+				return;
+			}
+			pendingSends.splice(leafMatch, 1);
+			confirmSend(leafKey, leafId as string, diagnoseSend);
+			return;
+		}
+		const recordKey = eventKey;
 		const match = pendingSends.findIndex(s => s.requestKey === recordKey);
 		if (match === -1) {
+			diagnoseSend("unknown-requestKey", { recordKey });
 			log("send-correlation token for unknown requestKey:", recordKey);
 			return; // honest absence: never bind a key we did not queue
 		}
 		pendingSends.splice(match, 1);
-		const recordId = leafId; // the REAL committed user record's id
-		// Durable binding: a hidden marker entry the read side re-attaches as
-		// record metadata. Absent appendEntry (older host) the live event still
-		// fires; only the durable read-side attach degrades.
-		if (pi.appendEntry !== undefined) {
-			try {
-				pi.appendEntry("heeler-chat.send.confirmed", { requestKey: recordKey, recordId, timestamp: new Date().toISOString() });
-			} catch (error) {
-				log("send-correlation marker write failed:", String(error));
+		// Record id resolution: prefer the persisted session entry (authoritative);
+		// fall back to a bounded wait for the asynchronous persistence (omp
+		// dispatches message_end to extensions BEFORE the session-tree append
+		// it schedules on its #He chain has landed), and finally defer to
+		// turn_end (persistence has settled by then) — the fallback ladder
+		// guarantees the REAL record id, never a provisional one.
+		const recordId = resolveRecordId(ctx, recordKey, eventMessage, diagnoseSend);
+		if (recordId === undefined) {
+			// Persistence has not landed the record in the session tree yet; the
+			// turn_end retry resolves it after the turn settles.
+			if (deferredConfirmations.length < PENDING_SENDS_MAX) {
+				deferredConfirmations.push({ requestKey: recordKey, message: eventMessage });
+			} else {
+				log("send-correlation deferral overflow; dropping", recordKey);
 			}
+			return;
 		}
-		emitEvent("send.confirmed", { requestKey: recordKey, recordId });
+		confirmSend(recordKey, recordId, diagnoseSend);
 	}
 
 	// -- socket + bounded outgoing queue ---------------------------------------
@@ -1112,7 +1246,15 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 				emitEvent("message.finished", { streamId });
 			}
 		}
-		if (role === "user") correlateCommittedSend(ctx ?? null);
+		if (role === "user") {
+			// Remember the EVENT's own message: correlateCommittedSend matches
+			// on it (omp dispatches message_end with the exact message it
+			// commits; the session tree can lag because omp persists it
+			// asynchronously AFTER the extension dispatch).
+			lastUserMessageEnd = event as { message?: { role?: string; attribution?: unknown; content?: unknown; timestamp?: unknown } };
+			correlateCommittedSend(ctx ?? null);
+			lastUserMessageEnd = null; // never reused across message_end dispatches
+		}
 		if (role === "assistant" || role === "user" || role === "toolResult") {
 			emitEvent("history.changed", { revision });
 		}
@@ -1124,6 +1266,37 @@ export default function ompChatAdapterExtension(pi: LocalPi): void {
 	});
 
 	pi.on("turn_end", () => {
+		// Deferred send-correlation retry: omp persists the session tree
+		// asynchronously after message_end dispatch, so a token-proven send
+		// whose record id was not resolvable at message_end time retries here,
+		// once, after the turn (persistence has settled). Still unresolvable
+		// sends are dropped honestly — a later snapshot would rebind them only
+		// by guesswork, which the contract forbids.
+		for (const deferred of deferredConfirmations.splice(0)) {
+			const message = deferred.message as { attribution?: unknown };
+			const recordKey = tokenRequestKey({ type: "message", message });
+			if (recordKey === undefined) continue;
+			const sm = currentCtx?.sessionManager;
+			if (sm === undefined) continue;
+			const token = message.attribution;
+			if (typeof token !== "string") continue;
+			let entryId: string | null | undefined = sm.getLeafId();
+			let resolved: string | undefined;
+			for (let i = 0; i < RECORD_SCAN_MAX && typeof entryId === "string"; i++) {
+				const entry = sm.getEntry(entryId);
+				if (entry === undefined) break;
+				if (entry.type === "message" && entry.message?.role === "user" && entry.message.attribution === token) {
+					resolved = entryId;
+					break;
+				}
+				entryId = (entry as { parentId?: string | null }).parentId;
+			}
+			if (resolved === undefined) {
+				log("send-correlation could not resolve record id at turn_end for", recordKey);
+				continue;
+			}
+			confirmSend(recordKey, resolved, () => {});
+		}
 		revision = `rev:${randomUUID()}`;
 		emitEvent("history.changed", { revision });
 	});
