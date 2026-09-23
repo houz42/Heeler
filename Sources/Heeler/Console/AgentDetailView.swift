@@ -778,6 +778,18 @@ struct AgentDetailView: View {
             // The retained UIKit surface belongs to THIS detail; a real
             // departure releases it (the chat↔terminal toggle never does).
             terminalSurfaceRetention.clear()
+            // The DETAIL's real departure is the one teardown boundary that
+            // works regardless of which surface is showing. The terminal
+            // surface's own onDisappear preserves the pipeline across the
+            // chat↔terminal toggle, and while CHAT is displayed the terminal
+            // child is already unmounted — its deferred departure check can
+            // never fire for this leave. Without a stop here, a two-step
+            // departure (Terminal → Chat → Back) leaves the preserved attach
+            // holding the Host's one terminal channel after the detail is
+            // gone. The non-preserving teardown stops the pipeline and
+            // releases the channel; ordinary toggles are unaffected (they
+            // never fire the DETAIL's onDisappear).
+            attach.leaveForTerminalHandoff()
         }
         .onChange(of: console.hostConnectionGenerations[agent.hostID]) { _, generation in
             openTerminal.transportGenerationDidChange(generation)

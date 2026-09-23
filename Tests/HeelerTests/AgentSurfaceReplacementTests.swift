@@ -974,3 +974,62 @@ extension AgentSurfaceReplacementTests {
         #expect(!opened, "the armed fallback opened a PTY after the real departure")
     }
 }
+
+// MARK: - Two-step departure: Terminal → Chat → Back must release the channel
+
+extension AgentSurfaceReplacementTests {
+    /// The detail's real departure is the one teardown boundary that works
+    /// regardless of which surface is showing: while CHAT is displayed the
+    /// terminal child is unmounted, so its deferred departure check can
+    /// never fire — a preserved (live) attach would hold the Host's one
+    /// terminal channel after the detail is gone. The detail boundary's
+    /// non-preserving teardown must stop even a LIVE pipeline; the ordinary
+    /// chat↔terminal toggle (preserving) must not.
+    @MainActor
+    @Test(.timeLimit(.minutes(1)))
+    func twoStepDepartureReleasesTheChannelWhileTogglesPreserveIt() async throws {
+        let transport = ScriptedTransport()
+        let composer = AgentComposerStore(target: "w1:p1") { params in
+            try await transport.promptAgent(params)
+        }
+        let attach = AgentAttachStore(
+            target: "w1:p1",
+            paneTitle: "pane",
+            transportGeneration: 1,
+            isOnStage: { true },
+            runTerminal: { request, handler in
+                let session = try await transport.attachTerminal(request)
+                try await handler.runEndingSession(session)
+            },
+            stageImage: { _, _ in throw TransportError.cancelled },
+            stageFile: { _, _ in throw TransportError.cancelled },
+            composer: composer,
+            closePane: {})
+
+        // A live session (the terminal was open and rendered).
+        attach.terminalViewDidAppear()
+        try await Self.eventually(
+            timeout: .seconds(6),
+            condition: { await transport.hasLiveAttachSession })
+        _ = await transport.emitAttachOutput(Data("\u{1B}[2JTUI".utf8))
+        try await Self.eventually(
+            timeout: .seconds(5),
+            condition: { attach.terminalStatus == .live })
+
+        // The ordinary toggle: the preserving leave KEEPS the live session.
+        await attach.leave().value
+        #expect(attach.terminalStatus == .live)
+        #expect(await transport.hasLiveAttachSession)
+
+        // The two-step departure: the detail closes while CHAT is showing —
+        // the detail boundary's non-preserving teardown stops the LIVE
+        // pipeline and releases the channel.
+        attach.leaveForTerminalHandoff()
+        try await Self.eventually(
+            timeout: .seconds(5),
+            condition: { attach.terminalStatus == .stopped })
+        try await Self.eventually(
+            timeout: .seconds(5),
+            condition: { await transport.hasLiveAttachSession == false })
+    }
+}
