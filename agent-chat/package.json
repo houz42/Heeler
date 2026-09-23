@@ -14,7 +14,8 @@
     "./protocol": "./src/protocol.mjs",
     "./frame": "./src/frame.mjs",
     "./broker": "./src/broker.mjs",
-    "./client": "./src/client.mjs"
+    "./client": "./src/client.mjs",
+    "./lifecycle": "./src/lifecycle.mjs"
   },
   "scripts": {
     "test": "node --experimental-strip-types --test test/*.test.mjs test/*.test.ts"
