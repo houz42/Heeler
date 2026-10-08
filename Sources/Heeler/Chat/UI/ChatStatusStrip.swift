@@ -162,6 +162,9 @@ struct DetailLevelSwitcher: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    // VoiceOver announces the selected level too, not just
+                    // the accent tint (review item 29).
+                    .accessibilityAddTraits(candidate == level ? [.isSelected] : [])
                 }
             }
             .padding(.horizontal, 10)
