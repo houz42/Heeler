@@ -205,14 +205,33 @@ struct ChatDraftTile<Content: View>: View {
                             .contentShape(.rect)
                     }
                     .accessibilityLabel("Remove draft item")
-                    .accessibilityAddTraits(.isButton)
                 }
             }
             // The full-size remove path for assistive tech and anyone
-            // who cannot hit the small corner target.
-            .accessibilityAction(named: Text("Remove draft item")) {
-                remove?()
+            // who cannot hit the small corner target. Attached ONLY
+            // when there is a remove closure (round-4): a nil-remove
+            // tile must not expose a dead VoiceOver action.
+            .modifier(
+                ConditionalRemoveAction(remove: remove))
+    }
+}
+
+/// Applies the full-size "Remove draft item" accessibility action only
+/// when a remove closure exists — a plain `if let` cannot wrap a
+/// ViewModifier's `.accessibilityAction`, and an unconditional action
+/// would expose a dead control on nil-remove tiles (round-4 review).
+private struct ConditionalRemoveAction: ViewModifier {
+    let remove: (() -> Void)?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let remove {
+            content.accessibilityAction(named: Text("Remove draft item")) {
+                remove()
             }
+        } else {
+            content
+        }
     }
 }
 
