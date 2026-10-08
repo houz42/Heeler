@@ -541,3 +541,47 @@ test("dispose is permanent: execute refuses later asks with an explicit error", 
 	);
 	assert.deepEqual(adapter.listPending(), { pending: [] });
 });
+
+// ---------------------------------------------------------------------------
+// Causal anchor: the omp producer's tool-call id threads through the
+// interaction wire (interaction.opened + interactions.list) — the SAME id
+// history pages expose as tool_call.callId, so clients anchor the Q/A card
+// causally without text/position matching. Additive/optional: an empty
+// producer id keeps the field absent.
+// ---------------------------------------------------------------------------
+
+test("toolCallId threads through interaction.opened and listPending", async () => {
+	const f = makeFakePi();
+	const { bridge, events } = makeBridge();
+	const adapter = installAskAdapter(f.pi, bridge);
+
+	const ask = f.executeAsk({ questions: [{ id: "q1", question: "One?", options: [{ label: "A" }] }] });
+	await f.dialogOpened;
+	const opened = events.find(e => e.type === "interaction.opened")!;
+	// The fixture's executeAsk calls the wrapper with id "call-1": the
+	// producer's opaque id, identical to the history tool_call.callId.
+	assert.equal(opened.payload.interaction.toolCallId, "call-1");
+	const { pending } = adapter.listPending();
+	assert.equal(pending.length, 1);
+	assert.equal(pending[0]!.toolCallId, "call-1");
+	// requestId remains the claim key; the anchor is metadata only.
+	adapter.answer({ requestId: pending[0]!.requestId, answers: [{ questionId: "q1", optionIds: ["idx:0"] }] });
+	await ask;
+	adapter.dispose();
+});
+
+test("interaction.resolved stays requestId-keyed; outcome carries no anchor change", async () => {
+	const f = makeFakePi();
+	const { bridge, events } = makeBridge();
+	const adapter = installAskAdapter(f.pi, bridge);
+
+	const ask = f.executeAsk({ questions: [{ id: "q1", question: "One?", options: [{ label: "A" }] }] });
+	await f.dialogOpened;
+	const { pending } = adapter.listPending();
+	adapter.cancel({ requestId: pending[0]!.requestId });
+	await ask.catch(() => undefined);
+	const resolved = events.find(e => e.type === "interaction.resolved")!;
+	assert.equal(resolved.payload.requestId, pending[0]!.requestId);
+	assert.equal(resolved.payload.toolCallId, undefined);
+	adapter.dispose();
+});

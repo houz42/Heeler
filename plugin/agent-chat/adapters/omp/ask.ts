@@ -107,11 +107,17 @@ export interface InteractionQuestion {
 	allowCustom: boolean;
 }
 
-/** Normalized interaction published to remote clients (agent-chat contract). */
+/** Normalized interaction published to remote clients (agent-chat contract).
+ *  toolCallId is ADDITIVE (optional on old adapters): the omp producer's
+ *  opaque tool-call id — the SAME id history pages expose as tool_call.callId
+ *  on the assistant message — so clients anchor the card causally without
+ *  text/position matching. */
 export interface Interaction {
 	requestId: string;
 	generation: number;
 	kind: "question";
+	/** Causal anchor: equals the history tool_call.callId of the ask call. */
+	toolCallId?: string;
 	questions: InteractionQuestion[];
 }
 
@@ -395,7 +401,6 @@ function findNativeAsk(pi: AskPi): {
 // ---------------------------------------------------------------------------
 
 interface RemoteAnswer {
-	questionId: string;
 	optionIndices?: number[];
 	customText?: string;
 	note?: string;
@@ -406,6 +411,10 @@ interface PendingAsk {
 	generation: number;
 	/** Monotonic creation order for listPending replay. */
 	seq: number;
+	/** omp's opaque tool-call id for the ask invocation (causal anchor; the
+	 *  same id history pages expose as tool_call.callId). Empty when the host
+	 *  did not supply one. */
+	toolCallId: string;
 	questions: AskQuestion[];
 	/** Resolved by answer() with validated pairs (first valid claim wins). */
 	resolveRemote: (pairs: Array<{ answer: RemoteAnswer; question: AskQuestion }>) => void;
@@ -605,6 +614,7 @@ export function installAskAdapter(pi: AskPi, bridge: AskBridge): AskAdapter {
 	}
 
 	async function runAsk(
+		toolCallId: string,
 		invokeTool: (
 			params: Record<string, unknown>,
 			signal: AbortSignal | undefined,
@@ -632,6 +642,7 @@ export function installAskAdapter(pi: AskPi, bridge: AskBridge): AskAdapter {
 				requestId,
 				generation,
 				seq: ++order,
+				toolCallId,
 				questions,
 				resolveRemote: resolve,
 				controller,
@@ -643,6 +654,7 @@ export function installAskAdapter(pi: AskPi, bridge: AskBridge): AskAdapter {
 			requestId,
 			generation,
 			kind: "question",
+			...(toolCallId.length > 0 ? { toolCallId } : {}),
 			questions: questions.map(toInteractionQuestion),
 		};
 		safeEmit("interaction.opened", { interaction });
@@ -703,7 +715,7 @@ export function installAskAdapter(pi: AskPi, bridge: AskBridge): AskAdapter {
 			// top-level by XDEV_KEEP_TOP_LEVEL, so the model reaches it directly.
 			loadMode: "discoverable" as const,
 			async execute(
-				_toolCallId: string,
+				toolCallId: string,
 				params: Record<string, unknown>,
 				signal: AbortSignal | undefined,
 				_onUpdate: ((partial: unknown) => void) | undefined,
@@ -721,9 +733,10 @@ export function installAskAdapter(pi: AskPi, bridge: AskBridge): AskAdapter {
 					);
 				}
 				// Serialize asks only; this does not exclude other tools in the batch.
+				// The omp producer's tool-call id rides through as the causal anchor.
 				const run = tail.then(
-					() => runAsk((p, sig) => ectx.invokeTool!(p, { signal: sig }), signal, params),
-					() => runAsk((p, sig) => ectx.invokeTool!(p, { signal: sig }), signal, params),
+					() => runAsk(toolCallId, (p, sig) => ectx.invokeTool!(p, { signal: sig }), signal, params),
+					() => runAsk(toolCallId, (p, sig) => ectx.invokeTool!(p, { signal: sig }), signal, params),
 				);
 				tail = run.catch(() => undefined);
 				return run;
@@ -814,6 +827,7 @@ export function installAskAdapter(pi: AskPi, bridge: AskBridge): AskAdapter {
 					requestId: p.requestId,
 					generation: p.generation,
 					kind: "question" as const,
+					...(p.toolCallId.length > 0 ? { toolCallId: p.toolCallId } : {}),
 					questions: p.questions.map(toInteractionQuestion),
 				})),
 			};
