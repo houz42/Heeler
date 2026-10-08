@@ -149,6 +149,14 @@ final class QACardProofTests: XCTestCase {
             element("Stage the rollout behind the config flag", in: app)
                 .waitForExistence(timeout: UITestTimeouts.standard),
             "the expanded full answer never rendered")
+        captureScreenshot(app, "qa-card-answered-expanded", lifetime: .keepAlways)
+
+        // Tap again to collapse: the full answer folds back to its ONE
+        // ellipsized line, so the mid-sentence marker goes away.
+        longCard.tap()
+        XCTAssertTrue(
+            !element("Stage the rollout behind the config flag", in: app).exists,
+            "the collapsed card still exposes the full answer")
         captureScreenshot(app, "qa-card-answered-recollapsed", lifetime: .keepAlways)
 
         // Expand the export card too: the multi-select answer renders
