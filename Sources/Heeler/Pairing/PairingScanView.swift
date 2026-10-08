@@ -395,15 +395,18 @@ private struct PairingCeremonyView: View {
             Spacer()
             switch status(for: step) {
             case .pending:
-                stepStatusGlyph("circle", tint: .tertiary, label: "Pending")
+                stepStatusGlyph(
+                    "circle", tint: AnyShapeStyle(.tertiary), label: "Pending")
             case .active:
                 stepStatusGlyph(nil, tint: nil, label: "In progress")
             case .done:
                 stepStatusGlyph(
-                    "checkmark.circle.fill", tint: .green, label: "Completed")
+                    "checkmark.circle.fill", tint: AnyShapeStyle(.green),
+                    label: "Completed")
             case .failed:
                 stepStatusGlyph(
-                    "xmark.circle.fill", tint: .red, label: "Failed")
+                    "xmark.circle.fill", tint: AnyShapeStyle(.red),
+                    label: "Failed")
             }
         }
         // The row reads as ONE element: "Reach the Host, Completed" —
