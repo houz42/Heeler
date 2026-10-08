@@ -160,11 +160,42 @@ final class ChatScrollCoordinator {
                 ChatViewportLog.shared.record(
                     .anchor, "user interaction — automatics suspended")
             }
+            // The silent-sentinel intent path (trace104's platform
+            // finding): the bottom sentinel can stop reporting once
+            // its lazy row dematerializes, so the user's scroll away
+            // from the edge must latch READING from THEIR tracking
+            // alone whenever the measured geometry says the edge is
+            // off screen — never waiting on a sentinel report that
+            // may never come.
+            if followsLatest, !atBottomEdge {
+                followsLatest = false
+                ChatViewportLog.shared.record(
+                    .anchor, "user scroll away — reading latched (geometry)")
+            }
         }
         if idle {
             userIsScrolling = false
             settleIfSatisfied()
         }
+    }
+
+    /// Whether the latest edge is on screen, derived from the measured
+    /// geometry (the stack's bottom within the visible window) — NOT
+    /// from the sentinel. The real-path trace (trace104) proved the
+    /// sentinel can go SILENT (a lazy row far offscreen never
+    /// materializes, so its visibility modifier never reports); the
+    /// geometry is always live. Used by the jump pill and to
+    /// reconcile the sentinel's visibility fact.
+    var atBottomEdge: Bool {
+        guard let geometry else { return true }
+        // A document that fits is always fully visible.
+        if !geometry.overflows { return true }
+        // At the bottom edge the stack's TOP sits ABOVE the visible
+        // window's top by (doc - vp): contentTop = vp - doc, the most
+        // NEGATIVE the stack can be while the bottom is flush with the
+        // viewport bottom. (contentTop = 0 is the TOP of the document
+        // — the opposite end.)
+        return geometry.contentTop <= geometry.viewportHeight - geometry.documentHeight + 2
     }
 
     func geometryChanged(_ new: ChatViewportGeometry) {
@@ -174,6 +205,16 @@ final class ChatScrollCoordinator {
         ChatViewportLog.shared.record(
             .geometry,
             "doc=\(Int(new.documentHeight)) vp=\(Int(new.viewportHeight)) top=\(Int(new.contentTop)) intersect=\(new.rowsIntersectViewport)")
+        // VISIBILITY reconciliation (never intent): the geometry is
+        // ground truth for whether the edge is on screen; a silent
+        // sentinel (a dematerialized lazy row) must not leave the
+        // visibility fact stale — the pill and the follow holds read
+        // it.
+        if bottomEdgeVisible != atBottomEdge, new.overflows {
+            bottomEdgeVisible = atBottomEdge
+            ChatViewportLog.shared.record(
+                .anchor, "geometry reconcile: edge \(atBottomEdge)")
+        }
         guard old == nil else {
             revalidateAfterGeometryChange()
             return
@@ -201,6 +242,24 @@ final class ChatScrollCoordinator {
         {
             pendingLandingTargetID = last
         }
+        // THE IDENTITY-SWAP FOLLOW (trace104): while FOLLOWING, the
+        // last row CHANGING is the follow event by definition — a
+        // provisional stream tail swapping for its committed record
+        // (rows shrink, the transaction pinned the previous record,
+        // then the committed record lands BELOW it), or any growth at
+        // the edge. The follow re-issues IMMEDIATELY on the new last
+        // row (bottom-anchored — the settled reply is revealed), never
+        // waiting on a sentinel departure that a coalesced swap may
+        // never publish.
+        if followsLatest, let oldLast = previousLastID,
+            oldLast != last, !last.isEmpty, scrollIdle
+        {
+            pendingLandingTargetID = last
+            issuePosition(ScrollPosition(id: last, anchor: .bottom))
+            ChatViewportLog.shared.record(
+                .anchor, "identity-swap/growth follow → last row \(last)")
+        }
+        previousLastID = last
         // A viewport whose rows intersect again re-arms repairs.
         if geometry?.rowsIntersectViewport == true {
             repairAttempts = 0
@@ -373,6 +432,9 @@ final class ChatScrollCoordinator {
     /// center-anchored correction (then the bounded repair budget).
     private var pendingLandingTargetID: String?
     private var landingCorrections = 0
+    /// The last-row id seen by the previous items change: the
+    /// identity-swap follow arms on its CHANGE.
+    private var previousLastID: String?
 
     // MARK: Settlement
 

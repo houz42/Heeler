@@ -503,7 +503,7 @@ struct ChatScreen: View {
         .overlay(alignment: .trailing) {
             ChatJumpControl(
                 showsOldest: !topSentinelVisible && !rows.isEmpty,
-                showsNewest: !bottomSentinelVisible,
+                showsNewest: !scrollCoordinator.atBottomEdge,
                 onOldest: {
                     if let first = items.first {
                         scrollCoordinator.userJumped(
@@ -552,14 +552,18 @@ struct ChatScreen: View {
         }
     }
 
-    /// Zero-height row below the transcript: visibility here means the
-    /// latest message is on screen, which hides the jump pill's down
-    /// button. The SAME fact feeds the scroll coordinator's
-    /// follow-latest tracking (the one state that decides keyboard and
-    /// refresh geometry preservation).
+    /// A 1-point row below the transcript: presence here means the
+    /// latest message is on screen (hiding the jump pill's down
+    /// button) and feeds the scroll coordinator's follow-latest
+    /// tracking. NOT zero-height on purpose: the real-path trace
+    /// (trace104) proved a 0-height view NEVER publishes
+    /// onScrollVisibilityChange on the device — the sentinel went
+    /// silent and every edge fact (follow holds, the identity-swap
+    /// follow) fell back to stale state. 1pt is invisible but
+    /// reliably reported.
     private var bottomSentinel: some View {
         Color.clear
-            .frame(height: 0)
+            .frame(height: 1)
             .onScrollVisibilityChange(threshold: 0) { visible in
                 guard visible != bottomSentinelVisible else { return }
                 bottomSentinelVisible = visible

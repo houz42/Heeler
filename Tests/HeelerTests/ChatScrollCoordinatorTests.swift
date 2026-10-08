@@ -112,29 +112,27 @@ struct ChatScrollCoordinatorTests {
 
     @Test("keyboard shrink while following latest keeps the bottom edge")
     func keyboardShrinkFollowsLatest() {
+        // The reader is FOLLOWING at the bottom edge: contentTop is
+        // (viewport - document), the most negative the stack can be.
         let (coordinator, _) = makeCoordinator(
-            document: 4000, viewport: 700, contentTop: 0, intersects: true)
+            document: 4000, viewport: 700, contentTop: -3300,
+            intersects: true)
         coordinator.scrollPhaseChanged(.idle)
-        // Keyboard shows: the viewport shrinks (geometry) and the
-        // bottom sentinel is pushed offscreen (not a scroll up — the
-        // shrink flag keeps following). The hold fires on the LAST
+        // Keyboard shows: the viewport shrinks (the edge is lost —
+        // contentTop now exceeds vp - doc, meaning the stack's bottom
+        // sits BELOW the visible window). The hold fires on the LAST
         // ROW (never the bare edge).
         coordinator.geometryChanged(ChatViewportGeometry(
             documentHeight: 4000, viewportHeight: 400,
-            contentTop: 0, rowsIntersectViewport: true))
-        coordinator.bottomEdgeVisibleChanged(false)
-        coordinator.geometryChanged(ChatViewportGeometry(
-            documentHeight: 4000, viewportHeight: 400,
-            contentTop: 10, rowsIntersectViewport: true))
+            contentTop: -3000, rowsIntersectViewport: true))
         #expect(
             coordinator.position?.viewID(type: String.self) == "row-z")
 
-        // Keyboard hides: the viewport grows back, the sentinel
-        // returns, the hold settles — no further commands.
-        coordinator.bottomEdgeVisibleChanged(true)
+        // Keyboard hides: the viewport grows back to the edge — no
+        // further commands (the geometry reconcile holds visibility).
         coordinator.geometryChanged(ChatViewportGeometry(
             documentHeight: 4000, viewportHeight: 700,
-            contentTop: 0, rowsIntersectViewport: true))
+            contentTop: -3300, rowsIntersectViewport: true))
         #expect(coordinator.position == nil)
     }
 
@@ -193,8 +191,8 @@ struct ChatScrollCoordinatorTests {
     @Test("jump-to-bottom that lands blank takes ONE center-anchored correction")
     func jumpToBottomBlankLandingIsCorrected() {
         let (coordinator, _) = makeCoordinator(
-            document: 4000, viewport: 700, contentTop: 0, intersects: true,
-            following: false)
+            document: 4000, viewport: 700, contentTop: -1500,
+            intersects: true, following: false)
         // Mid-history: the bottom edge is offscreen.
         coordinator.bottomEdgeVisibleChanged(false)
         // The user jumps to the bottom (the last row, bottom-anchored).
@@ -223,14 +221,15 @@ struct ChatScrollCoordinatorTests {
         coordinator.bottomEdgeVisibleChanged(true)
         coordinator.geometryChanged(ChatViewportGeometry(
             documentHeight: 4000, viewportHeight: 700,
-            contentTop: 3200, rowsIntersectViewport: true))
+            contentTop: -3300, rowsIntersectViewport: true))
         #expect(coordinator.position == nil)
     }
 
     @Test("send growth while following latest: the hold targets the NEW last row, revealed at the bottom")
     func sendGrowthFollowsNewLastRow() {
         let (coordinator, _) = makeCoordinator(
-            document: 4000, viewport: 700, contentTop: 0, intersects: true)
+            document: 4000, viewport: 700, contentTop: -3300,
+            intersects: true)
         // The reader is following latest, at the bottom edge.
         coordinator.scrollPhaseChanged(.idle)
 
@@ -240,15 +239,21 @@ struct ChatScrollCoordinatorTests {
         // just-sent message is revealed ("a bit"), never an overscroll
         // past it into blank.
         coordinator.itemsChanged(first: "row-a", last: "row-new")
-        coordinator.bottomEdgeVisibleChanged(false)
-        coordinator.geometryChanged(ChatViewportGeometry(
-            documentHeight: 4200, viewportHeight: 700,
-            contentTop: 0, rowsIntersectViewport: true))
+        // The follow fires and ANIMATES (a programmatic follow is
+        // never idle), then lands at the new bottom edge.
+        coordinator.scrollPhaseChanged(.animating)
         #expect(
             coordinator.position?.viewID(type: String.self) == "row-new")
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 4200, viewportHeight: 700,
+            contentTop: -3500, rowsIntersectViewport: true))
 
-        // The landing verification follows the same (new) target.
-        coordinator.scrollPhaseChanged(.animating)
+        // The landing verification follows the same (new) target:
+        // the overshoot leaves rows not intersecting → the center
+        // correction targets the new row.
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 4200, viewportHeight: 700,
+            contentTop: 4200, rowsIntersectViewport: false))
         coordinator.geometryChanged(ChatViewportGeometry(
             documentHeight: 4200, viewportHeight: 700,
             contentTop: 4200, rowsIntersectViewport: false))
@@ -286,6 +291,54 @@ struct ChatScrollCoordinatorTests {
     }
 
     // MARK: Slow-reading intent separation (the design amendment)
+
+    // MARK: Identity-swap follow (trace104, the real-path trace)
+
+    @Test("provisional→committed swap while following: the follow carries to the settled reply")
+    func identitySwapCarriesTheFollow() {
+        // The trace104 sequence, replayed exactly: the reader followed
+        // the provisional tail (last row = provisional), the tail
+        // VANISHES (window replacement pins the previous committed
+        // record, the settle clears the pending landing), and THEN the
+        // committed reply lands as the NEW last row — the follow must
+        // re-fire on the last-row CHANGE, never waiting on a sentinel
+        // departure (the device's zero-height sentinel never
+        // published one).
+        let (coordinator, _) = makeCoordinator(
+            document: 9000, viewport: 680, contentTop: -8318,
+            intersects: true)
+        coordinator.scrollPhaseChanged(.idle)
+
+        // A provisional tail streams in as the new last row: the
+        // follow tracks it.
+        coordinator.itemsChanged(first: "row-a", last: "provisional")
+        #expect(
+            coordinator.position?.viewID(type: String.self) == "provisional")
+
+        // The stream finishes: the tail vanishes and the window
+        // replacement pins the PREVIOUS committed record (the
+        // transaction's honest fallback — the reply has not landed
+        // yet). The settle clears the decision (rows intersect).
+        coordinator.itemsChanged(first: "row-a", last: "prev-committed")
+        coordinator.contentWindowReplaced(
+            survivorID: "prev-committed", firstID: "row-a",
+            lastID: "prev-committed")
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 8979, viewportHeight: 680,
+            contentTop: -8605, rowsIntersectViewport: true))
+        coordinator.scrollPhaseChanged(.idle)
+        #expect(coordinator.position == nil, "the swap transaction settled")
+
+        // THE COMMITTED REPLY LANDS as the new last row (the identity
+        // swap completes). The follow re-fires IMMEDIATELY — the trace
+        // showed no sentinel event ever arriving, so this must not
+        // depend on one — and the SETTLED reply is revealed at the
+        // bottom.
+        coordinator.itemsChanged(first: "row-a", last: "settled-reply")
+        #expect(
+            coordinator.position?.viewID(type: String.self) == "settled-reply",
+            "the committed reply landed below the fold — the follow did not carry across the swap")
+    }
 
     @Test("a user scroll up LATCHES reading: content growth while paused issues NO command")
     func readingLatchSurvivesGrowth() {
@@ -333,20 +386,25 @@ struct ChatScrollCoordinatorTests {
         coordinator.scrollPhaseChanged(.tracking)
         coordinator.bottomEdgeVisibleChanged(true)
         coordinator.scrollPhaseChanged(.idle)
-        // Growth now holds the bottom edge (following + edge lost).
+        // Growth now holds the bottom edge: the follow fires and the
+        // scroll ANIMATES (a programmatic follow is never idle — the
+        // settle must not clear a healthy command mid-flight).
         coordinator.itemsChanged(first: "row-a", last: "row-new")
-        coordinator.bottomEdgeVisibleChanged(false)
-        coordinator.geometryChanged(ChatViewportGeometry(
-            documentHeight: 4200, viewportHeight: 700,
-            contentTop: 0, rowsIntersectViewport: true))
+        coordinator.scrollPhaseChanged(.animating)
         #expect(
             coordinator.position?.viewID(type: String.self) == "row-new")
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 4200, viewportHeight: 700,
+            contentTop: -3500, rowsIntersectViewport: true))
+        coordinator.scrollPhaseChanged(.idle)
+        #expect(coordinator.position == nil)
     }
 
     @Test("a visibility flip alone NEVER writes intent (growth while idle at the edge follows)")
     func visibilityAloneNeverFlipsIntent() {
         let (coordinator, _) = makeCoordinator(
-            document: 4000, viewport: 700, contentTop: 0, intersects: true)
+            document: 4000, viewport: 700, contentTop: -3300,
+            intersects: true)
         // The user nudges but stays at the edge; the settle leaves the
         // sentinel VISIBLE; then growth pushes it offscreen while
         // idle — intent was and stays FOLLOWING (at the edge, growth
@@ -354,24 +412,26 @@ struct ChatScrollCoordinatorTests {
         coordinator.scrollPhaseChanged(.tracking)
         coordinator.scrollPhaseChanged(.idle)
         coordinator.itemsChanged(first: "row-a", last: "row-new")
-        coordinator.bottomEdgeVisibleChanged(false)
-        coordinator.geometryChanged(ChatViewportGeometry(
-            documentHeight: 4200, viewportHeight: 700,
-            contentTop: 0, rowsIntersectViewport: true))
+        // The follow ANIMATES (programmatic), then lands at the new
+        // bottom edge.
+        coordinator.scrollPhaseChanged(.animating)
         #expect(
             coordinator.position?.viewID(type: String.self) == "row-new")
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 4200, viewportHeight: 700,
+            contentTop: -3500, rowsIntersectViewport: true))
+        coordinator.scrollPhaseChanged(.idle)
 
-        // The SAME sequence while latched READING: the sentinel's
-        // return (a programmatic settle, not the user) does NOT
-        // resume following — growth still issues no command.
+        // The SAME sequence while latched READING: the geometry's
+        // at-edge return (a programmatic settle, not the user) does
+        // NOT resume following — growth still issues no command.
         let (reading, _) = makeCoordinator(
-            document: 4000, viewport: 700, contentTop: 1000,
+            document: 4000, viewport: 700, contentTop: -1500,
             intersects: true, following: false)
-        reading.bottomEdgeVisibleChanged(true)
         reading.itemsChanged(first: "row-a", last: "row-newer")
         reading.geometryChanged(ChatViewportGeometry(
             documentHeight: 4400, viewportHeight: 700,
-            contentTop: 1000, rowsIntersectViewport: true))
+            contentTop: -1500, rowsIntersectViewport: true))
         #expect(reading.position == nil)
     }
 
@@ -428,13 +488,11 @@ struct ChatScrollCoordinatorTests {
     @Test("user interaction SUSPENDS a live automatic command")
     func userTouchSuspendsAutomatics() {
         let (coordinator, _) = makeCoordinator(
-            document: 4000, viewport: 700, contentTop: 0, intersects: true)
-        // A live follow-latest hold is in flight...
+            document: 4000, viewport: 700, contentTop: -3300,
+            intersects: true)
+        // A live follow-latest hold is in flight (the growth follow
+        // fires on the last-row change alone)...
         coordinator.itemsChanged(first: "row-a", last: "row-new")
-        coordinator.bottomEdgeVisibleChanged(false)
-        coordinator.geometryChanged(ChatViewportGeometry(
-            documentHeight: 4200, viewportHeight: 700,
-            contentTop: 0, rowsIntersectViewport: true))
         #expect(coordinator.position != nil)
         // ...the user's touch arrives: the automatic is SUSPENDED
         // immediately (their intent outranks it; a pending position
