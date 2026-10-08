@@ -663,7 +663,10 @@ private struct HostCardSection: View {
                     // inspect. A row whose primary tap does something
                     // other than navigate takes the HIG detail-disclosure
                     // glyph (info.circle), not a chevron, which promises
-                    // the whole row pushes.
+                    // the whole row pushes. The 44pt hit frame stays;
+                    // padding OUTSIDE it shrinks only the row's layout
+                    // footprint (the same trick as the pending card's
+                    // Cancel), so the row height is not inflated.
                     Button {
                         openRouteInspector(address)
                     } label: {
@@ -673,6 +676,7 @@ private struct HostCardSection: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.borderless)
+                    .padding(.vertical, -12)
                     .accessibilityLabel(
                         "Show route details for \(route.name)")
                     .accessibilityIdentifier(
