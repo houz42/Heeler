@@ -32,8 +32,10 @@ enum ChatInteractionCardChrome {
     static let segmentThickness: CGFloat = 2
     static let segmentSpacing: CGFloat = 4
 
-    static let border = Color(
-        red: 0xC4 / 255.0, green: 0xD5 / 255.0, blue: 0xCB / 255.0)
+    /// Adaptive (review item 15): the mint-grey hairline was a literal
+    /// RGB that glared in dark mode; the asset carries a dark variant
+    /// at the same quiet contrast.
+    static let border = Color("ChatCardBorder")
 
     /// The card container background + border. Callers lay content
     /// inside; the chrome is identical for both states.
@@ -228,9 +230,9 @@ struct ChatInteractionCard: View {
     private var accent: Color { .accentColor }
     private var accentWash: Color { Color("AccentWash") }
     private var onAccentInk: Color { ChatAccentInk.color }
-    private var optionBorder: Color {
-        Color(red: 0xCA / 255.0, green: 0xD5 / 255.0, blue: 0xCD / 255.0)
-    }
+    /// Adaptive (review item 15): literal mint-grey RGB -> asset with a
+    /// dark variant.
+    private var optionBorder: Color { Color("ChatOptionBorder") }
 
     private var isMultiSelect: Bool { currentQuestion?.multi ?? false }
 
