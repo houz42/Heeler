@@ -191,14 +191,19 @@ struct ChatDraftTile<Content: View>: View {
                     // Fully INSIDE the tile's corner (the old +6/-6
                     // offset extended past the bounds and clipped at
                     // the rail's edge on device — the × was half
-                    // hidden). 3pt padding keeps the whole hit target
-                    // visible at every tile size.
+                    // hidden). 3pt padding keeps the whole glyph
+                    // visible; the 44pt HIT TARGET extends past the
+                    // glyph via contentShape while staying inside the
+                    // tile's 48×48 (review item 18: the visual glyph
+                    // is ~17pt — the target is 44pt).
                     Button(action: remove) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .background(Circle().fill(.bar))
                             .padding(3)
+                            .frame(width: 44, height: 44)
+                            .contentShape(.rect)
                     }
                     .accessibilityLabel("Remove draft item")
                 }

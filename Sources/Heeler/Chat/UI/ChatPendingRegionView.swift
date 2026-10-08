@@ -525,6 +525,14 @@ struct ChatPendingEntryRow: View {
             Text(title)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(isDestructive ? .red : accent)
+                // 44pt minimum hit target (review item 17): the bare
+                // caption text was ~14pt tall. The visual stays a
+                // quiet inline text button — padding grows the target,
+                // not the glyph.
+                .padding(.horizontal, 6)
+                .padding(.vertical, 12)
+                .frame(minHeight: 44)
+                .contentShape(.rect)
         }
         .buttonStyle(.plain)
     }
