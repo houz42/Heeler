@@ -142,6 +142,11 @@ struct ChatPendingRegionView: View {
     @State private var isExpanded = false
     /// The View-all sheet.
     @State private var showsAllSheet = false
+    /// The tapped preview's per-entry DETAIL sheet (the design
+    /// amendment's per-entry detail for EVERY entry — with 1-3
+    /// pending there is no overflow row, so each preview row is
+    /// itself the detail route).
+    @State private var selectedDetail: ChatPendingEntry?
 
     private var visible: [ChatPendingEntry] {
         ChatPendingFoldModel.visible(from: entries)
@@ -182,6 +187,18 @@ struct ChatPendingRegionView: View {
                     resend: resend,
                     hide: hide,
                     showHidden: { showHidden?() },
+                    edit: edit)
+            }
+            .sheet(item: $selectedDetail) { entry in
+                // Per-entry detail: the FULL row — text, images,
+                // state caption, the state's allowed actions — for
+                // the tapped preview. Presentation-only (delivery
+                // semantics untouched).
+                ChatPendingDetailSheet(
+                    entry: entry,
+                    retry: retry,
+                    resend: resend,
+                    hide: hide,
                     edit: edit)
             }
         }
@@ -257,11 +274,23 @@ struct ChatPendingRegionView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(
-                "Pending messages: \(visible.count), folded")
+                "Pending messages: \(visible.count), expanded")
             .accessibilityHint("Hides the pending previews")
             ForEach(previews) { entry in
-                ChatPendingPreviewRow(entry: entry)
-                    .padding(.horizontal, 12)
+                // The preview row is the ENTRY'S DETAIL ROUTE (the
+                // design amendment: per-entry detail for every entry
+                // — with 1-3 pending there is no overflow row, so
+                // the tap opens this entry's full detail sheet).
+                Button {
+                    selectedDetail = entry
+                } label: {
+                    ChatPendingPreviewRow(entry: entry)
+                        .frame(minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens this message's details")
+                .padding(.horizontal, 12)
             }
             if overflowCount > 0 {
                 overflowRow
@@ -640,6 +669,62 @@ struct ChatPendingAllSheet: View {
     /// state caption, actions) — the sheet's job per the design
     /// amendment. Typed-local seam bindings (the type-checker rule).
     private func detailRow(_ entry: ChatPendingEntry) -> some View {
+        let retryAction: (() -> Void)? = retry.map { action in
+            { action(entry.id) }
+        }
+        let resendAction: (() -> Void)? = resend.map { action in
+            { action(entry.id) }
+        }
+        let hideAction: (() -> Void)? = hide.map { action in
+            { action(entry.id) }
+        }
+        let editAction: ((ChatPendingEntry) -> Void)? = edit.map { action in
+            { _ in action(entry) }
+        }
+        return ChatPendingEntryRow(
+            entry: entry,
+            retry: retryAction,
+            resend: resendAction,
+            hide: hideAction,
+            edit: editAction)
+            .padding(.horizontal, 12)
+    }
+}
+
+/// The tapped preview's per-entry DETAIL sheet: the FULL row —
+/// complete text, images, state caption, and the state's allowed
+/// actions — for ONE entry. The design amendment's per-entry-detail
+/// route for 1-3 pending entries (where no overflow row exists);
+/// presentation-only (delivery semantics untouched).
+struct ChatPendingDetailSheet: View {
+    let entry: ChatPendingEntry
+    var retry: ((UUID) -> Void)? = nil
+    var resend: ((UUID) -> Void)? = nil
+    var hide: ((UUID) -> Void)? = nil
+    var edit: ((ChatPendingEntry) -> Void)? = nil
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                detailRow
+                    .padding(.vertical, 12)
+            }
+            .navigationTitle("Pending message")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    /// The complete ChatPendingEntryRow with THIS entry's action
+    /// seams (typed-local bindings — the type-checker rule).
+    private var detailRow: some View {
         let retryAction: (() -> Void)? = retry.map { action in
             { action(entry.id) }
         }

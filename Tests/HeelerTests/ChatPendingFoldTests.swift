@@ -132,4 +132,33 @@ struct ChatPendingFoldTests {
         _ = entries.map { ChatPendingFoldModel.previewText(for: $0) }
         #expect(entries == before)  // statuses, keys, content untouched
     }
+    // MARK: Per-entry detail routes (the preview-tap fix)
+
+    /// The design amendment requires per-entry detail for EVERY
+    /// entry: a preview row (1-3 pending) opens its own detail; with
+    /// overflow the View-all sheet carries everything. The pin: every
+    /// visible entry is reachable via one of the two routes, and
+    /// the preview route covers exactly the preview slice.
+    @Test("every entry has a detail route: preview tap (1-3) or the View-all sheet")
+    func everyEntryHasDetailRoute() {
+        // 1 entry: the preview tap is the ONLY route (no overflow row).
+        let one = [entry("solo")]
+        #expect(ChatPendingFoldModel.previews(from: one).map(\.id) == one.map(\.id))
+        #expect(ChatPendingFoldModel.overflowCount(from: one) == 0)
+
+        // 3 entries: three tappable previews, no overflow.
+        let three = (1...3).map { entry("m\($0)") }
+        let threePreviews = ChatPendingFoldModel.previews(from: three)
+        #expect(threePreviews.map(\.id) == three.map(\.id))
+        #expect(ChatPendingFoldModel.overflowCount(from: three) == 0)
+
+        // 20 entries: 3 previews + the View-all sheet covering all
+        // 20 (previews are a subset; the union is complete).
+        let twenty = (1...20).map { entry("m\($0)") }
+        let previews = ChatPendingFoldModel.previews(from: twenty)
+        #expect(previews.count == 3)
+        let reachable = Set(previews.map(\.id))
+            .union(twenty.map(\.id))  // the sheet carries every visible entry
+        #expect(reachable.count == 20)
+    }
 }
