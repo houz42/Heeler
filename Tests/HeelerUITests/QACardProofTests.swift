@@ -143,12 +143,19 @@ final class QACardProofTests: XCTestCase {
             longCard.waitForExistence(timeout: UITestTimeouts.standard))
         longCard.tap()
 
-        // Expanded: the full answer renders (the optional note is
-        // removed from the product — no Note row).
+        // Expanded: the card's own accessibilityValue must actually
+        // FLIP — the card starts Collapsed, and the full text stays
+        // in the AX tree either way (the collapsed row is the same
+        // Text under lineLimit(1)), so only the value proves the tap
+        // expanded it.
         XCTAssertTrue(
-            element("Stage the rollout behind the config flag", in: app)
-                .waitForExistence(timeout: UITestTimeouts.standard),
-            "the expanded full answer never rendered")
+            app.descendants(matching: .any)
+                .matching(
+                    NSPredicate(
+                        format: "identifier == %@ AND value == %@",
+                        "resolved-ask-card-demo-qa-long", "Expanded"))
+                .firstMatch.waitForExistence(timeout: UITestTimeouts.standard),
+            "the card never reported itself expanded after the first tap")
         captureScreenshot(app, "qa-card-answered-expanded", lifetime: .keepAlways)
 
         // Tap again to collapse: the A row folds back to ONE
