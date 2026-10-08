@@ -930,8 +930,17 @@ struct AgentTerminalView: View {
         .overlay { statusOverlay }
         // Keep the edge gesture below the input chrome and tools dock so
         // its transparent hit region cannot intercept their leading keys.
+        // Review item 12: on regular width (iPad split view) the detail
+        // pane starts after the sidebar, so a GLOBAL startLocation <= 24
+        // never passed; measure in a LOCAL space instead. And as the
+        // split view's detail root, `dismiss()` is a no-op — route to the
+        // owner's close path (clears the sidebar selection), which also
+        // serves the collapsed stack where dismiss would have worked.
         .overlay(alignment: .leading) {
-            AgentEdgeBackGesture { dismiss() }
+            AgentEdgeBackGesture(
+                isRegularWidth: horizontalSizeClass == .regular,
+                dismiss: { dismiss() },
+                close: { onClosed() })
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             attachmentStatus
@@ -1684,10 +1693,14 @@ struct AgentTerminalView: View {
         agent.agent.title.isEmpty ? agent.agent.displayName : agent.agent.title
     }
 }
-
-/// Preserve edge-swipe navigation after the title bar is removed.
 private struct AgentEdgeBackGesture: View {
+    /// Review item 12: on regular width the terminal is the split view's
+    /// DETAIL ROOT — `dismiss()` has no NavigationStack to pop, so the
+    /// edge swipe routes to the owner's close path (which clears the
+    /// sidebar selection). On compact width the stack pop still applies.
+    let isRegularWidth: Bool
     let dismiss: @MainActor () -> Void
+    let close: @MainActor () -> Void
 
     var body: some View {
         Color.clear
@@ -1695,14 +1708,22 @@ private struct AgentEdgeBackGesture: View {
             .frame(maxHeight: .infinity)
             .contentShape(.rect)
             .gesture(
-                DragGesture(minimumDistance: 12, coordinateSpace: .global)
+                // LOCAL coordinate space: in the split view the detail
+                // pane starts after the sidebar, so the leading edge of
+                // THIS view is not the screen's x=0 — a global
+                // startLocation <= 24 never passed there.
+                DragGesture(minimumDistance: 12)
                     .onEnded { value in
                         let horizontal = value.translation.width
                         guard value.startLocation.x <= 24,
-                              horizontal >= 72,
-                              abs(value.translation.height) <= horizontal * 0.75
+                            horizontal >= 72,
+                            abs(value.translation.height) <= horizontal * 0.75
                         else { return }
-                        dismiss()
+                        if isRegularWidth {
+                            close()
+                        } else {
+                            dismiss()
+                        }
                     })
             .accessibilityHidden(true)
     }
