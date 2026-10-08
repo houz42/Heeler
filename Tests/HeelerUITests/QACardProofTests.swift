@@ -161,7 +161,7 @@ final class QACardProofTests: XCTestCase {
             app.descendants(matching: .any)
                 .matching(
                     NSPredicate(
-                        format: "identifier == %@ AND label CONTAINS %@",
+                        format: "identifier == %@ AND value == %@",
                         "resolved-ask-card-demo-qa-long", "Collapsed"))
                 .firstMatch.waitForExistence(timeout: UITestTimeouts.standard),
             "the card never reported itself collapsed after the second tap")
