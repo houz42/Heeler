@@ -42,6 +42,15 @@ final class ChatViewportProofTests: XCTestCase {
         ).firstMatch
     }
 
+    /// The jump pill is transient chrome (review D5 rework): it rides
+    /// the trailing edge only while the user is scrolling (plus a
+    /// short linger), so a proof that needs its buttons first makes
+    /// the transcript scroll — a swipe both moves the content and
+    /// puts the phase into isScrolling, revealing the pill.
+    private func revealJumpControl(in app: XCUIApplication) {
+        app.swipeUp(velocity: .fast)
+    }
+
     /// The transcript's last message element, asserted to be VISIBLE
     /// (its frame intersects the window's bounds) — the design doc's
     /// "a real message must intersect it when content exists".
@@ -187,8 +196,10 @@ final class ChatViewportProofTests: XCTestCase {
         let app = launchLifecycleChat()
         assertVisibleMessage("Message 39 from the agent", in: app)
 
-        // Jump to the oldest loaded message (the jump pill's up
-        // button appears when the top sentinel is offscreen).
+        // Jump to the oldest loaded message (the jump pill's up button
+        // appears when the top sentinel is offscreen; the pill is
+        // transient, so scroll first to reveal it).
+        revealJumpControl(in: app)
         let oldestButton = app.buttons["Oldest message"]
         XCTAssertTrue(
             oldestButton.waitForExistence(timeout: UITestTimeouts.standard),
@@ -217,7 +228,9 @@ final class ChatViewportProofTests: XCTestCase {
 
         // Walk to a mid-history position first (jump to oldest, which
         // also loads the older page — the reader is now FAR from the
-        // bottom, the unmaterialized region at its maximum).
+        // bottom, the unmaterialized region at its maximum). The pill
+        // is transient: scroll to reveal it before the jump.
+        revealJumpControl(in: app)
         let oldestButton = app.buttons["Oldest message"]
         XCTAssertTrue(
             oldestButton.waitForExistence(timeout: UITestTimeouts.standard))
@@ -231,7 +244,9 @@ final class ChatViewportProofTests: XCTestCase {
         // pre-fix behavior: the scroll's position ESTIMATE overshoots
         // past the last message into blank space (a blank page until
         // the user scrolls). The invariant: the LAST REAL MESSAGE is
-        // on screen, intersecting the viewport.
+        // on screen, intersecting the viewport. The pill hides at
+        // rest, so re-reveal it after the older-page load settles.
+        revealJumpControl(in: app)
         let newestButton = app.buttons["Latest message"]
         XCTAssertTrue(
             newestButton.waitForExistence(timeout: UITestTimeouts.standard),
@@ -291,7 +306,9 @@ final class ChatViewportProofTests: XCTestCase {
         // message (no older page needed — the reading anchor is an
         // already-loaded record; the reported instability was
         // content growth yanking the reader off their position once
-        // intent flipped back to following).
+        // intent flipped back to following). The pill is transient:
+        // scroll to reveal it before the jump.
+        revealJumpControl(in: app)
         let oldestButton = app.buttons["Oldest message"]
         XCTAssertTrue(
             oldestButton.waitForExistence(timeout: UITestTimeouts.standard))
@@ -332,7 +349,9 @@ final class ChatViewportProofTests: XCTestCase {
 
         // The growth itself is verified by revealing it: jump to the
         // bottom — the sent record and the streamed reply both
-        // materialize and intersect the viewport (no blank).
+        // materialize and intersect the viewport (no blank). The pill
+        // hides at rest: reveal it first.
+        revealJumpControl(in: app)
         let newestButton = app.buttons["Latest message"]
         XCTAssertTrue(
             newestButton.waitForExistence(timeout: UITestTimeouts.standard))
