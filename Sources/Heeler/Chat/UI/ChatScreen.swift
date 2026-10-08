@@ -278,8 +278,9 @@ struct ChatScreen: View {
     /// clearance. Applied only mid-scroll, never at rest.
     static let jumpControlGutter: CGFloat = 60
     /// How long the pill (and its gutter) linger after a scroll
-    /// settles — enough to read the position and decide to jump.
-    static let jumpControlLinger: TimeInterval = 1.2
+    /// settles — enough to read the position and decide to jump
+    /// (and for assistive tech's async tree to surface the buttons).
+    static let jumpControlLinger: TimeInterval = 2.5
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
@@ -617,10 +618,19 @@ struct ChatScreen: View {
             }
             Color.clear
                 .frame(height: 0)
-                .onScrollVisibilityChange(threshold: 0) { visible in
-                    guard visible != topSentinelVisible else { return }
-                    topSentinelVisible = visible
-                    scrollCoordinator.topSentinelVisibleChanged(visible)
+                // Appear/disappear (not onScrollVisibilityChange): a
+                // zero-height row's scroll-visibility can be flaky at
+                // the very top edge, while the LazyVStack's row
+                // materialization events are exact — and always
+                // rendering the row keeps them firing whether or not
+                // older pages exist (review D5 rework).
+                .onAppear {
+                    topSentinelVisible = true
+                    scrollCoordinator.topSentinelVisibleChanged(true)
+                }
+                .onDisappear {
+                    topSentinelVisible = false
+                    scrollCoordinator.topSentinelVisibleChanged(false)
                 }
         }
     }
