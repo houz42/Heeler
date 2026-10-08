@@ -311,17 +311,23 @@ struct AppRootView: View {
     private func settleClosed() {
         if reduceMotion {
             drawerReveal = 0
+            // Review item 14 (follow-up): with no animation to run,
+            // the settle-out delay only holds the drawer mounted for
+            // `settleOutInterval` after the reveal is already 0 — the
+            // drawer pops away immediately instead.
+            isTrackingDrawer = false
+            isSettlingDrawer = false
         } else {
             withAnimation(AppDestinationDrawer.presentationSpring) {
                 drawerReveal = 0
             }
-        }
-        isTrackingDrawer = false
-        isSettlingDrawer = true
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + AppDestinationDrawer.settleOutInterval
-        ) {
-            isSettlingDrawer = false
+            isTrackingDrawer = false
+            isSettlingDrawer = true
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + AppDestinationDrawer.settleOutInterval
+            ) {
+                isSettlingDrawer = false
+            }
         }
     }
 
