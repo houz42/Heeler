@@ -188,25 +188,30 @@ struct ChatDraftTile<Content: View>: View {
                         lineWidth: failed ? 1.5 : 0.5))
             .overlay(alignment: .topTrailing) {
                 if let remove {
-                    // Fully INSIDE the tile's corner (the old +6/-6
-                    // offset extended past the bounds and clipped at
-                    // the rail's edge on device — the × was half
-                    // hidden). 3pt padding keeps the whole glyph
-                    // visible; the 44pt HIT TARGET extends past the
-                    // glyph via contentShape while staying inside the
-                    // tile's 48×48 (review item 18: the visual glyph
-                    // is ~17pt — the target is 44pt).
+                    // Review item 18 (round-3 fix): 44pt cannot fit a
+                    // 48pt tile — a 44pt target covered ~92% of it and
+                    // the tap-to-preview became an accidental remove.
+                    // The corner target is deliberately small (26pt,
+                    // still well above the 17pt glyph); the FULL-SIZE
+                    // remove path rides a named accessibility action
+                    // (and the collection sheet) instead.
                     Button(action: remove) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .background(Circle().fill(.bar))
                             .padding(3)
-                            .frame(width: 44, height: 44)
+                            .frame(width: 26, height: 26)
                             .contentShape(.rect)
                     }
                     .accessibilityLabel("Remove draft item")
+                    .accessibilityAddTraits(.isButton)
                 }
+            }
+            // The full-size remove path for assistive tech and anyone
+            // who cannot hit the small corner target.
+            .accessibilityAction(named: Text("Remove draft item")) {
+                remove?()
             }
     }
 }
