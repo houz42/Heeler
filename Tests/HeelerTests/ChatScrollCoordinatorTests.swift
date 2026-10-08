@@ -373,6 +373,137 @@ struct ChatScrollCoordinatorTests {
         #expect(coordinator.position == nil)
     }
 
+    @Test("the probe sequence 1: at-bottom drag away via INTERACTING geometry — reading latched, growth issues no command")
+    func probeSequence1AtBottomDragAway() {
+        // The design pane's deterministic probe, sequence 1: at the
+        // bottom edge, the user's touch (tracking) sees atBottom so
+        // no latch engages; the drag then moves the content off the
+        // edge (interacting); the intent must latch from the USER
+        // MOVEMENT, and the incoming growth must NOT fire a follow.
+        let (coordinator, _) = makeCoordinator(
+            document: 4000, viewport: 700, contentTop: -3300,
+            intersects: true)
+        // Touch down at the edge: no latch (still at the edge).
+        coordinator.scrollPhaseChanged(.tracking)
+        // The drag moves the content up/away (top rises off the
+        // at-edge threshold) while interacting.
+        coordinator.scrollPhaseChanged(.interacting)
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 4000, viewportHeight: 700,
+            contentTop: -2900, rowsIntersectViewport: true))
+        // The gesture ends; the growth arrives with a NEW last row.
+        coordinator.scrollPhaseChanged(.idle)
+        coordinator.itemsChanged(first: "row-a", last: "new-last")
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 4200, viewportHeight: 700,
+            contentTop: -2900, rowsIntersectViewport: true))
+        // READING latched: no command (the probe recorded
+        // followsLatest=true, command=true — the regression).
+        #expect(
+            coordinator.position == nil,
+            "the growth fired a follow after the user dragged away from the edge")
+    }
+
+    @Test("the probe sequence 2: an ANIMATING follow interrupted by the user latches on the user's movement")
+    func probeSequence2AnimatingInterruption() {
+        // The pane's sequence 2: mid-document, a programmatic follow
+        // is ANIMATING; the user's touch interrupts (tracking);
+        // their drag moves the content; the intent must become
+        // reading, and the new last row must NOT fire a follow.
+        let (coordinator, _) = makeCoordinator(
+            document: 4000, viewport: 700, contentTop: -2900,
+            intersects: true)
+        // A programmatic follow in flight (the identity-swap follow,
+        // say), then the user interrupts.
+        coordinator.itemsChanged(first: "row-a", last: "new-last")
+        coordinator.scrollPhaseChanged(.animating)
+        #expect(coordinator.position != nil)
+        // The user's interruption — the animating->tracking
+        // transition must not be swallowed by the idle-bool guard.
+        coordinator.scrollPhaseChanged(.tracking)
+        #expect(coordinator.position == nil, "the user's touch did not suspend the live automatic")
+        // Their drag moves the content further off the edge.
+        coordinator.scrollPhaseChanged(.interacting)
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 4000, viewportHeight: 700,
+            contentTop: -2600, rowsIntersectViewport: true))
+        coordinator.scrollPhaseChanged(.idle)
+        // The new last row arrives: no follow (reading latched).
+        coordinator.itemsChanged(first: "row-a", last: "newer-last")
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 4300, viewportHeight: 700,
+            contentTop: -2600, rowsIntersectViewport: true))
+        #expect(
+            coordinator.position == nil,
+            "a follow fired after the user interrupted and dragged away")
+    }
+
+    @Test("an INTERACTING drag away (no tracking sample) latches reading — growth never yanks (the real-path regression)")
+    func interactingDragAwayLatchesReading() {
+        // The real-path failure: a slow 1.1s swipe reports
+        // .interacting (never .tracking), the geometry shows the
+        // reader away from the bottom edge, then an incoming reply
+        // grew the document — the follow-latest hold fired and yanked
+        // the reader 350pt. The latch must engage from the
+        // interacting phase alone and hold across the growth.
+        let (coordinator, _) = makeCoordinator(
+            document: 2662, viewport: 374, contentTop: -1989,
+            intersects: true)
+        // The swipe: interacting for its whole length (the phase the
+        // device reports for a slow drag), then decelerating, then
+        // idle. NO .tracking sample ever arrives.
+        coordinator.scrollPhaseChanged(.interacting)
+        // The gesture's first report latched reading (away from the
+        // edge by the measured geometry)...
+        // (asserted indirectly: the growth below must not fire a
+        // follow hold)
+        coordinator.scrollPhaseChanged(.decelerating)
+        coordinator.scrollPhaseChanged(.idle)
+        // THE GROWTH (an incoming reply lands): while latched
+        // reading, NO follow-latest command fires — the anchor holds.
+        coordinator.itemsChanged(first: "row-a", last: "incoming-reply")
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 2736, viewportHeight: 374,
+            contentTop: -1989, rowsIntersectViewport: true))
+        #expect(
+            coordinator.position == nil,
+            "the follow-latest hold fired while the user was reading away — the reader got yanked")
+        // More growth: still latched, still no yank.
+        coordinator.itemsChanged(first: "row-a", last: "incoming-reply-2")
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 2812, viewportHeight: 374,
+            contentTop: -1989, rowsIntersectViewport: true))
+        #expect(coordinator.position == nil)
+    }
+
+    @Test("a drag that leaves the bottom edge MID-GESTURE latches reading")
+    func midGestureDepartureLatches() {
+        // The drag STARTS at the bottom edge (no latch at touch-down)
+        // and leaves it partway: the mid-gesture re-check latches.
+        let (coordinator, _) = makeCoordinator(
+            document: 4000, viewport: 700, contentTop: -3300,
+            intersects: true)
+        coordinator.scrollPhaseChanged(.tracking)  // at-edge: no latch
+        // The user drags up; the gesture stays interacting and the
+        // geometry departs the edge (contentTop rises above the
+        // at-edge threshold). The bool dedupe would block this report
+        // — the mid-gesture re-check must see it.
+        coordinator.scrollPhaseChanged(.interacting)
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 4000, viewportHeight: 700,
+            contentTop: -3000, rowsIntersectViewport: true))
+        coordinator.scrollPhaseChanged(.interacting)  // still dragging
+        // Reading latched mid-gesture: growth does NOT follow.
+        coordinator.scrollPhaseChanged(.idle)
+        coordinator.itemsChanged(first: "row-a", last: "new-reply")
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 4200, viewportHeight: 700,
+            contentTop: -3000, rowsIntersectViewport: true))
+        #expect(
+            coordinator.position == nil,
+            "growth yanked a mid-gesture reader who had left the edge")
+    }
+
     @Test("a user's own scroll back to the edge RESUMES following")
     func userScrollBackResumesFollowing() {
         let (coordinator, _) = makeCoordinator(
