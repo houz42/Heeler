@@ -23,6 +23,8 @@ struct HostFormView: View {
     @State private var isDiscoveringSessions = false
     @State private var editingRouteID: AdditionalAddressRow.ID?
     @State private var isAddingRoute = false
+    /// The route row pending the removal confirm (review item 35).
+    @State private var routeRemovalCandidate: AdditionalAddressRow?
     /// Discard confirmation when Canceling a dirty host form (approved
     /// behavior contract: dirty drafts are protected).
     @State private var isConfirmingDiscard = false
@@ -76,8 +78,21 @@ struct HostFormView: View {
                         LabeledTextField(
                             "Port",
                             text: $draft.port,
-                            prompt: Text("22"))
+                            prompt: Text("22"),
+                            showsDoneBar: true)
                             .keyboardType(.numberPad)
+                    } footer: {
+                        // Why Save is disabled (review item 24): the
+                        // form-level gate already refused an empty
+                        // username or an unparseable port — the user
+                        // just never heard why.
+                        if !draft.isUsernameValid {
+                            Text("A username is required before saving.")
+                        } else if !draft.isPortValid {
+                            Text(
+                                "Port must be a number from 1 to 65535 "
+                                    + "before saving.")
+                        }
                     }
 
                     authSection
@@ -98,6 +113,12 @@ struct HostFormView: View {
                                 + "Blank keeps the chat surface on the transcript file backend.")
                     }
                 }
+                // Readable-width column on iPad (review item 37): the
+                // form's fields otherwise run edge-to-edge at ~140
+                // characters a line. Centered like Settings does;
+                // phones are narrower than the cap and unaffected.
+                .frame(maxWidth: 720)
+                .frame(maxWidth: .infinity)
                 .navigationTitle(editing == nil ? "Add Host" : "Edit Host")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -113,7 +134,6 @@ struct HostFormView: View {
                 // interactive dismiss is disabled while edits exist, so
                 // the guarded Cancel is the only exit (approved behavior
                 // contract; the reviewer's dirty-dismiss residue).
-                .interactiveDismissDisabled(draft != initialDraft)
                 .sheet(item: routeEditorBinding) { route in
                     HostRouteEditView(
                         hostName: routeEditorHostName,
@@ -124,7 +144,12 @@ struct HostFormView: View {
                         },
                         onRemove: draft.addresses.count > 1
                             ? { rowID in
-                                removeRoute(id: rowID)
+                                // Removal asks first (review item 35):
+                                // the sheet dismisses and the confirm
+                                // dialog names the route before it goes.
+                                routeRemovalCandidate = draft.addresses.first {
+                                    $0.id == rowID
+                                }
                             }
                             : nil)
                 }
@@ -174,6 +199,32 @@ struct HostFormView: View {
                     Text(
                         "Every Host using Device Key authentication will reject the replacement "
                             + "until you add its new public key to ~/.ssh/authorized_keys.")
+                }
+                // Route removal needs a confirm step (review item 35):
+                // destructive, and the sheet slides away instantly.
+                .confirmationDialog(
+                    "Remove this route?",
+                    isPresented: Binding(
+                        get: { routeRemovalCandidate != nil },
+                        set: { if !$0 { routeRemovalCandidate = nil } }),
+                    titleVisibility: .visible
+                ) {
+                    Button("Remove Route", role: .destructive) {
+                        if let id = routeRemovalCandidate?.id {
+                            removeRoute(id: id)
+                        }
+                        routeRemovalCandidate = nil
+                    }
+                    Button("Cancel", role: .cancel) {
+                        routeRemovalCandidate = nil
+                    }
+                } message: {
+                    if let row = routeRemovalCandidate {
+                        Text(
+                            "Route \(routeName(for: row)) — \(routeSubtitle(for: row)) — "
+                                + "will no longer be tried when connecting to this Host. "
+                                + "Removing keeps every other route.")
+                    }
                 }
                 .task {
                     loadDeviceKey()
@@ -401,10 +452,19 @@ struct HostFormView: View {
                 TextField("Jump Host address (optional)", text: $draft.jumpAddress)
                     .textContentType(.URL)
                     .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
                 if draft.usesJumpHost {
                     TextField("Jump Host port", text: $draft.jumpPort)
                         .keyboardType(.numberPad)
+                        .toolbar {
+                            ToolbarItemGroup(placement: .keyboard) {
+                                Spacer()
+                                Button("Done") {
+                                    UIApplication.shared.sendAction(
+                                        #selector(UIResponder.resignFirstResponder),
+                                        to: nil, from: nil, for: nil)
+                                }
+                            }
+                        }
                     TextField("Jump Host user (blank = same as Host)", text: $draft.jumpUsername)
                         .textContentType(.username)
                         .autocorrectionDisabled()
@@ -511,11 +571,22 @@ private struct LabeledTextField: View {
     private let title: String
     private let prompt: Text?
     @Binding private var text: String
+    /// Shows a keyboard accessory Done bar (review item 36): the
+    /// number pad has no return key, so port fields could never
+    /// resign the keyboard.
+    private var showsDoneBar = false
+    @FocusState private var isFocused: Bool
 
-    init(_ title: String, text: Binding<String>, prompt: Text? = nil) {
+    init(
+        _ title: String,
+        text: Binding<String>,
+        prompt: Text? = nil,
+        showsDoneBar: Bool = false
+    ) {
         self.title = title
         _text = text
         self.prompt = prompt
+        self.showsDoneBar = showsDoneBar
     }
 
     var body: some View {
@@ -527,6 +598,15 @@ private struct LabeledTextField: View {
             // so UI tests and VoiceOver can focus and type into it
             // directly; the caption above is a separate element.
             TextField(title, text: $text, prompt: prompt)
+                .focused($isFocused)
+                .toolbar {
+                    if showsDoneBar, isFocused {
+                        ToolbarItemGroup(placement: .keyboard) {
+                            Spacer()
+                            Button("Done") { isFocused = false }
+                        }
+                    }
+                }
                 .accessibilityLabel(title)
         }
     }
@@ -629,6 +709,10 @@ struct HostRouteEditView: View {
                         }
                         dismiss()
                     }
+                    // An empty address never saves (review item 25): a
+                    // blank row used to slip through and silently
+                    // vanish from the route list.
+                    .disabled(address.trimmingCharacters(in: .whitespaces).isEmpty)
                     .accessibilityIdentifier("route-editor-save")
                 }
             }

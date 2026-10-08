@@ -212,6 +212,11 @@ struct SettingsView: View {
                     Text("About")
                 }
             }
+            // Readable-width column on iPad (review item 37): form
+            // rows otherwise run edge-to-edge. The sub-pages below
+            // each carry their own cap.
+            .frame(maxWidth: 720)
+            .frame(maxWidth: .infinity)
             .navigationDestination(for: String.self) { route in
                 switch route {
                 case Self.agentListDestination.rawValue:
