@@ -68,7 +68,11 @@ final class ChatViewportLog {
     private init() {}
 
     /// Appends one transition (text-free by contract: callers pass IDs,
-    /// counts and geometry — never message prose).
+    /// counts and geometry — never message prose). With
+    /// `--chat-viewport-log-file=<path>` (Debug only) the event also
+    /// appends to that file — a UITest can then read the exact anchor/
+    /// geometry sequence the app drove, since the test runner captures
+    /// neither stdout nor Console.
     func record(_ axis: ChatViewportEvent.Axis, _ payload: String) {
         guard Self.isRecording else { return }
         tick += 1
@@ -80,7 +84,29 @@ final class ChatViewportLog {
         if Self.echoesToStdout {
             print("CHAT-VIEWPORT \(event)")
         }
+        #if DEBUG
+        if let path = Self.fileEchoPath {
+            let line = "CHAT-VIEWPORT \(event)\n"
+            if let handle = FileHandle(forWritingAtPath: path) {
+                handle.seekToEndOfFile()
+                handle.write(Data(line.utf8))
+                try? handle.close()
+            } else {
+                try? line.write(toFile: path, atomically: true, encoding: .utf8)
+            }
+        }
+        #endif
     }
+
+    #if DEBUG
+    private static let fileEchoPath: String? = {
+        for argument in ProcessInfo.processInfo.arguments
+        where argument.hasPrefix("--chat-viewport-log-file=") {
+            return String(argument.dropFirst("--chat-viewport-log-file=".count))
+        }
+        return nil
+    }()
+    #endif
 
     /// A snapshot copy of the retained window.
     func snapshot() -> [ChatViewportEvent] {

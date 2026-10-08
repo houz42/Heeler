@@ -374,6 +374,17 @@ final class ChatScrollCoordinator {
         guard let geometry, let bounds = itemBounds, !bounds.first.isEmpty
         else { return }
         didInitialAnchor = true
+        // The initial intent MATCHES the actual opened position: a
+        // mount that lands at the bottom edge is following; a mount
+        // (or remount after a transient disconnect) that restores
+        // mid-history is READING — a fresh coordinator must not
+        // assume following and yank the reader on the next growth
+        // (the remount lost the user's latched intent otherwise).
+        followsLatest = atBottomEdge
+        if !atBottomEdge {
+            ChatViewportLog.shared.record(
+                .anchor, "initial position away from edge — reading")
+        }
         guard geometry.rowsIntersectViewport else {
             repairAttempts += 1
             if followsLatest {

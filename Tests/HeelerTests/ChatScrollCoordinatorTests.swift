@@ -410,8 +410,11 @@ struct ChatScrollCoordinatorTests {
         // is ANIMATING; the user's touch interrupts (tracking);
         // their drag moves the content; the intent must become
         // reading, and the new last row must NOT fire a follow.
+        // The reader starts FOLLOWING at the bottom edge (the swap
+        // scenario: a committed record just arrived and the follow is
+        // animating toward it).
         let (coordinator, _) = makeCoordinator(
-            document: 4000, viewport: 700, contentTop: -2900,
+            document: 4000, viewport: 700, contentTop: -3300,
             intersects: true)
         // A programmatic follow in flight (the identity-swap follow,
         // say), then the user interrupts.
@@ -606,9 +609,11 @@ struct ChatScrollCoordinatorTests {
         #expect(
             coordinator.position?.viewID(type: String.self) == "row-a2")
 
-        // A FOLLOWING reader takes the last row, bottom-anchored.
+        // A FOLLOWING reader takes the last row, bottom-anchored (the
+        // initial intent matches the opened position: at-edge =
+        // following).
         let (following, _) = makeCoordinator(
-            document: 6000, viewport: 700, contentTop: 0,
+            document: 6000, viewport: 700, contentTop: -5300,
             intersects: true)
         following.contentWindowReplaced(
             survivorID: "row-survivor", firstID: "row-a", lastID: "row-z")

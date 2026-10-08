@@ -29,6 +29,7 @@ final class ChatViewportProofTests: XCTestCase {
             "--uitest",
             "--demo-screenshots",
             "--demo-chat-lifecycle",
+            "--chat-viewport-log-file=/tmp/chat-viewport-probe.log",
         ]
         app.launch()
         return app
@@ -304,9 +305,21 @@ final class ChatViewportProofTests: XCTestCase {
         // scroll phases: .tracking/.interacting/.decelerating — the
         // device regression was a slow swipe whose phase reports
         // were .interacting and the reading latch never engaged).
-        let scrollArea = app.scrollViews.firstMatch
-        XCTAssertTrue(scrollArea.waitForExistence(timeout: UITestTimeouts.standard))
-        scrollArea.swipeUp(velocity: .slow)
+        // The drag targets a MESSAGE element: SwiftUI's ScrollView
+        // may not expose a scroll-view AX element, and a swipe on a
+        // non-hittable firstMatch silently no-ops (the first captured
+        // trace showed the reader never moved at all).
+        let bottomMessage = message("Message 39 from the agent", in: app)
+        XCTAssertTrue(
+            bottomMessage.waitForExistence(timeout: UITestTimeouts.standard))
+        bottomMessage.swipeUp(velocity: .slow)
+
+        // A second swipe to get meaningfully away from the bottom,
+        // re-targeting a message element that is still on screen.
+        let midMessage = message("Message 35 from the user", in: app)
+        if midMessage.waitForExistence(timeout: 2) {
+            midMessage.swipeUp(velocity: .slow)
+        }
 
         // The reader is now mid-history with a real gesture latched:
         // capture the message they are actually READING (a
@@ -339,7 +352,9 @@ final class ChatViewportProofTests: XCTestCase {
         // viewport, and the Latest control is still offered (the
         // viewport did not jump to the new bottom).
         let latestButton = app.buttons["Latest message"]
-        XCTAssertTrue(latestButton.exists, "the Latest control should be visible while reading mid-history")
+        XCTAssertTrue(
+            latestButton.waitForExistence(timeout: UITestTimeouts.standard),
+            "the Latest control should be visible while reading mid-history")
         let held = app.descendants(matching: .any).matching(
             NSPredicate(format: "label == %@", anchor)).firstMatch
         XCTAssertTrue(held.exists, "the message the reader was reading ('\(anchor)') vanished entirely")
