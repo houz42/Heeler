@@ -64,7 +64,6 @@ struct TerminalFullKeyboard: View {
                             .frame(width: layout.characterWidth)
                     }
                     TerminalBackspaceButton(usesSymbol: true) {
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
                         send(.backspace)
                     }
                     .frame(width: layout.sideKeyWidth(characterCount: showsSymbols ? 6 : 7))
@@ -228,16 +227,22 @@ struct TerminalKeyboardButtonStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
-        let isPressed = isSelected == nil && configuration.isPressed
+        // Press feedback comes from the gesture itself for every key:
+        // toggle keys previously lost it because the old expression
+        // excluded them (`isSelected == nil && configuration.isPressed`),
+        // so Shift/Ctrl/Alt/Fn/#+= never showed a press (review item 13).
+        // A selected key keeps its selected background while pressed.
+        let isPressed = configuration.isPressed
         return configuration.label
             .foregroundStyle(isSelected == true ? Color.white : .primary)
             .background(
-                isPressed ? Color(uiColor: .systemGray3)
+                isPressed && isSelected != true
+                    ? Color(uiColor: .systemGray3)
                     : (isSelected == true ? Color.accentColor : Color(uiColor: .secondarySystemFill)),
                 in: .rect(cornerRadius: 7))
             .scaleEffect(isPressed && !reduceMotion ? 0.97 : 1)
             .animation(
-                isSelected != nil || isPressed || reduceMotion ? nil : .easeOut(duration: 0.1),
+                isPressed || reduceMotion ? nil : .easeOut(duration: 0.1),
                 value: isPressed)
             .contentShape(.rect)
     }

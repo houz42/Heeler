@@ -129,6 +129,10 @@ final class TerminalRepeatingBackspaceButton: UIButton {
         guard isEnabled else { return }
         holdState = .pressed
         isHighlighted = true
+        // Haptic on the press itself, never per repeat (review item 30):
+        // every 75ms tap of a hold buzzed before; the hold's key
+        // actions (via `keyAction`) are plain now.
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         schedule(after: 0.3)
     }
 

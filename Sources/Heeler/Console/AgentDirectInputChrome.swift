@@ -172,7 +172,12 @@ struct AgentDirectInputChrome: View {
 
     private func sendShortcutKey(_ key: AgentQuickKey) {
         UIDevice.current.playInputClick()
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        // Haptic comes from the button's own press for the backspace
+        // hold path (review item 30): the plain send fired one per
+        // 75ms repeat before, which the 0.075s hold loop amplified.
+        if key != .backspace {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
         interactions.sendQuickKey(key)
     }
 
