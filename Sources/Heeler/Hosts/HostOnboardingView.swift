@@ -31,6 +31,7 @@ struct HostOnboardingView: View {
     @State private var isConfirmingHostKeyReplacement = false
     @State private var sessionSelectionError: String?
     @Environment(\.openURL) private var openURL
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isShowingBrokerProvisioning = false
 
     init(
@@ -137,7 +138,12 @@ struct HostOnboardingView: View {
                     if let footerMessage = connectionPresentation.footerMessage {
                         Text(footerMessage)
                             .foregroundStyle(.red)
-                            .transition(.opacity.combined(with: .move(edge: .top)))
+                            // Reduce Motion (review item 34): a plain
+                            // fade instead of the slide-from-top.
+                            .transition(
+                                reduceMotion
+                                    ? .opacity
+                                    : .opacity.combined(with: .move(edge: .top)))
                     }
                 }
                 .animation(
@@ -221,8 +227,13 @@ struct HostOnboardingView: View {
             isPresented: fingerprintAlertPresented,
             presenting: store.pendingFingerprint
         ) { _ in
-            Button("Trust") { store.confirmFingerprint(trusted: true) }
+            // Safe choice default (review item 26): "Don't Trust" is
+            // the emphasized/cancel action and "Trust" reads as the
+            // deliberate destructive-ish step. The alert API cannot
+            // render arbitrary emphasis, so button ORDER + roles are
+            // the available levers: cancel first.
             Button("Don't Trust", role: .cancel) { store.confirmFingerprint(trusted: false) }
+            Button("Trust") { store.confirmFingerprint(trusted: true) }
         } message: { candidate in
             Text(
                 "First connection to \(candidate.host):\(String(candidate.port)).\n\n"

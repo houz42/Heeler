@@ -57,10 +57,12 @@ struct BrokerProvisioningView: View {
                     get: { session.pendingFingerprint != nil },
                     set: { if !$0 { session.confirmFingerprint(trusted: false) } })
             ) {
-                Button("Trust") { session.confirmFingerprint(trusted: true) }
+                // Safe choice default (review item 26): cancel first,
+                // "Trust" is the deliberate second step.
                 Button("Don't Trust", role: .cancel) {
                     session.confirmFingerprint(trusted: false)
                 }
+                Button("Trust") { session.confirmFingerprint(trusted: true) }
             } message: {
                 if let candidate = session.pendingFingerprint {
                     Text(

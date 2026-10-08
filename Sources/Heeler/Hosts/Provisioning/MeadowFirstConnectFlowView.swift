@@ -65,10 +65,12 @@ struct MeadowFirstConnectFlowView: View {
                     get: { pendingFingerprint != nil },
                     set: { if !$0 { store.confirmFingerprint(trusted: false) } })
             ) {
-                Button("Trust") { store.confirmFingerprint(trusted: true) }
+                // Safe choice default (review item 26): cancel first,
+                // "Trust" is the deliberate second step.
                 Button("Don't Trust", role: .cancel) {
                     store.confirmFingerprint(trusted: false)
                 }
+                Button("Trust") { store.confirmFingerprint(trusted: true) }
             } message: {
                 if let candidate = pendingFingerprint {
                     Text(
