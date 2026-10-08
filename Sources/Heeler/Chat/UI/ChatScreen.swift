@@ -233,6 +233,12 @@ struct ChatScreen: View {
     /// The ScrollView's bound position (the coordinator's decisions
     /// land here once each; user scrolls own it afterwards).
     @State private var scrollPosition = ScrollPosition(idType: String.self)
+    /// The LazyVStack's currently-materialized row ids (the visible
+    /// set is a subset). The replacement anchor transaction reads
+    /// this: when a recent-page refresh actually deletes rows the
+    /// reader had on screen, the first SURVIVING materialized row is
+    /// their best anchor.
+    @State private var materializedRowIDs: Set<String> = []
 
     /// Item 18: per-pane draft persistence (load on appear, save per
     /// edit, clear on successful send).
@@ -309,10 +315,11 @@ struct ChatScreen: View {
                 keyboardInset.reconcileAfterSceneActivation()
             }
         }
-        .onChange(of: items.map(\.id), initial: true) { _, _ in
+        .onChange(of: items.map(\.id), initial: true) { oldIDs, newIDs in
             reportViewportDiagnostics(reason: "items")
             pumpItemsToCoordinator()
             pumpGeometryToCoordinator()
+            runReplacementAnchorTransaction(oldIDs: oldIDs, newIDs: newIDs)
         }
         .onChange(of: draftKey, initial: false) { _, _ in
             loadPersistedDraft()
@@ -392,6 +399,15 @@ struct ChatScreen: View {
                 ForEach(items) { item in
                     transcriptView(for: item)
                         .padding(.horizontal, 12)
+                        // Materialization probe (the replacement anchor
+                        // transaction): the LazyVStack tells us which
+                        // rows are laid out; the visible set is a
+                        // subset. On a recent-page REPLACEMENT the
+                        // first SURVIVING materialized row is the
+                        // reader's best anchor (the stale offset
+                        // points into the old, larger document).
+                        .onAppear { materializedRowIDs.insert(item.id) }
+                        .onDisappear { materializedRowIDs.remove(item.id) }
                 }
                 bottomSentinel
                 // The v3 live-work spark: the transcript's LAST
@@ -629,6 +645,34 @@ struct ChatScreen: View {
         let first = items.first?.id ?? ""
         let last = items.last?.id ?? ""
         scrollCoordinator.itemsChanged(first: first, last: last)
+    }
+
+    /// The replacement anchor transaction (the real-path
+    /// blank-on-send-after-paging trace): a recent-page refresh that
+    /// ACTUALLY deletes rows the reader had materialized (the store's
+    /// coverage merge retains the loaded prefix, so this fires only
+    /// on a real trim/replacement) must re-establish a VALID anchor
+    /// in the SAME pass — never a timer or the budgeted repair. The
+    /// reader's first SURVIVING materialized row is their anchor; a
+    /// following reader takes the last row; the window's first row is
+    /// the honest fallback. Runs ONCE per content change.
+    private func runReplacementAnchorTransaction(
+        oldIDs: [String], newIDs: [String]
+    ) {
+        guard !oldIDs.isEmpty, !newIDs.isEmpty else { return }
+        let newSet = Set(newIDs)
+        // Only rows the reader actually HAD count as deletions —
+        // offscreen rows churn freely under lazy materialization.
+        let wasMaterialized = materializedRowIDs.intersection(Set(oldIDs))
+        guard wasMaterialized.contains(where: { !newSet.contains($0) })
+        else { return }
+        let survivor = newIDs.first {
+            wasMaterialized.contains($0) && newSet.contains($0)
+        }
+        scrollCoordinator.contentWindowReplaced(
+            survivorID: survivor,
+            firstID: newIDs.first ?? "",
+            lastID: newIDs.last ?? "")
     }
 
     @ViewBuilder
