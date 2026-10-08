@@ -101,12 +101,16 @@ final class QACardProofTests: XCTestCase {
         // Multi-question answered card: labels + note + free text.
         // (Scroll the transcript up: resolved cards anchor after the
         // message that posed the question.) The transcript is a
-        // LazyVStack — scroll toward the top until the answered row
-        // materializes instead of assuming one swipe lands it (the
-        // cards' footer removal changed the lazy window).
-        for _ in 0..<10 where !element("Answered", in: app).exists {
+        // LazyVStack and ANY card's "Answered" eyebrow satisfies a
+        // loose check — loop-scroll until the EXPORT card's chip row
+        // itself materializes.
+        let exportChips = element("Validation report", in: app)
+        for _ in 0..<10 where !exportChips.exists {
             app.swipeDown()
         }
+        XCTAssertTrue(
+            exportChips.waitForExistence(timeout: UITestTimeouts.standard),
+            "the selected-option label never rendered")
         XCTAssertTrue(
             element("Answered", in: app).waitForExistence(
                 timeout: UITestTimeouts.standard),
