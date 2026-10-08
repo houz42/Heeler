@@ -153,6 +153,36 @@ Entries reference the issue that motivated them.
     question-mark) instead of a mix of bare squares, dashes and marks.
   - Host list route rows are tighter: the 44pt inspector button keeps
     its full hit target, but its frame no longer inflates the row.
+  - The chat jump pill is transient like the system scroll indicator:
+    hidden at rest, shown while scrolling (plus a brief settle
+    linger), so phone rows only reserve their trailing gutter
+    mid-scroll — reading width is never permanently lost, and the
+    pill's Oldest button can no longer show while the true top is on
+    screen (the top sentinel now always mounts).
+  - The Agents view control's compound label truly wraps at
+    accessibility sizes (the previous fix claimed wrapping but kept a
+    one-line limit).
+  - Keyboard toggle keys (Shift/Ctrl/Alt/Fn/#+=) show press feedback,
+    and hold-to-repeat backspace buzzes once per press instead of
+    every 75ms repeat.
+  - The navigation drawer and the wide sidebar fold honor Reduce
+    Motion: state changes land immediately instead of springing.
+  - The agent switcher chip follows Dynamic Type (no more clipping at
+    AX sizes), fills the strip's vertical band with its hit area, and
+    its status dot carries a shape cue (bolt/xmark/checkmark) so
+    status is never colour alone.
+  - The search bar's magnifier and clear buttons reach 44pt hit
+    targets.
+  - Pending-entry actions (Retry/Send again/Edit/Copy/Hide) and the
+    draft tile's remove button reach 44pt hit targets.
+  - The host form explains why Save is disabled (empty username, port
+    outside 1–65535) inline; the route editor disables Save on an
+    empty address and confirms before removing a route; number-pad
+    port fields get a keyboard Done bar.
+  - First-connection Trust prompts list "Don't Trust" as the default
+    action with "Trust" as the deliberate second step.
+  - On iPad, the Host form and the Settings stack cap at a readable
+    column width instead of running edge to edge.
 
 ### Fixed
 
