@@ -116,6 +116,22 @@ Entries reference the issue that motivated them.
 
 - Make the remote directory browser more compact, with full-row folder navigation,
   native filtering, empty states, and retry for failed navigation. (PR #305)
+- UI polish toward the iOS HIG:
+  - Q/A cards: multi-select options show checkbox glyphs, and the chosen
+    single-select option shows a checkmark, so selection no longer rests
+    on fill colour alone. Cancel has a 44pt tap target in neutral gray.
+    Cancelled or expired outcomes read gray rather than success-green.
+    Collapsed answered cards carry an expand chevron. At accessibility
+    sizes the pending card's step count stays readable.
+  - Chat tables keep their zebra, header and border contrast in dark mode.
+  - Agent card subtitles wrap to two lines at accessibility text sizes.
+  - The chat jump control's buttons are 44pt.
+  - On iPad, chat transcript rows (assistant text, Q/A cards) cap at a
+    readable column width instead of running edge to edge.
+  - Host route rows open their inspector from an `info.circle` detail
+    button, since the row tap switches routes. Route address subtitles
+    are neutral gray in the host list and host form.
+  - Agent List Fields host rows show an icon aligned with the global row.
 
 ### Fixed
 

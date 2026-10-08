@@ -381,6 +381,11 @@ struct ChatScreen: View {
         }
     }
 
+    /// Max width of one transcript row, padding included — close to
+    /// UIKit's readable content width at the default text size. 720pt
+    /// measured ~100 characters a line on iPad; 640 lands near 85.
+    static let readingColumnWidth: CGFloat = 640
+
     /// The transcript's scroll region (blank-viewport slice): the ONE
     /// scroll surface, its geometry probes, and the coordinator's
     /// position channel. Split out of `body` to keep each expression
@@ -392,6 +397,14 @@ struct ChatScreen: View {
                 ForEach(items) { item in
                     transcriptView(for: item)
                         .padding(.horizontal, 12)
+                        // Readable-width column (HIG): on wide iPad
+                        // layouts assistant prose and Q/A cards otherwise
+                        // run edge-to-edge at ~140 characters a line.
+                        // Wider than any phone, so phones are unaffected;
+                        // the 560pt user-bubble cap derives from this row
+                        // width and still applies inside the column.
+                        .frame(maxWidth: Self.readingColumnWidth, alignment: .leading)
+                        .frame(maxWidth: .infinity)
                 }
                 bottomSentinel
                 // The v3 live-work spark: the transcript's LAST
@@ -481,6 +494,10 @@ struct ChatScreen: View {
         // The terminal Attach surface's jump chrome, adapted: one
         // floating pill on the trailing edge, up = oldest loaded,
         // down = latest. Each appears only when its end is offscreen.
+        // Vertically centred on purpose: the bottom-trailing corner is
+        // where the newest row's trailing controls (a pending card's
+        // Cancel, a bubble's last line) sit at rest, and the pill
+        // covered them there.
         // Routed through the scroll coordinator (the single
         // scroll-command owner) so a jump can never interleave with a
         // viewport repair.
@@ -1924,7 +1941,7 @@ struct ChatJumpControl: View {
         } label: {
             Image(systemName: systemImage)
                 .font(.system(size: 15, weight: .semibold))
-                .frame(width: 40, height: 40)
+                .frame(width: 44, height: 44)
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)

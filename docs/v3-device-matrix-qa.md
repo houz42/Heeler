@@ -55,6 +55,7 @@ Sims: `heeler-v3-dmxqa-phone` (iPhone 17 clone, FC818E6B) and `heeler-v3-dmxqa-w
 - **Condition:** iPad wide, light + dark (`qa-wide-light.png` measure: card background ≈97–98% of screen width; the longest collapsed answer line runs ≈94% of the width).
 - **Observed:** at 1376pt the collapsed A line truncates at "…widen to 50…" with line measure far past comfortable reading; the pending card stretches edge-to-edge.
 - **Note:** the design doc's 560pt cap is specified for **outgoing bubbles** only; it does not currently state a measure cap for cards/assistant text. So this is a design-decision finding for the next design pass (or a one-line design-doc amendment), not a code regression. The phone captures are unaffected.
+- **Status:** FIXED (`polish/ui-review`): `ChatScreen` caps each transcript row at a centered 640pt reading column (`readingColumnWidth`). Cards and assistant prose no longer span the screen; user bubbles stay trailing within the column. Phones are unaffected.
 
 ### D4 — Collapsed answered card gives NO visible expand affordance — DISCOVERABILITY FINDING
 - **Surface:** `ChatResolvedAskCard.answerSummaryText` collapses the custom answer to one ellipsized line; expansion is a whole-card tap (`onTapGesture`) + AX action, with **no visual hint** (no chevron/More/more-link).

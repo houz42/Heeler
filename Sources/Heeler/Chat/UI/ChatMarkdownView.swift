@@ -247,6 +247,12 @@ struct ChatCodeBlock: View {
 /// lives in the theme's `tableCell` style (row 0). This view only frames.
 struct ChatTableBlock<Content: View>: View {
     @ViewBuilder let content: () -> Content
+    @Environment(\.colorScheme) private var colorScheme
+
+    /// Dark mode needs roughly double the opacity: 4.5% white on black
+    /// is indistinguishable from the background, so the zebra rows read
+    /// as detached rather than striped.
+    private var isDark: Bool { colorScheme == .dark }
 
     var body: some View {
         // The table fits the proposed chat width and its cells wrap —
@@ -258,14 +264,14 @@ struct ChatTableBlock<Content: View>: View {
         content()
             .markdownTableBackgroundStyle(
                 .alternatingRows(
-                    Color.primary.opacity(0.045),
+                    Color.primary.opacity(isDark ? 0.09 : 0.05),
                     Color.clear,
-                    header: Color.primary.opacity(0.10))
+                    header: Color.primary.opacity(isDark ? 0.15 : 0.09))
             )
             .markdownTableBorderStyle(
                 TableBorderStyle(
                     .insideHorizontalBorders,
-                    color: Color.primary.opacity(0.10),
+                    color: Color.primary.opacity(isDark ? 0.16 : 0.12),
                     width: 0.5))
             .padding(.bottom, 8)
     }

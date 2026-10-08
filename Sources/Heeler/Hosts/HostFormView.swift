@@ -201,21 +201,25 @@ struct HostFormView: View {
                             HStack(spacing: 6) {
                                 Text(routeSubtitle(for: row))
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    // Fixed label colours: a hierarchical
+                                    // `.secondary` inside a borderless
+                                    // button derives from the accent tint
+                                    // and renders pale green.
+                                    .foregroundStyle(Color(uiColor: .secondaryLabel))
                                     .lineLimit(1)
                                 // Nameability hint (device finding): an
                                 // unnamed route says so quietly, inline.
                                 if row.label.trimmingCharacters(in: .whitespaces).isEmpty {
                                     Text("Add label")
                                         .font(.caption2)
-                                        .foregroundStyle(.tertiary)
+                                        .foregroundStyle(Color(uiColor: .tertiaryLabel))
                                 }
                             }
                         }
                         Spacer()
                         Image(systemName: "chevron.right")
                             .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(Color(uiColor: .tertiaryLabel))
                     }
                     .contentShape(Rectangle())
                 }
@@ -237,7 +241,7 @@ struct HostFormView: View {
         } footer: {
             Text(
                 "Routes are tried in order until one answers. Every route "
-                    + "must reach the same trusted Host.")
+                    + "must reach the same trusted host.")
         }
     }
 

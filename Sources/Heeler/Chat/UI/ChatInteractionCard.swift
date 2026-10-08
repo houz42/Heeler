@@ -242,8 +242,8 @@ struct ChatInteractionCard: View {
                     .font(.subheadline.weight(.semibold))
                     .fixedSize(horizontal: false, vertical: true)
                 if isMultiSelect {
-                    Text("Select one or more, then confirm.")
-                        .font(.caption2)
+                    Text("Select all that apply.")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 optionsView
@@ -304,12 +304,16 @@ struct ChatInteractionCard: View {
             Label("Your input needed", systemImage: "questionmark.circle")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(accent)
-                .fixedSize()
+                // Wraps rather than starving the step count: a fixed-size
+                // label squeezed "1 of 2" into a letter-per-line column at
+                // accessibility sizes, blowing the header up vertically.
+                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
             if questions.count > 1 {
                 Text("\(step) of \(questions.count)")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(accent)
+                    .fixedSize()
                 ChatInteractionStepSegments(
                     step: step, count: questions.count, accent: accent)
             }
@@ -346,9 +350,19 @@ struct ChatInteractionCard: View {
                 } label: {
                     Text("Cancel")
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        // Fixed label colour: hierarchical .secondary
+                        // picks up the green tint inside a borderless
+                        // button and loses contrast.
+                        .foregroundStyle(Color(uiColor: .secondaryLabel))
+                        .frame(minWidth: 44, minHeight: 44)
                 }
+                .buttonStyle(.borderless)
                 .accessibilityLabel("Cancel this question")
+                // The 44pt hit frame would add ~24pt of dead space around a
+                // footnote row. Padding outside the Button shrinks only the
+                // row's layout footprint; the button keeps its full frame
+                // for hit-testing, overlapping the card padding.
+                .padding(.vertical, -12)
             }
         }
     }
@@ -382,9 +396,24 @@ struct ChatInteractionCard: View {
         return Button {
             choose(option.id)
         } label: {
-            Text(option.label)
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                // Multi-select shows its state as a checkbox glyph so the
+                // selection never rests on fill colour alone (HIG); a
+                // chosen single-select option gains a checkmark.
+                if isMultiSelect {
+                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(selected ? accent : Color.secondary)
+                        .accessibilityHidden(true)
+                } else if selected {
+                    Image(systemName: "checkmark")
+                        .fontWeight(.semibold)
+                        .foregroundStyle(accent)
+                        .accessibilityHidden(true)
+                }
+                Text(option.label)
+                    .multilineTextAlignment(.leading)
+            }
                 .font(.subheadline)
-                .multilineTextAlignment(.leading)
                 .padding(.horizontal, 11)
                 .frame(
                     maxWidth: fullWidth ? .infinity : nil,
@@ -402,6 +431,7 @@ struct ChatInteractionCard: View {
         .disabled(submitting)
         .accessibilityLabel(
             "\(isMultiSelect ? "Toggle" : "Answer"): \(option.label)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func choose(_ optionId: String) {
@@ -481,7 +511,7 @@ struct ChatInteractionCard: View {
         } else {
             Text(
                 "\(missing) question\(missing == 1 ? "" : "s") left to answer")
-                .font(.caption2)
+                .font(.footnote)
                 .foregroundStyle(.secondary)
         }
     }
@@ -658,7 +688,9 @@ struct ChatResolvedAskCard: View {
                 systemImage: isAnswered
                     ? "checkmark.circle" : outcomeIcon)
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(accent)
+                // Cancelled/expired/settled are not successes: only an
+                // accepted answer wears the accent (HIG semantic colour).
+                .foregroundStyle(isAnswered ? accent : Color.secondary)
                 .fixedSize()
             Spacer(minLength: 0)
             if questions.count > 1 {
@@ -669,6 +701,14 @@ struct ChatResolvedAskCard: View {
                     step: min(step, questions.count),
                     count: questions.count, accent: accent)
             }
+            // Disclosure cue: the card toggles on tap, so the
+            // collapsed one-line A row must say there is more.
+            Image(systemName: "chevron.down")
+                .padding(.leading, 4)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .rotationEffect(.degrees(expanded ? 180 : 0))
+                .accessibilityHidden(true)
         }
     }
 

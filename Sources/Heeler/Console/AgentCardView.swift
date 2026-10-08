@@ -9,6 +9,7 @@ import UIKit
 /// edge, badge trailing line 1.
 struct AgentCardView: View {
     let agent: ConsoleAgent
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     var isPinned: Bool = false
     /// v3 Herdr order: rows the producer could not place (missing
     /// workspace/tab/pane ordinals) get the honest "Order unavailable"
@@ -74,10 +75,12 @@ struct AgentCardView: View {
                     Text(verbatim: titleText)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        // The subtitle truncates tail-first; the full title is
-                        // a long-press/AX read away.
-                        .truncationMode(.head)
+                        // Accessibility sizes get a second line so the
+                        // distinguishing leading words survive; the title
+                        // truncates at its tail, and the full text is a
+                        // long-press/AX read away.
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                        .truncationMode(.tail)
                         .help(titleText)
                         .contextMenu {
                             Text(titleText)

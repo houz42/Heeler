@@ -67,6 +67,8 @@ struct AgentListFieldsSettingsView: View {
                     Image(systemName: "globe")
                         .font(.body)
                         .foregroundStyle(.secondary)
+                        .frame(width: 26)
+                        .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("All Hosts (default)")
                             .font(.body)
@@ -112,9 +114,18 @@ struct AgentListFieldsSettingsView: View {
                         host, underlyingSource: editor.underlyingSource(for: host.id)),
                     console: console, hosts: hosts, editor: editor)
             } label: {
-                Text(verbatim: host.displayName)
-                    .font(.body)
-                    .foregroundStyle(.primary)
+                // Same leading-glyph column as the global row, so the
+                // names line up.
+                HStack(spacing: 10) {
+                    Image(systemName: "desktopcomputer")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 26)
+                        .accessibilityHidden(true)
+                    Text(verbatim: host.displayName)
+                        .font(.body)
+                        .foregroundStyle(.primary)
+                }
             }
             .listRowInsets(AgentListFieldsChrome.headerInsets)
             .agentListHostSurface(isFirst: true, isLast: true)
