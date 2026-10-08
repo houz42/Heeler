@@ -531,6 +531,15 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
     /// capture time (the store resolves the specific ask turn the
     /// interaction belongs to) and persisted — never re-derived.
     var anchorMessageID: UUID?
+    /// The ask's CAUSAL ORIGIN: the producer's toolCallId for the
+    /// interaction this record resolved (the same id the history page
+    /// exposes as the ask tool_call block's callId). Persisted so
+    /// anchor PROVENANCE is verifiable after reopen: the anchor is
+    /// the record's causal ask IFF the anchored message's ask callId
+    /// equals this origin. Nil on records captured before the field
+    /// existed (legacy/61ceee60-era) — unverifiable by origin, only
+    /// the structural + duplicate-contention rules apply.
+    var originToolCallID: String?
     /// The per-question answer records (`youAnswered` only), in the
     /// interaction's producer order. Empty/nil = this device's
     /// answer data is unavailable (the card renders "Answer details
@@ -546,8 +555,8 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
     private var legacyLabels: [String]?
 
     private enum CodingKeys: String, CodingKey {
-        case requestId, kind, questionText, anchorMessageID, labels,
-            questionAnswers
+        case requestId, kind, questionText, anchorMessageID,
+            originToolCallID, labels, questionAnswers
     }
 
     init(from decoder: any Decoder) throws {
@@ -556,6 +565,7 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
         kind = try container.decode(Kind.self, forKey: .kind)
         questionText = try container.decodeIfPresent(String.self, forKey: .questionText)
         anchorMessageID = try container.decodeIfPresent(UUID.self, forKey: .anchorMessageID)
+        originToolCallID = try container.decodeIfPresent(String.self, forKey: .originToolCallID)
         questionAnswers = try container.decodeIfPresent([QuestionAnswer].self, forKey: .questionAnswers)
         // v2 archives carry `labels` only; keep it readable.
         legacyLabels = try container.decodeIfPresent([String].self, forKey: .labels)
@@ -567,6 +577,7 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
         try container.encode(kind, forKey: .kind)
         try container.encodeIfPresent(questionText, forKey: .questionText)
         try container.encodeIfPresent(anchorMessageID, forKey: .anchorMessageID)
+        try container.encodeIfPresent(originToolCallID, forKey: .originToolCallID)
         // v3 writes never carry the flat legacy form.
         try container.encodeIfPresent(questionAnswers, forKey: .questionAnswers)
     }
@@ -688,6 +699,7 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
         self.kind = kind
         self.questionText = questionText
         self.anchorMessageID = nil
+        self.originToolCallID = nil
         self.questionAnswers = nil
         self.legacyLabels = labels
     }
@@ -702,6 +714,7 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
         self.kind = kind
         self.questionText = questionText
         self.anchorMessageID = nil
+        self.originToolCallID = nil
         self.questionAnswers = questionAnswers
         self.legacyLabels = nil
     }

@@ -342,6 +342,138 @@ struct ChatRealAskAnchorTests {
         #expect(
             current?.anchorMessageID != nil,
             "the current ask's own resolution keeps its causal anchor")
+        // The current record now also carries its CAUSAL ORIGIN.
+        #expect(
+            current?.originToolCallID == "ask_0_two",
+            "the causal origin (toolCallId) is persisted on the record")
+    }
+
+    @Test("MIGRATION R2 (the design pane's gap): a poisoned anchor on a COMPLETED ask drops when the origin mismatches")
+    func poisonedAnchorOnCompletedAskDrops() async throws {
+        // The gap: 61ceee60 wrongly bound a legacy record to the then-
+        // CURRENT ask; the user then ANSWERED that ask (its result
+        // committed). The no-result-only check passes (the result
+        // exists) but the binding is still wrong. The fix: the record
+        // carries its CAUSAL ORIGIN — the anchor's ask callId must
+        // EQUAL it; a mismatch drops regardless of the anchor-ask's
+        // result state.
+        let sessionFile = "/s/mig2-\(UUID().uuidString)"
+        // Pre-seed: a poisoned legacy record — anchored (the wrong
+        // way) to the CURRENT ask's turn (msg-ask-2), but carrying its
+        // OWN causal origin from a DIFFERENT (long-closed) ask.
+        var poisoned = AgentChatInteractionResolution(
+            requestId: "dd19290b-legacy", kind: .youAnswered,
+            questionText: "Which one?",
+            questionAnswers: [
+                .init(
+                    questionId: "twentyfirst_demo",
+                    question: "Which one?",
+                    selections: [
+                        .init(optionId: "idx:1", label: "Medium")
+                    ],
+                    customText: nil, note: nil)
+            ])
+        poisoned.anchorMessageID =
+            AgentChatMapper.stableID(for: "msg-ask-2")
+        poisoned.originToolCallID = "ask_0_old_closed_ask"
+        AgentChatResolutionArchiveStore.save(
+            socketPath: "/tmp/chat.sock", sessionFile: sessionFile,
+            resolutions: [poisoned])
+        defer {
+            if let url = AgentChatResolutionArchiveStore.archiveURL(
+                socketPath: "/tmp/chat.sock", sessionFile: sessionFile) {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+
+        // The harness with the ask SETTLED from the start: the page
+        // shows ask2 WITH its result (the completed-ask state the
+        // no-result check passes on).
+        let harness = await Harness(
+            sessionFile: sessionFile, initiallySettled: true)
+        defer { await harness.tearDown() }
+        let store = harness.store
+        for _ in 0..<50
+        where store.interactionResolutions.filter({ $0.requestId == "dd19290b-legacy" }).first?.anchorMessageID != nil {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
+        // THE MIGRATION PIN: the poisoned anchor DROPPED — the
+        // anchored ask's callId (ask_0_two) does not match the
+        // record's own origin (ask_0_old_closed_ask).
+        let migrated = store.interactionResolutions.first {
+            $0.requestId == "dd19290b-legacy"
+        }
+        #expect(
+            migrated?.anchorMessageID == nil,
+            "a poisoned anchor drops even when the anchor-ask's result is committed")
+    }
+
+    @Test("MIGRATION R3: duplicate-anchor contention — the origin-verified owner keeps it, unverifiable contention drops all")
+    func duplicateAnchorContentionResolvesByOrigin() async throws {
+        // The 61ceee60-era after-answer archive shape: the legacy
+        // record AND the current ask's own record BOTH anchor
+        // msg-ask-2, neither carrying an origin (that build didn't
+        // persist one). On reopen with the ask settled, the
+        // contention itself is the poison signature: all contented
+        // records drop — honest: we cannot prove which is right.
+        let sessionFile = "/s/mig3-\(UUID().uuidString)"
+        var legacy = AgentChatInteractionResolution(
+            requestId: "dd19290b-legacy", kind: .youAnswered,
+            questionText: "Which one?",
+            questionAnswers: [
+                .init(
+                    questionId: "twentyfirst_demo",
+                    question: "Which one?",
+                    selections: [
+                        .init(optionId: "idx:1", label: "Medium")
+                    ],
+                    customText: nil, note: nil)
+            ])
+        legacy.anchorMessageID = AgentChatMapper.stableID(for: "msg-ask-2")
+        var current = AgentChatInteractionResolution(
+            requestId: "a387c719-current", kind: .youAnswered,
+            questionText: "Which one?",
+            questionAnswers: [
+                .init(
+                    questionId: "twentyfirst_demo",
+                    question: "Which one?",
+                    selections: [
+                        .init(optionId: "idx:1", label: "Medium")
+                    ],
+                    customText: nil, note: nil)
+            ])
+        current.anchorMessageID = AgentChatMapper.stableID(for: "msg-ask-2")
+        AgentChatResolutionArchiveStore.save(
+            socketPath: "/tmp/chat.sock", sessionFile: sessionFile,
+            resolutions: [legacy, current])
+        defer {
+            if let url = AgentChatResolutionArchiveStore.archiveURL(
+                socketPath: "/tmp/chat.sock", sessionFile: sessionFile) {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+
+        let harness = await Harness(
+            sessionFile: sessionFile, initiallySettled: true)
+        defer { await harness.tearDown() }
+        let store = harness.store
+        // Wait for the page install to run the verification.
+        for _ in 0..<100 where store.content.messages.isEmpty {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        try? await Task.sleep(for: .milliseconds(200))
+
+        let legacyAfter = store.interactionResolutions.first {
+            $0.requestId == "dd19290b-legacy"
+        }
+        let currentAfter = store.interactionResolutions.first {
+            $0.requestId == "a387c719-current"
+        }
+        #expect(
+            legacyAfter?.anchorMessageID == nil
+                && currentAfter?.anchorMessageID == nil,
+            "unverifiable duplicate contention drops both — never a wrong card kept")
     }
 }
 

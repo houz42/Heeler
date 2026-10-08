@@ -235,6 +235,12 @@ final class AgentChatStore {
     /// resolution record before persisting, so the archive carries the
     /// durable copy.
     @ObservationIgnored private var askAnchorByRequest: [String: UUID] = [:]
+    /// The producer's toolCallId per requestId — the CAUSAL ORIGIN the
+    /// adapter threads through interaction.opened/list. Stamped onto
+    /// resolution records (originToolCallID) so anchor provenance is
+    /// verifiable after reopen; also the migration's proof that an
+    /// anchor belongs to its record.
+    @ObservationIgnored private var askOriginByRequest: [String: String] = [:]
     /// RequestIds this store saw interaction.opened for (regardless
     /// of whether the claim succeeded — the page may lag the event).
     /// The causal SECOND CHANCE (recordResolution / the page
@@ -1401,6 +1407,13 @@ final class AgentChatStore {
     /// never pretends an older text match.
     func recordResolution(_ resolution: AgentChatInteractionResolution) {
         var resolution = resolution
+        // Stamp the CAUSAL ORIGIN (the producer's toolCallId for this
+        // record's interaction) — persisted for provenance
+        // verification after reopen.
+        if resolution.originToolCallID == nil {
+            resolution.originToolCallID =
+                askOriginByRequest[resolution.requestId]
+        }
         if resolution.anchorMessageID == nil {
             // The causal claim for THIS record's own interaction —
             // either already claimed, or the SECOND CHANCE (the ask is
@@ -1491,6 +1504,9 @@ final class AgentChatStore {
         // claim (honest nil — never a guess); the page-commit
         // back-fill in applyPage and recordResolution try again.
         seenInteractionRequests.insert(interaction.requestId)
+        if let callID = interaction.toolCallId {
+            askOriginByRequest[interaction.requestId] = callID
+        }
         if askAnchorByRequest[interaction.requestId] == nil {
             // CAUSAL ORIGIN FIRST: the producer's own toolCallId (the
             // same id the history page exposes as the ask tool_call
@@ -1566,6 +1582,10 @@ final class AgentChatStore {
     private func backfillAskAnchorsFromPage() {
         for interaction in interactions {
             seenInteractionRequests.insert(interaction.requestId)
+            if let callID = interaction.toolCallId,
+                askOriginByRequest[interaction.requestId] == nil {
+                askOriginByRequest[interaction.requestId] = callID
+            }
             if askAnchorByRequest[interaction.requestId] == nil {
                 if let callID = interaction.toolCallId {
                     askAnchorByRequest[interaction.requestId] =
@@ -1577,10 +1597,16 @@ final class AgentChatStore {
                 }
             }
         }
-        // Claimed-but-unstamped records only: adopt the claim their
-        // OWN interaction already holds. No claim for THIS record's
-        // requestId (legacy/closed) → leave nil, honestly.
+        // Claimed-but-unstamped records only: adopt the claim AND the
+        // origin their OWN interaction already holds. No claim for
+        // THIS record's requestId (legacy/closed) → leave nil,
+        // honestly.
         for index in interactionResolutions.indices {
+            if interactionResolutions[index].originToolCallID == nil {
+                interactionResolutions[index].originToolCallID =
+                    askOriginByRequest[
+                        interactionResolutions[index].requestId]
+            }
             guard interactionResolutions[index].anchorMessageID == nil,
                 let claim = askAnchorByRequest[
                     interactionResolutions[index].requestId]
@@ -1601,27 +1627,93 @@ final class AgentChatStore {
     /// anchor a record earned while its ask was mid-settle survives
     /// once the result commits.
     private func verifyAnchoredResolutions() {
-        // The messages whose ask calls are still un-resulted.
+        // The ask tool-call map of the loaded page: message id → the
+        // ask call's callId (an ask turn carries exactly one ask call;
+        // the first wins for safety on malformed turns), plus the set
+        // of messages whose ask calls are still un-resulted.
+        var askCallByMessage: [UUID: String] = [:]
         var pendingAskMessageIDs = Set<UUID>()
         for message in content.messages {
             for block in message.blocks {
                 guard case .toolCall(let call) = block,
-                    call.name == "ask",
-                    !content.toolResults.contains(where: {
-                        $0.toolCallId == call.id
-                    })
+                    call.name == "ask"
                 else { continue }
-                pendingAskMessageIDs.insert(message.id)
+                if askCallByMessage[message.id] == nil {
+                    askCallByMessage[message.id] = call.id
+                }
+                if !content.toolResults.contains(where: {
+                    $0.toolCallId == call.id
+                }) {
+                    pendingAskMessageIDs.insert(message.id)
+                }
             }
         }
-        guard !pendingAskMessageIDs.isEmpty else { return }
         var migrated = false
+        // R1 — structural: a resolved record anchored to a STILL-
+        // PENDING ask can never be its ask (a resolved ask is settled
+        // and its result exists). Suspect → drop.
+        // R2 — CAUSAL ORIGIN: a record carrying originToolCallID owns
+        // its anchor IFF the anchored message's ask callId equals the
+        // origin. A mismatch is a poisoned binding — drop regardless
+        // of the anchor-ask's result state (the design pane's gap: a
+        // poisoned anchor whose ask was later ANSWERED passes the
+        // no-result-only check but is still wrong).
         for index in interactionResolutions.indices {
-            if let anchor = interactionResolutions[index].anchorMessageID,
-                pendingAskMessageIDs.contains(anchor)
+            guard let anchor = interactionResolutions[index].anchorMessageID
+            else { continue }
+            if pendingAskMessageIDs.contains(anchor) {
+                interactionResolutions[index].anchorMessageID = nil
+                migrated = true
+                continue
+            }
+            if let origin = interactionResolutions[index].originToolCallID,
+                let anchoredCallID = askCallByMessage[anchor],
+                anchoredCallID != origin
             {
                 interactionResolutions[index].anchorMessageID = nil
                 migrated = true
+            }
+        }
+        // R3 — DUPLICATE CONTENTION: two resolved records sharing one
+        // anchor violates one-card-per-ask. The record whose CAUSAL
+        // ORIGIN matches the anchored ask's callId keeps it; every
+        // other contented record drops. When NO contented record is
+        // verifiable (61ceee60-era archives carry no origin), the
+        // contention itself is the poison signature — all drop
+        // (honest: we cannot prove which one is right).
+        var recordsByAnchor: [UUID: [Int]] = [:]
+        for (index, resolution) in interactionResolutions.enumerated() {
+            guard let anchor = resolution.anchorMessageID else { continue }
+            recordsByAnchor[anchor, default: []].append(index)
+        }
+        for (anchor, indices) in recordsByAnchor where indices.count > 1 {
+            guard let anchoredCallID = askCallByMessage[anchor] else {
+                // The anchored message is not (or no longer) an ask
+                // turn: unverifiable contention → drop all.
+                for index in indices {
+                    interactionResolutions[index].anchorMessageID = nil
+                }
+                migrated = true
+                continue
+            }
+            let verified = indices.filter { index in
+                interactionResolutions[index].originToolCallID
+                    == anchoredCallID
+            }
+            switch verified.count {
+            case 1:
+                // The verified owner keeps it; the rest drop.
+                for index in indices where index != verified[0] {
+                    interactionResolutions[index].anchorMessageID = nil
+                    migrated = true
+                }
+            default:
+                // Zero verifiable owners (or an inconsistent 2+):
+                // contention without proof → drop all.
+                for index in indices {
+                    interactionResolutions[index].anchorMessageID = nil
+                    migrated = true
+                }
             }
         }
         if migrated, let archive = archiveIdentity {
