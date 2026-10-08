@@ -1373,15 +1373,22 @@ final class AgentChatStore {
     /// list to the archive so a NEW store (detail reopen, app
     /// relaunch) reconstructs the history. Before persisting, the
     /// IDENTITY anchor is stamped: the claimed ask-turn message UUID
-    /// (from upsertInteraction) or a fresh back-fill attempt (the ask
-    /// turn may have entered the loaded page after the opened event —
-    /// applyPage does not re-derive claims, this is the second chance).
+    /// (from upsertInteraction), or the CAUSAL second chance — the
+    /// unique un-resulted ask turn (the ask is settled broker-side at
+    /// record time but its tool_result rarely committed yet, so the
+    /// turn is still structurally identifiable). NO text scanning
+    /// anywhere: an unidentifiable record stays honestly unanchored
+    /// (nil — the card parks at the resolution's own position) and
+    /// never pretends an older text match.
     func recordResolution(_ resolution: AgentChatInteractionResolution) {
         var resolution = resolution
         if resolution.anchorMessageID == nil {
-            resolution.anchorMessageID =
-                askAnchorByRequest[resolution.requestId]
-                ?? backfillAskAnchor(for: resolution)
+            let anchor = askAnchorByRequest[resolution.requestId]
+                ?? resolvePendingAskAnchor()
+            if let anchor {
+                askAnchorByRequest[resolution.requestId] = anchor
+                resolution.anchorMessageID = anchor
+            }
         }
         interactionResolutions.removeAll {
             $0.requestId == resolution.requestId
@@ -1393,44 +1400,6 @@ final class AgentChatStore {
                 sessionFile: archive.sessionFile,
                 resolutions: interactionResolutions)
         }
-    }
-
-    /// The second-chance anchor claim for a resolution whose opened
-    /// event could not see the ask turn yet (page lag): find the
-    /// interaction's question in the held content the same way
-    /// resolveAskAnchor does. Requires the interaction to still be
-    /// held (a resolution arriving for an interaction we never saw
-    /// open has NOTHING to match on — it stays text-anchored).
-    private func backfillAskAnchor(
-        for resolution: AgentChatInteractionResolution
-    ) -> UUID? {
-        guard let questionText = resolution.questionText,
-            !questionText.isEmpty
-        else { return nil }
-        // Match like resolveAskAnchor but from the question TEXT alone
-        // (the interaction may already be gone); the newest unclaimed
-        // ask turn carrying that text. Ambiguity remains possible for
-        // text-only back-fills — but this path only fires when the
-        // identity claim failed, and the newest-unclaimed rule is
-        // still strictly better than the legacy FIRST-text-match.
-        let claimed = Set(askAnchorByRequest.values)
-            .union(
-                interactionResolutions.compactMap(\.anchorMessageID))
-        for message in content.messages.reversed() {
-            guard !claimed.contains(message.id) else { continue }
-            for block in message.blocks {
-                guard case .toolCall(let call) = block,
-                    call.name == "ask"
-                else { continue }
-                if Set(ChatFiltering.stringLeaves(of: call.arguments))
-                    .contains(questionText)
-                {
-                    askAnchorByRequest[resolution.requestId] = message.id
-                    return message.id
-                }
-            }
-        }
-        return nil
     }
 
     /// Delivery contract (matched, unchanged): the authoritative
@@ -1479,49 +1448,71 @@ final class AgentChatStore {
         } else {
             interactions.append(interaction)
         }
-        // IDENTITY ANCHOR (the real-session repro: 'Which one?' asked
-        // at five transcript positions — text matching anchored the
-        // answered card to the FIRST text match, far from the ask the
-        // user actually answered). The ask tool is EXCLUSIVE (one ask
-        // runs at a time) and ask.ts generates a fresh requestId per
-        // ask, so the newest UNCLAIMED ask turn matching this
-        // interaction's question id AND text is THIS ask's committed
-        // turn. Claim it now, while the interaction is the live
-        // frontier — never re-derive (repeated question text and ids
-        // make later re-derivation ambiguous by construction).
+        // IDENTITY ANCHOR — the CAUSAL rule, no text scanning: an
+        // `ask` tool call whose callId has NO paired tool_result is
+        // the PENDING ask (ask.ts settles every answered/cancelled/
+        // expired ask by returning its native result — the real
+        // session's page shows all 19 settled asks WITH results), and
+        // the ask tool is EXCLUSIVE (one pending ask at a time), so
+        // the unique un-resulted ask turn in the loaded page IS this
+        // interaction's turn — even when question text AND question
+        // ids repeat (the real session reused 'twentyfirst_demo' at
+        // five positions). Claim it while the interaction is the live
+        // frontier. Zero or MULTIPLE un-resulted ask turns = no
+        // claim (honest nil — never a guess); the page-commit
+        // back-fill in applyPage and recordResolution try again.
         if askAnchorByRequest[interaction.requestId] == nil {
             askAnchorByRequest[interaction.requestId] =
-                resolveAskAnchor(interaction: interaction)
+                resolvePendingAskAnchor()
         }
     }
 
-    /// Claims the ask turn's transcript message for an interaction:
-    /// the newest message (reverse scan) carrying an `ask` tool call
-    /// whose arguments contain the interaction's first question id
-    /// AND question text, skipping turns already claimed by another
-    /// interaction. Nil = the ask turn is not (yet) in the loaded
-    /// content — the resolution falls back to the legacy text anchor
-    /// and the back-fill in recordResolution tries again.
-    private func resolveAskAnchor(
-        interaction: AgentChatInteraction
-    ) -> UUID? {
-        guard let question = interaction.questions.first else { return nil }
-        let claimed = Set(askAnchorByRequest.values)
-        for message in content.messages.reversed() {
-            guard !claimed.contains(message.id) else { continue }
+    /// The unique un-resulted `ask` tool call's message in the loaded
+    /// content — the pending ask's turn, by structure (no text
+    /// matching). Nil when the ask turn is not committed yet, or when
+    /// the structure is ambiguous (0 or 2+ un-resulted asks — an
+    /// adapter that stops settling asks would surface here; we never
+    /// guess).
+    private func resolvePendingAskAnchor() -> UUID? {
+        var pendingAskMessages: [UUID] = []
+        for message in content.messages {
             for block in message.blocks {
                 guard case .toolCall(let call) = block,
                     call.name == "ask"
                 else { continue }
-                let leaves = Set(ChatFiltering.stringLeaves(of: call.arguments))
-                if leaves.contains(question.id),
-                    leaves.contains(question.text)
-                {
-                    return message.id
+                if !content.toolResults.contains(where: {
+                    $0.toolCallId == call.id
+                }) {
+                    pendingAskMessages.append(message.id)
                 }
             }
         }
-        return nil
+        return pendingAskMessages.count == 1
+            ? pendingAskMessages[0] : nil
+    }
+
+    /// Page-commit back-fill: the interaction.opened event can beat
+    /// the ask turn's committed page (the opened event fires while
+    /// the dialog is live; the turn commits at page refresh). Every
+    /// pending interaction without a claim retries the causal rule
+    /// against the freshly installed page — and claim-less
+    /// resolutions get their second chance too (a resolution
+    /// recorded before its turn committed; the ask is settled
+    /// broker-side but its tool_result has not committed yet, so the
+    /// turn is STILL the unique un-resulted ask. Once the result
+    /// commits, ambiguity is unresolvable — the record stays
+    /// honestly unattached).
+    private func backfillAskAnchorsFromPage() {
+        for interaction in interactions
+        where askAnchorByRequest[interaction.requestId] == nil {
+            askAnchorByRequest[interaction.requestId] =
+                resolvePendingAskAnchor()
+        }
+        for index in interactionResolutions.indices
+        where interactionResolutions[index].anchorMessageID == nil {
+            interactionResolutions[index].anchorMessageID =
+                resolvePendingAskAnchor()
+        }
     }
 
     // MARK: Pages
@@ -1619,6 +1610,10 @@ final class AgentChatStore {
             content.toolResults.insert(
                 contentsOf: results, at: 0)
         }
+        // Page-commit back-fill: pending interactions and claim-less
+        // resolutions whose ask turn just became visible retry the
+        // CAUSAL claim against the freshly installed content.
+        backfillAskAnchorsFromPage()
         if replaceRecent {
             settleOutbox(from: page.items)
             reconcileOutbox(against: messages)
