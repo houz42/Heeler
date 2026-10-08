@@ -119,6 +119,38 @@ final class MessageLinksProofTests: XCTestCase {
             ask.waitForNonExistence(timeout: UITestTimeouts.standard),
             "the ask sheet must dismiss after the choice")
     }
+
+    func testOpenHereOpensEmbeddedBrowserAfterChoice() {
+        // Real-sim regression (the localNotice binding fix dropped the
+        // browsing → safariLink wiring): choosing "Open Here" on the
+        // ask sheet must present the embedded SFSafariViewController.
+        let app = UITestApp.launchDemo(.chatMessageLinks)
+
+        let externalLink =
+            app.links["https://build.studio.example/runs/9412"].firstMatch
+        XCTAssertTrue(
+            externalLink.waitForExistence(timeout: UITestTimeouts.standard),
+            "the external link must be tappable in the transcript")
+        externalLink.tap()
+
+        let ask = app.staticTexts["How should links to this site open?"]
+            .firstMatch
+        XCTAssertTrue(
+            ask.waitForExistence(timeout: UITestTimeouts.standard),
+            "the ask sheet must present for a first-seen domain")
+
+        // "Open Here" → the embedded browser opens on the tapped URL.
+        // SFSafariViewController's remote view exposes its toolbar to
+        // the AX tree (Address field carrying the domain, Reload /
+        // Open-in-Safari buttons) — those are the assertable signal.
+        app.buttons["Open Here"].firstMatch.tap()
+        let reload = app.buttons["ReloadButton"].firstMatch
+        XCTAssertTrue(
+            reload.waitForExistence(timeout: UITestTimeouts.launch),
+            "Open Here must open the embedded browser (Safari toolbar)")
+        captureScreenshot(
+            app, "message-links-open-here-embedded", lifetime: .keepAlways)
+    }
 }
 
 /// One-off helper: waits until the element stops existing.

@@ -42,6 +42,9 @@ struct OpenersPresenter: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            .onChange(of: router.browsing) { _, url in
+                safariLink = url.map { PresentedLink(url: $0) }
+            }
             .sheet(item: $safariLink) { link in
                 SafariView(url: link.url)
                     .ignoresSafeArea(edges: .bottom)
