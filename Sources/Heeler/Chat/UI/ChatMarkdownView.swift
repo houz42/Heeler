@@ -33,7 +33,13 @@ enum ChatMarkdownTheme {
     @MainActor
     static let chat = MarkdownUI.Theme.basic
         .text {
-            FontSize(15)
+            // Review item 11: a POINTS size (FontSize(15)) pins scale
+            // to 1 and defeats both Dynamic Type and the app's
+            // reading-size setting. A RELATIVE size rides MarkdownUI's
+            // own ScaledFontSizeModifier (a .body-relative
+            // ScaledMetric): round(17 x 0.88) = 15pt at the default
+            // size, growing with the system/app text size from there.
+            FontSize(.em(0.88))
         }
         .code {
             FontFamilyVariant(.monospaced)
@@ -89,8 +95,10 @@ enum ChatMarkdownTheme {
     /// foreground never reaches the glyphs.
     @MainActor
     static func chatColored(_ color: SwiftUI.Color) -> MarkdownUI.Theme {
+        // Review item 11: no FontSize here — `chat`'s relative .em(0.88)
+        // already carries the scaled body size; restating a points size
+        // would pin scale=1 again.
         chat.text {
-            FontSize(15)
             ForegroundColor(color)
         }
     }
