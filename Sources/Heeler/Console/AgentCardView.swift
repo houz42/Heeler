@@ -65,7 +65,7 @@ struct AgentCardView: View {
                     if isPinned {
                         Image(systemName: "pin.fill")
                             .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(Color(uiColor: .secondaryLabel))
                             .accessibilityLabel("Pinned")
                     }
                     Spacer(minLength: 8)
@@ -86,9 +86,13 @@ struct AgentCardView: View {
                             Text(titleText)
                         }
                     if showsOrderUnavailable {
+                        // Fixed semantic ink: hierarchical .tertiary was
+                        // near-invisible in both modes (review D6); a
+                        // section-header-grade label keeps the honest
+                        // mark legible.
                         Text("Order unavailable")
                             .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(Color(uiColor: .secondaryLabel))
                             .lineLimit(1)
                     }
                 }
