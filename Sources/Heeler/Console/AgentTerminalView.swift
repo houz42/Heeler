@@ -1693,11 +1693,12 @@ struct AgentTerminalView: View {
         agent.agent.title.isEmpty ? agent.agent.displayName : agent.agent.title
     }
 }
+/// Preserve edge-swipe navigation after the title bar is removed.
+/// Review item 12: on regular width the terminal is the split view's
+/// DETAIL ROOT — `dismiss()` has no NavigationStack to pop, so the
+/// edge swipe routes to the owner's close path (which clears the
+/// sidebar selection). On compact width the stack pop still applies.
 private struct AgentEdgeBackGesture: View {
-    /// Review item 12: on regular width the terminal is the split view's
-    /// DETAIL ROOT — `dismiss()` has no NavigationStack to pop, so the
-    /// edge swipe routes to the owner's close path (which clears the
-    /// sidebar selection). On compact width the stack pop still applies.
     let isRegularWidth: Bool
     let dismiss: @MainActor () -> Void
     let close: @MainActor () -> Void
