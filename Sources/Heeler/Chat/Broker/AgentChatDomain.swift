@@ -416,9 +416,32 @@ struct AgentChatInteraction: Decodable, Sendable, Equatable, Identifiable {
     let requestId: String
     let generation: Int
     let kind: String
+    /// The omp producer's opaque tool-call id for the ask — the SAME
+    /// id the history page exposes as the assistant message's
+    /// tool_call block callId. The CAUSAL ORIGIN for the Q/A card's
+    /// history anchor (the adapter threads it from execute's
+    /// toolCallId through interaction.opened + interactions.list —
+    /// additive; absent on old adapters, so decoding is optional and
+    /// the anchor falls back to the structural un-resulted-ask rule).
+    var toolCallId: String?
     let questions: [AgentChatQuestion]
 
     var id: String { requestId }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestId, generation, kind, toolCallId, questions
+    }
+
+    init(
+        requestId: String, generation: Int, kind: String,
+        toolCallId: String? = nil, questions: [AgentChatQuestion]
+    ) {
+        self.requestId = requestId
+        self.generation = generation
+        self.kind = kind
+        self.toolCallId = toolCallId
+        self.questions = questions
+    }
 }
 
 struct AgentChatInteractionsResult: Decodable, Sendable, Equatable {

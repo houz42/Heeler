@@ -235,6 +235,14 @@ final class AgentChatStore {
     /// resolution record before persisting, so the archive carries the
     /// durable copy.
     @ObservationIgnored private var askAnchorByRequest: [String: UUID] = [:]
+    /// RequestIds this store saw interaction.opened for (regardless
+    /// of whether the claim succeeded — the page may lag the event).
+    /// The causal SECOND CHANCE (recordResolution / the page
+    /// back-fill) applies ONLY to these: a resolution for an
+    /// interaction we never saw open must never bind to a
+    /// CURRENT un-resulted ask that belongs to a DIFFERENT
+    /// interaction (the design pane's reachable regression case).
+    @ObservationIgnored private var seenInteractionRequests: Set<String> = []
     @ObservationIgnored private var subscribed = false
     @ObservationIgnored private var recentPageEpoch = 0
     /// Reconnect backoff after a broker-channel loss (contract: any
@@ -1394,8 +1402,18 @@ final class AgentChatStore {
     func recordResolution(_ resolution: AgentChatInteractionResolution) {
         var resolution = resolution
         if resolution.anchorMessageID == nil {
+            // The causal claim for THIS record's own interaction —
+            // either already claimed, or the SECOND CHANCE (the ask is
+            // settled broker-side but its turn's result has not
+            // committed yet, so the unique un-resulted ask turn is
+            // still identifiable). The second chance applies ONLY to
+            // interactions this store saw OPEN (seenInteractionRequests):
+            // a resolution for an interaction we never saw must never
+            // bind to a CURRENT un-resulted ask that belongs to a
+            // DIFFERENT interaction.
             let anchor = askAnchorByRequest[resolution.requestId]
-                ?? resolvePendingAskAnchor()
+                ?? (seenInteractionRequests.contains(resolution.requestId)
+                    ? resolvePendingAskAnchor() : nil)
             if let anchor {
                 askAnchorByRequest[resolution.requestId] = anchor
                 resolution.anchorMessageID = anchor
@@ -1472,10 +1490,37 @@ final class AgentChatStore {
         // frontier. Zero or MULTIPLE un-resulted ask turns = no
         // claim (honest nil — never a guess); the page-commit
         // back-fill in applyPage and recordResolution try again.
+        seenInteractionRequests.insert(interaction.requestId)
         if askAnchorByRequest[interaction.requestId] == nil {
-            askAnchorByRequest[interaction.requestId] =
-                resolvePendingAskAnchor()
+            // CAUSAL ORIGIN FIRST: the producer's own toolCallId (the
+            // same id the history page exposes as the ask tool_call
+            // block's callId) — exact, independent of page arrival and
+            // repeated text/ids. Falls back to the structural
+            // un-resulted rule when the adapter predates the field.
+            if let callID = interaction.toolCallId {
+                askAnchorByRequest[interaction.requestId] =
+                    messageID(askingForCall: callID)
+            }
+            if askAnchorByRequest[interaction.requestId] == nil {
+                askAnchorByRequest[interaction.requestId] =
+                    resolvePendingAskAnchor()
+            }
         }
+    }
+
+    /// The message whose ask tool_call block carries EXACTLY this
+    /// callId — the producer-supplied causal origin, mapped to the
+    /// transcript message identity. Nil when the turn is not in the
+    /// loaded page (the page-commit back-fill retries).
+    private func messageID(askingForCall callID: String) -> UUID? {
+        for message in content.messages {
+            for block in message.blocks {
+                if case .toolCall(let call) = block, call.id == callID {
+                    return message.id
+                }
+            }
+        }
+        return nil
     }
 
     /// The unique un-resulted `ask` tool call's message in the loaded
@@ -1506,23 +1551,84 @@ final class AgentChatStore {
     /// the ask turn's committed page (the opened event fires while
     /// the dialog is live; the turn commits at page refresh). Every
     /// pending interaction without a claim retries the causal rule
-    /// against the freshly installed page — and claim-less
-    /// resolutions get their second chance too (a resolution
-    /// recorded before its turn committed; the ask is settled
-    /// broker-side but its tool_result has not committed yet, so the
-    /// turn is STILL the unique un-resulted ask. Once the result
-    /// commits, ambiguity is unresolvable — the record stays
-    /// honestly unattached).
+    /// against the freshly installed page.
+    ///
+    /// RESOLUTIONS: the back-fill binds ONLY records with a KNOWN
+    /// causal claim path — a claim already in askAnchorByRequest for
+    /// their OWN requestId (claimed at opened/answer time; the PAGE
+    /// simply arrived late, so the claimed turn is only now
+    /// visible). It NEVER sweeps every nil-anchor record: a LEGACY
+    /// nil-anchor record (its interaction long-closed, no live
+    /// claim — the design pane's reachable case: a legacy nil-anchor
+    /// record alongside a CURRENT un-resulted ask) stays UNANCHORED
+    /// and parks at its own position; binding it to the next
+    /// unrelated current ask would fabricate history.
     private func backfillAskAnchorsFromPage() {
-        for interaction in interactions
-        where askAnchorByRequest[interaction.requestId] == nil {
-            askAnchorByRequest[interaction.requestId] =
-                resolvePendingAskAnchor()
+        for interaction in interactions {
+            seenInteractionRequests.insert(interaction.requestId)
+            if askAnchorByRequest[interaction.requestId] == nil {
+                if let callID = interaction.toolCallId {
+                    askAnchorByRequest[interaction.requestId] =
+                        messageID(askingForCall: callID)
+                }
+                if askAnchorByRequest[interaction.requestId] == nil {
+                    askAnchorByRequest[interaction.requestId] =
+                        resolvePendingAskAnchor()
+                }
+            }
         }
-        for index in interactionResolutions.indices
-        where interactionResolutions[index].anchorMessageID == nil {
-            interactionResolutions[index].anchorMessageID =
-                resolvePendingAskAnchor()
+        // Claimed-but-unstamped records only: adopt the claim their
+        // OWN interaction already holds. No claim for THIS record's
+        // requestId (legacy/closed) → leave nil, honestly.
+        for index in interactionResolutions.indices {
+            guard interactionResolutions[index].anchorMessageID == nil,
+                let claim = askAnchorByRequest[
+                    interactionResolutions[index].requestId]
+            else { continue }
+            interactionResolutions[index].anchorMessageID = claim
+        }
+    }
+
+    /// Provenance verification for PERSISTED anchors (the migration
+    /// for wrong anchors the over-binding bug already wrote): a
+    /// resolved record anchored to a message whose ask tool call has
+    /// NO committed result — the ask is still PENDING — can never
+    /// belong to that record (a resolved ask is settled and its
+    /// result exists). Such anchors are suspect and DROP to nil; the
+    /// record parks at its own position. Runs against every freshly
+    /// installed page, so archives written by the buggy build migrate
+    /// on the first load that shows the pending ask, and the (correct)
+    /// anchor a record earned while its ask was mid-settle survives
+    /// once the result commits.
+    private func verifyAnchoredResolutions() {
+        // The messages whose ask calls are still un-resulted.
+        var pendingAskMessageIDs = Set<UUID>()
+        for message in content.messages {
+            for block in message.blocks {
+                guard case .toolCall(let call) = block,
+                    call.name == "ask",
+                    !content.toolResults.contains(where: {
+                        $0.toolCallId == call.id
+                    })
+                else { continue }
+                pendingAskMessageIDs.insert(message.id)
+            }
+        }
+        guard !pendingAskMessageIDs.isEmpty else { return }
+        var migrated = false
+        for index in interactionResolutions.indices {
+            if let anchor = interactionResolutions[index].anchorMessageID,
+                pendingAskMessageIDs.contains(anchor)
+            {
+                interactionResolutions[index].anchorMessageID = nil
+                migrated = true
+            }
+        }
+        if migrated, let archive = archiveIdentity {
+            AgentChatResolutionArchiveStore.save(
+                socketPath: archive.socketPath,
+                sessionFile: archive.sessionFile,
+                resolutions: interactionResolutions)
         }
     }
 
@@ -1671,6 +1777,15 @@ final class AgentChatStore {
         // resolutions whose ask turn just became visible retry the
         // CAUSAL claim against the freshly installed content.
         backfillAskAnchorsFromPage()
+        // PROVENANCE VERIFICATION (the migration the design pane
+        // required): a RESOLVED record whose anchor points at an ask
+        // tool call with NO committed result (the ask is still
+        // PENDING) can never be that record's ask — a resolved ask is
+        // settled and its result exists. That is the signature the
+        // over-binding bug wrote (the legacy dd19290b record bound to
+        // the CURRENT ask B1138C98). Suspect anchors drop to nil: the
+        // record parks at its own position, honestly.
+        verifyAnchoredResolutions()
     }
 
     private func prependPage(_ page: AgentChatPage) async {
