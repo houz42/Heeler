@@ -143,12 +143,51 @@ final class ChatScrollCoordinator {
             .anchor, "top sentinel \(visible)")
     }
 
+    /// The user-driven scroll phases. `.tracking` is the touch-down,
+    /// `.interacting` the active drag, `.decelerating` the coast — all
+    /// three are the USER moving the content (the real-path trace
+    /// showed a slow 1.1s swipe rides .interacting, NOT .tracking:
+    /// the earlier tracking-only check never saw it and the reading
+    /// latch never engaged).
+    private static let userScrollPhases: Set<ScrollPhase> = [
+        .tracking, .interacting, .decelerating,
+    ]
+
     func scrollPhaseChanged(_ phase: ScrollPhase) {
         let idle = !phase.isScrolling
-        guard idle != scrollIdle else { return }
+        guard idle != scrollIdle else {
+            // A user-phase report while the idle flag is unchanged
+            // (tracking → interacting → decelererating all read
+            // "scrolling") still re-checks the LATCH: a drag that
+            // leaves the bottom edge MID-GESTURE must latch reading
+            // the moment the geometry shows it (the real-path trace:
+            // a slow swipe rides .interacting for its whole length
+            // and only its first report would pass a bool dedupe).
+            if Self.userScrollPhases.contains(phase) {
+                userIsScrolling = true
+                // The user's touch outranks a live automatic even
+                // mid-scroll (the probe's sequence 2: an animating
+                // follow interrupted by the user's tracking — the
+                // pending automatic must suspend immediately).
+                if position != nil {
+                    position = nil
+                    pendingLandingTargetID = nil
+                    ChatViewportLog.shared.record(
+                        .anchor,
+                        "user interruption mid-scroll — automatics suspended")
+                }
+                if followsLatest, !atBottomEdge {
+                    followsLatest = false
+                    ChatViewportLog.shared.record(
+                        .anchor,
+                        "user scroll away — reading latched mid-gesture")
+                }
+            }
+            return
+        }
         scrollIdle = idle
-        if phase == .tracking {
-            // The user's OWN touch: their intent outranks every
+        if Self.userScrollPhases.contains(phase) {
+            // The user's OWN movement: their intent outranks every
             // automatic command — a live decision is suspended (the
             // user is moving the content; any pending automatic
             // position would fight their drag), and their scroll is
@@ -160,18 +199,26 @@ final class ChatScrollCoordinator {
                 ChatViewportLog.shared.record(
                     .anchor, "user interaction — automatics suspended")
             }
-            // The silent-sentinel intent path (trace104's platform
-            // finding): the bottom sentinel can stop reporting once
-            // its lazy row dematerializes, so the user's scroll away
-            // from the edge must latch READING from THEIR tracking
-            // alone whenever the measured geometry says the edge is
-            // off screen — never waiting on a sentinel report that
-            // may never come.
+            // The reading LATCH (the silent-sentinel path, trace104's
+            // platform finding): the bottom sentinel can stop
+            // reporting once its lazy row dematerializes, so the
+            // user's scroll away from the edge latches READING from
+            // their movement + the measured geometry — and stays
+            // latched for the WHOLE gesture (every user phase report
+            // re-checks, so a drag that leaves the edge mid-swipe
+            // latches the moment it does).
             if followsLatest, !atBottomEdge {
                 followsLatest = false
                 ChatViewportLog.shared.record(
                     .anchor, "user scroll away — reading latched (geometry)")
             }
+        }
+        if phase == .animating {
+            // A programmatic follow's animation is NOT the user: the
+            // gesture flag must not stay stale-true from a prior
+            // drag (the probe's sequence 2: animating->tracking —
+            // the user's interruption re-arms it below).
+            userIsScrolling = false
         }
         if idle {
             userIsScrolling = false
@@ -214,6 +261,17 @@ final class ChatScrollCoordinator {
             bottomEdgeVisible = atBottomEdge
             ChatViewportLog.shared.record(
                 .anchor, "geometry reconcile: edge \(atBottomEdge)")
+        }
+        // THE USER-MOVEMENT INTENT LATCH (the probe's root cause a):
+        // when the USER's own gesture is in flight and the measured
+        // geometry leaves the bottom edge, the reader's intent IS
+        // reading — the drag that starts AT the edge and moves off
+        // it latches the moment it does, not only at a phase report
+        // that happened to arrive after the departure.
+        if userIsScrolling, followsLatest, !atBottomEdge, new.overflows {
+            followsLatest = false
+            ChatViewportLog.shared.record(
+                .anchor, "user drag left the edge — reading latched")
         }
         guard old == nil else {
             revalidateAfterGeometryChange()

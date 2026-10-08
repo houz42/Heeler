@@ -294,6 +294,68 @@ final class ChatViewportProofTests: XCTestCase {
         captureScreenshot(app, "lifecycle-send-at-bottom-reveals-message")
     }
 
+    // MARK: Real-gesture reading (the .interacting regression)
+
+    func testRealSwipeAwayThenGrowthHoldsAnchorNoYank() {
+        let app = launchLifecycleChat()
+        assertVisibleMessage("Message 39 from the agent", in: app)
+
+        // A REAL user drag away (XCUITest's swipe drives the true
+        // scroll phases: .tracking/.interacting/.decelerating — the
+        // device regression was a slow swipe whose phase reports
+        // were .interacting and the reading latch never engaged).
+        let scrollArea = app.scrollViews.firstMatch
+        XCTAssertTrue(scrollArea.waitForExistence(timeout: UITestTimeouts.standard))
+        scrollArea.swipeUp(velocity: .slow)
+
+        // The reader is now mid-history with a real gesture latched:
+        // capture the message they are actually READING (a
+        // materialized 'Message N' element intersecting the window).
+        let window = app.windows.firstMatch
+        let candidates = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label MATCHES %@", "Message \\d+ from the (user|agent).*"))
+        var anchorLabel: String?
+        var anchorFrame: CGRect?
+        for index in 0..<candidates.count where anchorLabel == nil {
+            let element = candidates.element(boundBy: index)
+            if element.exists, window.frame.intersects(element.frame) {
+                anchorLabel = element.label
+                anchorFrame = element.frame
+            }
+        }
+        let anchor = anchorLabel ?? ""
+        XCTAssertFalse(
+            anchor.isEmpty,
+            "no readable message was on screen after the swipe — the reader never got away from the bottom edge")
+
+        // THE GROWTH: Send while reading (latched) — no follow-latest
+        // command may fire; the reader's position holds.
+        app.buttons["Send"].tap()
+        // Give the full growth cycle time to land.
+        Thread.sleep(forTimeInterval: 2.0)
+
+        // The INVARIANT: content grew but the reader was NOT yanked —
+        // THE SAME message they were reading still intersects the
+        // viewport, and the Latest control is still offered (the
+        // viewport did not jump to the new bottom).
+        let latestButton = app.buttons["Latest message"]
+        XCTAssertTrue(latestButton.exists, "the Latest control should be visible while reading mid-history")
+        let held = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label == %@", anchor)).firstMatch
+        XCTAssertTrue(held.exists, "the message the reader was reading ('\(anchor)') vanished entirely")
+        XCTAssertTrue(
+            window.frame.intersects(held.frame),
+            "the reader was yanked off their position by the growth — the interacting-phase reading latch failed")
+        if let before = anchorFrame {
+            let drift = abs(held.frame.midY - before.midY)
+            XCTAssertTrue(
+                drift < 200,
+                "the reading anchor moved \(drift)pt when content grew — the viewport jumped")
+        }
+
+        captureScreenshot(app, "lifecycle-real-swipe-holds-while-reading")
+    }
+
     // MARK: Slow reading while content grows (the reading latch)
 
     func testSlowReadWhileStreamingHoldsPositionNoYank() {
