@@ -148,7 +148,14 @@ final class QACardProofTests: XCTestCase {
         captureScreenshot(app, "qa-card-answered-recollapsed", lifetime: .keepAlways)
 
         // Expand the export card too: the multi-select answer renders
-        // its selected labels as CHIPS in producer order.
+        // its selected labels as CHIPS in producer order. The export
+        // card sits ABOVE the long card; scroll back up first — the
+        // transcript is a LazyVStack and an offscreen row is correctly
+        // NOT materialized (242a9ec2's footer removal shortened the
+        // cards enough that the answered row leaves the lazy window
+        // once the long card is expanded; this check is about the
+        // card's CONTENT, not the lazy window).
+        app.swipeDown()
         let exportCard = app.descendants(matching: .any)
             .matching(identifier: "resolved-ask-card-demo-qa-answered").firstMatch
         XCTAssertTrue(
