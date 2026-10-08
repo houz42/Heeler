@@ -560,6 +560,15 @@ struct ChatScreen: View {
         .onChange(of: hostName) { _, newValue in
             openRouter.hostName = newValue
         }
+        .modifier(
+            ChatOpenersSurface(
+                router: openRouter,
+                fetch: fetch ?? { _ in throw CocoaError(.fileNoSuchFile) }))
+        // Outside-tap dismisses the open message-actions rail (taps
+        // on a message row win the gesture over this — they toggle
+        // the rail instead). LOST in the jump-pill rework (7b65fd35)
+        // and restored per review.
+        .onTapGesture { dismissActions() }
         // The terminal Attach surface's jump chrome, adapted: one
         // floating pill on the trailing edge, up = oldest loaded,
         // down = latest. Review D5 rework: the pill is TRANSIENT —
@@ -1442,7 +1451,9 @@ struct ChatScreen: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .frame(width: 36, height: 36)
+        // The visual circle stays 36pt (review item 16); the FRAME
+        // grows the real hit target to the 44pt scale.
+        .frame(minWidth: 44, minHeight: 44)
         .background(
             Color(uiColor: .secondarySystemFill).opacity(0.55),
             in: Circle())
@@ -1473,6 +1484,10 @@ struct ChatScreen: View {
                     in: Circle())
         }
         .buttonStyle(.plain)
+        // The visual circle stays 28pt (review item 16); the FRAME
+        // grows the real hit target to the 44pt scale, like the
+        // pending-entry actions and the jump pill's buttons.
+        .frame(minWidth: 44, minHeight: 44)
         .disabled(!canSend || isSending)
         .accessibilityLabel("Send")
     }
