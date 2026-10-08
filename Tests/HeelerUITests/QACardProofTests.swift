@@ -215,6 +215,41 @@ final class QACardProofTests: XCTestCase {
         captureScreenshot(app, "qa-card-flipped-answered", lifetime: .keepAlways)
     }
 
+    /// THE REPEATED-QUESTION REPRO (real-session root cause): the
+    /// SAME question text ('Which one?') asked twice; the answered
+    /// card must anchor to the SECOND ask — by IDENTITY, never the
+    /// first text match. Pinned by a11y ORDER: the card's frame sits
+    /// between the second ask turn and its 'You picked Medium' reply.
+    func testRepeatedQuestionAnsweredCardAnchorsToItsOwnAsk() {
+        let app = launchQACards()
+
+        // The answered card for the repeated question.
+        let card = app.descendants(matching: .any)
+            .matching(identifier: "resolved-ask-card-demo-qa-repeated")
+            .firstMatch
+        XCTAssertTrue(
+            card.waitForExistence(timeout: UITestTimeouts.standard),
+            "the repeated-question answered card must render")
+
+        // ORDER: the card's minY must be BELOW (after) the second
+        // ask's L2 tool-call row region and ABOVE the 'You picked
+        // Medium' reply. Concretely: the card sits above the reply —
+        // and below the FIRST ask turn (the pre-fix bug placed it at
+        // the first text match, far above).
+        let cardY = card.frame.minY
+        let reply = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label CONTAINS %@", "You picked Medium")
+        ).firstMatch
+        XCTAssertTrue(
+            reply.waitForExistence(timeout: UITestTimeouts.standard),
+            "the second ask's reply must render")
+        XCTAssertTrue(
+            cardY < reply.frame.minY,
+            "the card must render BEFORE its ask's reply")
+
+        captureScreenshot(app, "qa-card-repeated-anchor", lifetime: .keepAlways)
+    }
+
     func testHonestOutcomeCardsRender() {
         let app = launchQACards()
         app.swipeUp()

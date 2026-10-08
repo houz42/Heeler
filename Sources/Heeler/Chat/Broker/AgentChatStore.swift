@@ -225,6 +225,12 @@ final class AgentChatStore {
     /// (the answer path) upgrades the record to our labels.
     @ObservationIgnored private var submittedAnswers:
         [String: AgentChatInteractionResolution] = [:]
+    /// The ask turn's transcript message UUID per requestId — the
+    /// IDENTITY anchor claimed at interaction.opened time (see
+    /// upsertInteraction). In-memory only: it is stamped onto the
+    /// resolution record before persisting, so the archive carries the
+    /// durable copy.
+    @ObservationIgnored private var askAnchorByRequest: [String: UUID] = [:]
     @ObservationIgnored private var subscribed = false
     @ObservationIgnored private var recentPageEpoch = 0
     /// Reconnect backoff after a broker-channel loss (contract: any
@@ -1365,8 +1371,18 @@ final class AgentChatStore {
     /// same-id event only via explicit re-record, which never happens)
     /// and appends in first-record order — then persists the whole
     /// list to the archive so a NEW store (detail reopen, app
-    /// relaunch) reconstructs the history.
+    /// relaunch) reconstructs the history. Before persisting, the
+    /// IDENTITY anchor is stamped: the claimed ask-turn message UUID
+    /// (from upsertInteraction) or a fresh back-fill attempt (the ask
+    /// turn may have entered the loaded page after the opened event —
+    /// applyPage does not re-derive claims, this is the second chance).
     func recordResolution(_ resolution: AgentChatInteractionResolution) {
+        var resolution = resolution
+        if resolution.anchorMessageID == nil {
+            resolution.anchorMessageID =
+                askAnchorByRequest[resolution.requestId]
+                ?? backfillAskAnchor(for: resolution)
+        }
         interactionResolutions.removeAll {
             $0.requestId == resolution.requestId
         }
@@ -1377,6 +1393,44 @@ final class AgentChatStore {
                 sessionFile: archive.sessionFile,
                 resolutions: interactionResolutions)
         }
+    }
+
+    /// The second-chance anchor claim for a resolution whose opened
+    /// event could not see the ask turn yet (page lag): find the
+    /// interaction's question in the held content the same way
+    /// resolveAskAnchor does. Requires the interaction to still be
+    /// held (a resolution arriving for an interaction we never saw
+    /// open has NOTHING to match on — it stays text-anchored).
+    private func backfillAskAnchor(
+        for resolution: AgentChatInteractionResolution
+    ) -> UUID? {
+        guard let questionText = resolution.questionText,
+            !questionText.isEmpty
+        else { return nil }
+        // Match like resolveAskAnchor but from the question TEXT alone
+        // (the interaction may already be gone); the newest unclaimed
+        // ask turn carrying that text. Ambiguity remains possible for
+        // text-only back-fills — but this path only fires when the
+        // identity claim failed, and the newest-unclaimed rule is
+        // still strictly better than the legacy FIRST-text-match.
+        let claimed = Set(askAnchorByRequest.values)
+            .union(
+                interactionResolutions.compactMap(\.anchorMessageID))
+        for message in content.messages.reversed() {
+            guard !claimed.contains(message.id) else { continue }
+            for block in message.blocks {
+                guard case .toolCall(let call) = block,
+                    call.name == "ask"
+                else { continue }
+                if Set(ChatFiltering.stringLeaves(of: call.arguments))
+                    .contains(questionText)
+                {
+                    askAnchorByRequest[resolution.requestId] = message.id
+                    return message.id
+                }
+            }
+        }
+        return nil
     }
 
     /// Delivery contract (matched, unchanged): the authoritative
@@ -1425,6 +1479,49 @@ final class AgentChatStore {
         } else {
             interactions.append(interaction)
         }
+        // IDENTITY ANCHOR (the real-session repro: 'Which one?' asked
+        // at five transcript positions — text matching anchored the
+        // answered card to the FIRST text match, far from the ask the
+        // user actually answered). The ask tool is EXCLUSIVE (one ask
+        // runs at a time) and ask.ts generates a fresh requestId per
+        // ask, so the newest UNCLAIMED ask turn matching this
+        // interaction's question id AND text is THIS ask's committed
+        // turn. Claim it now, while the interaction is the live
+        // frontier — never re-derive (repeated question text and ids
+        // make later re-derivation ambiguous by construction).
+        if askAnchorByRequest[interaction.requestId] == nil {
+            askAnchorByRequest[interaction.requestId] =
+                resolveAskAnchor(interaction: interaction)
+        }
+    }
+
+    /// Claims the ask turn's transcript message for an interaction:
+    /// the newest message (reverse scan) carrying an `ask` tool call
+    /// whose arguments contain the interaction's first question id
+    /// AND question text, skipping turns already claimed by another
+    /// interaction. Nil = the ask turn is not (yet) in the loaded
+    /// content — the resolution falls back to the legacy text anchor
+    /// and the back-fill in recordResolution tries again.
+    private func resolveAskAnchor(
+        interaction: AgentChatInteraction
+    ) -> UUID? {
+        guard let question = interaction.questions.first else { return nil }
+        let claimed = Set(askAnchorByRequest.values)
+        for message in content.messages.reversed() {
+            guard !claimed.contains(message.id) else { continue }
+            for block in message.blocks {
+                guard case .toolCall(let call) = block,
+                    call.name == "ask"
+                else { continue }
+                let leaves = Set(ChatFiltering.stringLeaves(of: call.arguments))
+                if leaves.contains(question.id),
+                    leaves.contains(question.text)
+                {
+                    return message.id
+                }
+            }
+        }
+        return nil
     }
 
     // MARK: Pages
