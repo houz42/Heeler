@@ -183,6 +183,18 @@ Entries reference the issue that motivated them.
     action with "Trust" as the deliberate second step.
   - On iPad, the Host form and the Settings stack cap at a readable
     column width instead of running edge to edge.
+  - The nav bar's quick-state chips (All / Needs you / Working) show a
+    compact label at accessibility text sizes, so the chip trio no
+    longer overflows the bar's row; VoiceOver still reads the full
+    label ("Needs you filter").
+  - Pairing ceremony step rows announce their status to VoiceOver
+    ("Reach the Host, Completed") instead of showing it by glyph
+    colour alone.
+  - The detail-level switcher's menu rows carry the selected trait, so
+    VoiceOver announces the current level, not just its accent tint.
+  - The composer's placeholder is hidden from VoiceOver: the field
+    already carries "Message the Agent" as its label, so the
+    placeholder text is no longer read twice.
 
 ### Fixed
 
