@@ -241,6 +241,19 @@ struct ChatScreen: View {
     /// newest-end button.
     @State private var bottomSentinelVisible = false
 
+    /// Whether the floating jump pill is showing either button. Rows
+    /// reserve a trailing gutter only while it does (review D5).
+    private var showsJumpControl: Bool {
+        (!topSentinelVisible && !rows.isEmpty) || !bottomSentinelVisible
+    }
+
+    /// The trailing gutter a phone row reserves while the jump pill is
+    /// visible: the pill's 44pt width + the 8pt edge inset + 8pt
+    /// clearance, so content never renders under the floating control.
+    static let jumpControlGutter: CGFloat = 60
+
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
     /// The shared reading-size choice (#A settings revision, review
     /// finding 4): applied to the TRANSCRIPT content only — reading
     /// text, never the chrome (status strip, composer, nav bar keep
@@ -397,6 +410,18 @@ struct ChatScreen: View {
                 ForEach(items) { item in
                     transcriptView(for: item)
                         .padding(.horizontal, 12)
+                        // The jump pill's trailing gutter (review D5):
+                        // on phones the floating pill overlapped the
+                        // trailing glyphs of long user bubbles and the
+                        // right border of Q/A cards. While the pill is
+                        // visible, rows reserve its width plus clearance
+                        // as a trailing inset instead of letting content
+                        // slide under it. iPads never pay it — the
+                        // reading column already sits clear of the edge.
+                        .padding(
+                            .trailing,
+                            horizontalSizeClass == .compact && showsJumpControl
+                                ? Self.jumpControlGutter : 0)
                         // Readable-width column (HIG): on wide iPad
                         // layouts assistant prose and Q/A cards otherwise
                         // run edge-to-edge at ~140 characters a line.
@@ -497,7 +522,10 @@ struct ChatScreen: View {
         // Vertically centred on purpose: the bottom-trailing corner is
         // where the newest row's trailing controls (a pending card's
         // Cancel, a bubble's last line) sit at rest, and the pill
-        // covered them there.
+        // covered them there. On phones, the rows themselves reserve
+        // `jumpControlGutter` while the pill shows (`showsJumpControl`
+        // mirrors these conditions), so content never renders beneath
+        // it (review D5).
         // Routed through the scroll coordinator (the single
         // scroll-command owner) so a jump can never interleave with a
         // viewport repair.
