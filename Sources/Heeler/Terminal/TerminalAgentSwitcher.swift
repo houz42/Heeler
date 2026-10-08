@@ -450,7 +450,6 @@ final class TerminalAgentChip: UIControl {
         if pinView.isHidden != !item.isPinned {
             pinView.isHidden = !item.isPinned
         }
-        dot.backgroundColor = item.status.inkUIColor
         dot.tintColor = item.status.inkUIColor
         statusGlyphName = Self.statusSymbol(for: item.status)
         backgroundColor = selected ? .tertiarySystemBackground : .clear
