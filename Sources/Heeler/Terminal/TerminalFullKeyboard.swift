@@ -192,6 +192,17 @@ private struct TerminalKeyboardKeyCap: View {
     var fontSize: CGFloat = 13
     let action: () -> Void
 
+    /// Review item 31: fixed key-cap points sizes (15/13) never scale.
+    /// Map them to the nearest TEXT STYLES (15 -> .subheadline, 13 ->
+    /// .caption) so they grow with Dynamic Type; minimumScaleFactor
+    /// still keeps long caps inside their key.
+    private var scaledFont: SwiftUI.Font {
+        .system(
+            fontSize >= 14 ? .subheadline : .caption,
+            design: .default)
+            .weight(.medium)
+    }
+
     var body: some View {
         Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -206,7 +217,7 @@ private struct TerminalKeyboardKeyCap: View {
                         .minimumScaleFactor(0.7)
                 }
             }
-            .font(.system(size: fontSize, weight: .medium))
+            .font(scaledFont)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(.rect)
         }

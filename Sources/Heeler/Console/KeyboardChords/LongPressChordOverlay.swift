@@ -135,7 +135,8 @@ struct LongPressChordOverlay: View {
                     fire(variant)
                 } label: {
                     Text(variant.title)
-                        .font(.system(size: 13, weight: .medium))
+                        // Review item 31: fixed 13pt -> scaling caption style.
+                        .font(.system(.caption, design: .default).weight(.medium))
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
                         .frame(width: 46, height: 34)
