@@ -1445,18 +1445,20 @@ struct ChatScreen: View {
                     sections: AgentActionMenuPolicy.composerAddSections)
             }
         } label: {
+            // Review item 16 (round-3 correction): a .plain Button
+            // hit-tests its LABEL's content shape, so the 44pt target
+            // must live INSIDE the label; and the visible circle
+            // background applies BEFORE the frame so it stays 36pt.
             Image(systemName: "plus")
                 .font(.system(size: 17, weight: .semibold))
                 .frame(width: 30, height: 30)
-                .contentShape(Circle())
+                .background(
+                    Color(uiColor: .secondarySystemFill).opacity(0.55),
+                    in: Circle())
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        // The visual circle stays 36pt (review item 16); the FRAME
-        // grows the real hit target to the 44pt scale.
-        .frame(minWidth: 44, minHeight: 44)
-        .background(
-            Color(uiColor: .secondarySystemFill).opacity(0.55),
-            in: Circle())
         .accessibilityLabel("Add")
         .accessibilityHint(
             "Commands, filters, mentions, or an image or file for the draft")
@@ -1471,6 +1473,9 @@ struct ChatScreen: View {
         Button {
             sendDraft()
         } label: {
+            // Review item 16 (round-3 correction): the 44pt hit target
+            // lives INSIDE the label (a .plain Button hit-tests the
+            // label's content shape); the visual circle stays 28pt.
             Image(systemName: "arrow.up")
                 .font(.system(size: 14, weight: .bold))
                 .foregroundStyle(
@@ -1482,12 +1487,10 @@ struct ChatScreen: View {
                         ? Color.accentColor
                         : Color(uiColor: .secondarySystemFill),
                     in: Circle())
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        // The visual circle stays 28pt (review item 16); the FRAME
-        // grows the real hit target to the 44pt scale, like the
-        // pending-entry actions and the jump pill's buttons.
-        .frame(minWidth: 44, minHeight: 44)
         .disabled(!canSend || isSending)
         .accessibilityLabel("Send")
     }
