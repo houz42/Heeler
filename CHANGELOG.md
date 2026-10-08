@@ -195,6 +195,20 @@ Entries reference the issue that motivated them.
   - The composer's placeholder is hidden from VoiceOver: the field
     already carries "Message the Agent" as its label, so the
     placeholder text is no longer read twice.
+  - Chat markdown body text scales with Dynamic Type and the in-app
+    reading-size setting instead of a fixed 15pt.
+  - The terminal's edge-back swipe works in the iPad split view: the
+    gesture measures in the pane's own coordinates and routes to the
+    owner's close path instead of a no-op dismiss.
+  - Q/A card borders adapt to dark mode instead of glaring as literal
+    light-only mint-grey.
+  - The composer's Send and + controls reach 44pt hit targets while
+    keeping their compact visual circles.
+  - Fixed 7-8pt micro-labels (draft-tile captions, host route and
+    connection dots, the image "Unavailable" mark) and the terminal
+    key-cap fonts follow Dynamic Type instead of fixed point sizes.
+  - Under Reduce Motion the navigation drawer unmounts immediately on
+    settle instead of lingering out its animation window.
 
 ### Fixed
 
