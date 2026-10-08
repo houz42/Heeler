@@ -1716,6 +1716,32 @@ final class AgentChatStore {
                 }
             }
         }
+        // R4 — CONSERVATIVE TRUST (the design pane's direction): an
+        // anchor is TRUSTED only when PROVEN — the record's causal
+        // origin matches the anchored ask's callId (R2's positive
+        // form), OR the record was claimed by THIS store session's
+        // causal path (askAnchorByRequest holds its live claim, so
+        // the binding was earned, not swept). Everything else — a
+        // stored anchor with no origin and no live claim — parks
+        // unattached: unverifiable is NOT trusted. The answer
+        // CONTENT stays; only the wrong-or-unprovable position is
+        // lost, and a record whose own interaction origin becomes
+        // known re-earns its anchor through the back-fill.
+        for index in interactionResolutions.indices {
+            guard let anchor = interactionResolutions[index].anchorMessageID
+            else { continue }
+            let originProven =
+                interactionResolutions[index].originToolCallID != nil
+                && askCallByMessage[anchor]
+                    == interactionResolutions[index].originToolCallID
+            let liveClaimed =
+                askAnchorByRequest[
+                    interactionResolutions[index].requestId] == anchor
+            if !originProven && !liveClaimed {
+                interactionResolutions[index].anchorMessageID = nil
+                migrated = true
+            }
+        }
         if migrated, let archive = archiveIdentity {
             AgentChatResolutionArchiveStore.save(
                 socketPath: archive.socketPath,

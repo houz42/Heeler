@@ -475,6 +475,63 @@ struct ChatRealAskAnchorTests {
                 && currentAfter?.anchorMessageID == nil,
             "unverifiable duplicate contention drops both — never a wrong card kept")
     }
+
+    @Test("MIGRATION R4 (conservative trust): a single UNVERIFIABLE anchor on a completed ask parks — no origin, no live claim")
+    func unverifiableAnchorParksConservatively() async throws {
+        // The strictest case from the design pane's direction: a
+        // stored anchor whose ask is COMPLETED (result exists, so R1
+        // passes), with NO causal origin on the record (pre-origin
+        // build) and NO live claim (reopened store) — even WITHOUT
+        // contention. Unverifiable is not trusted: the anchor parks;
+        // the answer content stays.
+        let sessionFile = "/s/mig4-\(UUID().uuidString)"
+        // d14d2f7f-style record from the real 3ebd0d25 evidence
+        // archive: anchored, no origin, its ask long closed.
+        var unverifiable = AgentChatInteractionResolution(
+            requestId: "d14d2f7f-unverifiable", kind: .youAnswered,
+            questionText: "Which one?",
+            questionAnswers: [
+                .init(
+                    questionId: "sml_demo", question: "Which one?",
+                    selections: [
+                        .init(optionId: "idx:1", label: "Medium")
+                    ],
+                    customText: nil, note: nil)
+            ])
+        unverifiable.anchorMessageID =
+            AgentChatMapper.stableID(for: "msg-ask-2")
+        // NO originToolCallID (pre-origin build) and NO live claim.
+        AgentChatResolutionArchiveStore.save(
+            socketPath: "/tmp/chat.sock", sessionFile: sessionFile,
+            resolutions: [unverifiable])
+        defer {
+            if let url = AgentChatResolutionArchiveStore.archiveURL(
+                socketPath: "/tmp/chat.sock", sessionFile: sessionFile) {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+
+        let harness = await Harness(
+            sessionFile: sessionFile, initiallySettled: true)
+        defer { await harness.tearDown() }
+        let store = harness.store
+        for _ in 0..<100 where store.content.messages.isEmpty {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        try? await Task.sleep(for: .milliseconds(300))
+
+        let parked = store.interactionResolutions.first {
+            $0.requestId == "d14d2f7f-unverifiable"
+        }
+        // The anchor parked (unverifiable), the answer content kept.
+        #expect(
+            parked?.anchorMessageID == nil,
+            "an unverifiable anchor parks conservatively")
+        #expect(
+            parked?.questionAnswers?.first?.selections.first?.label
+                == "Medium",
+            "the answer CONTENT survives the migration — only the position is lost")
+    }
 }
 
 /// A reference box the broker task flips when the ask settles (the
