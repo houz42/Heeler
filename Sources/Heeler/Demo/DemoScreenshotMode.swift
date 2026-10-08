@@ -248,6 +248,17 @@
         private let route = DemoScreenshotMode.Route.fromArguments()
 
         init() {
+            // Demo launches are deterministic captures/proofs: a browse
+            // decision persisted by a PREVIOUS run (e.g. an "Open Here"
+            // tap in the message-links proof) must not change the next
+            // run's first-tap behavior. The openers suite is demo-local
+            // state here — production launches never run this code.
+            if let defaults = UserDefaults(
+                suiteName: ChatLinkAllowlistStore.suiteName)
+            {
+                defaults.removePersistentDomain(
+                    forName: ChatLinkAllowlistStore.suiteName)
+            }
             let composition = DemoScreenshotComposition.make()
             _hosts = State(initialValue: composition.hosts)
             _console = State(initialValue: composition.console)
