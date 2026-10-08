@@ -41,10 +41,13 @@ struct AgentListCountBarView: View {
                     // The design's .agent-list-viewbar: color var(--accent)
                     // — the accent green, not muted (v2 directive).
                     // At accessibility sizes the two-label compound
-                    // ("None · Herdr order") ellipsized into "Herdr o…";
-                    // the button wraps and, when even that will not fit
-                    // the bar's row, falls back to the leading word pair
-                    // (the a11y value still carries both labels in full).
+                    // ("None · Herdr order") ellipsized into "Herdr o…",
+                    // so the label WRAPS (no lineLimit; fixedSize grants
+                    // the vertical growth) instead; and when even a
+                    // wrapped compound will not fit the bar's row, the
+                    // shortLabel pair keeps it to one short line (the
+                    // a11y value still carries both labels in full
+                    // either way).
                     Text(
                         dynamicTypeSize.isAccessibilitySize
                             ? "\(layoutStore.grouping.shortLabel) · \(layoutStore.order.shortLabel)"
@@ -52,7 +55,7 @@ struct AgentListCountBarView: View {
                     )
                         .font(.caption)
                         .foregroundStyle(Color.accentColor)
-                        .lineLimit(1)
+                        .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
                     Image(systemName: "chevron.up.chevron.down")
                         .font(.caption2.weight(.semibold))

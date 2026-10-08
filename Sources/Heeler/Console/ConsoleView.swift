@@ -605,9 +605,12 @@ struct ConsoleView: View {
                             }
                         } header: {
                             // Standard section-header styling (review D6):
-                            // fixed secondaryLabel ink (hierarchical
-                            // .secondary washed out in dark mode) rather
-                            // than a faded one-off.
+                            // fixed secondaryLabel ink rather than the
+                            // previous hierarchical .tertiary, which was
+                            // near-invisible in dark mode. (Plain
+                            // .secondary resolves to secondaryLabel too —
+                            // the defect was the .tertiary level, not
+                            // hierarchical vs fixed styling.)
                             Text("Pinned")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(Color(uiColor: .secondaryLabel))

@@ -86,10 +86,10 @@ struct AgentCardView: View {
                             Text(titleText)
                         }
                     if showsOrderUnavailable {
-                        // Fixed semantic ink: hierarchical .tertiary was
-                        // near-invisible in both modes (review D6); a
-                        // section-header-grade label keeps the honest
-                        // mark legible.
+                        // Fixed semantic ink (review D6): the mark sat at
+                        // hierarchical .tertiary, which is near-invisible
+                        // in dark mode; secondaryLabel — the same ink a
+                        // section header uses — keeps it legible.
                         Text("Order unavailable")
                             .font(.caption2)
                             .foregroundStyle(Color(uiColor: .secondaryLabel))
