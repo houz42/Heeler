@@ -96,6 +96,24 @@ Entries reference the issue that motivated them.
   hide entirely at the Text detail level, show as chips at Tools and
   Results, and start expanded (full body visible, tap to collapse) at
   the Thinking level; tapping a chip always toggles the full body.
+- Per-Host automatic route selection. Each saved route carries an
+  eligibility gate (Any network / Wi-Fi only) and the Host carries a
+  selection: Automatic (default) dials the saved priority order through
+  the REAL dial path — eligibility-gated against the current network
+  hint — while a manual pin dials exactly its route and is never
+  silently overridden. The Host detail's Routes section shows the
+  selection with a visible way back to Automatic, per-route probe
+  statuses with latency as a diagnostic, Check routes with in-flight
+  feedback and per-route results as they land, and a priority &
+  eligibility editor; a failed connect offers Try another route /
+  Return to automatic above the list. Route names describe saved
+  endpoints; the app never claims to see which VPN client is active
+  ("Using Local network", never "Tailscale is on"). Auth and host-key
+  failures show as themselves — never as unreachable, never weakened.
+  Hosts saved before route settings keep the v1 address selector
+  unchanged. Foreground returns re-probe and, when a route now answers,
+  redial through the plan; connected Hosts are never re-dialed
+  (stickiness).
 - A Host can carry additional addresses for the same machine (home LAN and
   VPN, for example). The Host form gives each address its own row (add,
   remove, reorder; the primary address always stays), the Host detail page

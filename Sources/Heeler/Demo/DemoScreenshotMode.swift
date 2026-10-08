@@ -45,6 +45,17 @@
             /// The chat surface with a pending multi-select ask — the
             /// accent-bearing pending-card capture surface (Confirm
             /// button + selected-option chip). v2 accent proofs.
+            /// The Host detail page with the v2 route surface (Automatic,
+            /// probed statuses).
+            case hostRoutes
+            /// The Host detail page with the v2 route surface pinned
+            /// manually after a reach failure.
+            case hostRoutesPinnedFailed
+            /// The Host detail page with the v2 route surface pinned to
+            /// a HEALTHY route (visible Return-to-automatic, no offer).
+            case hostRoutesPinnedHealthy
+            /// The v2 priority/eligibility editor.
+            case hostRouteEditor
             case chatPendingAsk
             /// The chat surface with the v3 Q/A cards: an unanswered
             /// TWO-question ask (multi-select + single-choice-with-
@@ -116,6 +127,16 @@
 
             static func fromArguments() -> Route {
                 let arguments = ProcessInfo.processInfo.arguments
+                if arguments.contains(hostRouteEditorLaunchArgument) {
+                    return .hostRouteEditor
+                }
+                if arguments.contains(hostRoutesPinnedHealthyLaunchArgument) {
+                    return .hostRoutesPinnedHealthy
+                }
+                if arguments.contains(hostRoutesPinnedFailedLaunchArgument) {
+                    return .hostRoutesPinnedFailed
+                }
+                if arguments.contains(hostRoutesLaunchArgument) { return .hostRoutes }
             if arguments.contains(tasksInspectorLaunchArgument) { return .tasksInspector }
             if arguments.contains(tasksInspectorChildRunLaunchArgument) { return .tasksInspectorChildRun }
                 if arguments.contains(pairingPasteLaunchArgument) { return .pairingPaste }
@@ -155,6 +176,35 @@
         static let tasksInspectorLaunchArgument = "--demo-tasks-inspector"
         static let tasksInspectorChildRunLaunchArgument = "--demo-tasks-inspector-childrun"
         static let chatMessageLinksLaunchArgument = "--demo-chat-message-links"
+        static let hostRoutesLaunchArgument = "--demo-host-routes"
+        static let hostRoutesPinnedFailedLaunchArgument =
+            "--demo-host-routes-pinned-failed"
+        static let hostRoutesPinnedHealthyLaunchArgument =
+            "--demo-host-routes-pinned-healthy"
+        static let hostRouteEditorLaunchArgument = "--demo-host-route-editor"
+
+        /// MainActor holder for the pinned-healthy route demo's
+        /// process-lifetime state: the host fixture and the catalog are
+        /// created ONCE so every body evaluation of the demo root hands
+        /// the wrapper and the route store the SAME catalog instance —
+        /// pin/unpin round-trips through one catalog, exactly like
+        /// production.
+        @MainActor
+        enum RoutedPinnedHealthyDemo {
+            /// Multipath Host pinned to its Bonjour path with a
+            /// Wi-Fi-only gate on the VPN path — a genuine v2 Host for
+            /// the capture and the unpin proof.
+            static let host: Host = {
+                var host = multipathHost
+                host.routeSelection = .manual(address: "CMF79KM7YF.local")
+                host.routeEligibility = ["studio.vpn.example": .wifiOnly]
+                return host
+            }()
+
+            /// The catalog containing the demo Hosts plus this one.
+            static let catalog: HostStore = HostStore(
+                volatileHosts: DemoScreenshotFixture.hosts + [host])
+        }
 
         /// The multi-path demo Host: the same machine over LAN and VPN.
         static let multipathHost = Host(
@@ -280,6 +330,18 @@
 
             case .chatComposer:
                 ChatComposerDemoSurface()
+            case .hostRoutes:
+                routedDetail(pinnedFailed: false)
+            case .hostRoutesPinnedFailed:
+                routedDetail(pinnedFailed: true)
+            case .hostRoutesPinnedHealthy:
+                routedDetailPinnedHealthy()
+            case .hostRouteEditor:
+                NavigationStack {
+                    HostRouteEditorView(
+                        host: DemoScreenshotMode.multipathHost,
+                        catalog: hosts)
+                }
             }
         }
 
@@ -1010,6 +1072,85 @@
             return .l1
         }
 
+        /// The healthy-pinned v2 surface: the pin's route is reachable
+        /// and in use, Return to automatic visible, no failure offer.
+        /// The multipath Host is ADDED to a PROCESS-LIFETIME demo
+        /// catalog (created once — a body re-eval must never hand the
+        /// wrapper a fresh catalog while the store still holds the old
+        /// one) so pin / unpin round-trips exactly like production: the
+        /// wrapper re-reads the catalog on every store change and
+        /// re-keys the detail view by the CURRENT host value — the same
+        /// `.id(host)` pattern ConsoleView uses for catalog edits.
+        private func routedDetailPinnedHealthy() -> some View {
+            let catalog = DemoScreenshotMode.RoutedPinnedHealthyDemo.catalog
+            return NavigationStack {
+                DemoCatalogRoutedDetail(
+                    catalog: catalog,
+                    hostID: DemoScreenshotMode.RoutedPinnedHealthyDemo.host.id)
+            }
+        }
+
+        /// The v2 route surface against the multipath demo Host, its
+        /// route store scripted to the captured state: Automatic with
+        /// probed statuses, or a manual pin that failed to reach (the
+        /// Try another route / Return to automatic offer).
+        private func routedDetail(pinnedFailed: Bool) -> some View {
+            var host = DemoScreenshotMode.multipathHost
+            var probes = [String: HostRouteProbeResult]()
+            var failure: TransportError?
+            if pinnedFailed {
+                host.routeSelection = .manual(address: "studio.vpn.example")
+                probes["studio.vpn.example"] = HostRouteProbeResult(
+                    outcome: .unreachable, checkedAt: Date())
+                probes["192.168.31.71"] = HostRouteProbeResult(
+                    outcome: .reachable, checkedAt: Date(),
+                    latency: .milliseconds(12))
+                probes["CMF79KM7YF.local"] = HostRouteProbeResult(
+                    outcome: .unreachable, checkedAt: Date())
+                failure = .sshUnreachable(detail: "connection timed out")
+            } else {
+                // The v2 surface shows for a Host carrying v2 settings:
+                // the fixture gives the VPN route a Wi-Fi-only gate
+                // (honest: most VPN clients ride the LAN's Wi-Fi path)
+                // so the automatic demo is a genuine v2 Host.
+                host.routeEligibility = ["studio.vpn.example": .wifiOnly]
+                probes["192.168.31.71"] = HostRouteProbeResult(
+                    outcome: .reachable, checkedAt: Date(),
+                    latency: .milliseconds(9))
+                probes["CMF79KM7YF.local"] = HostRouteProbeResult(
+                    outcome: .reachable, checkedAt: Date(),
+                    latency: .milliseconds(23))
+                probes["studio.vpn.example"] = HostRouteProbeResult(
+                    outcome: .unreachable, checkedAt: Date())
+            }
+            let routeStore = HostRouteStatusStore(
+                host: host,
+                network: .wifi,
+                prober: HostRouteProber(
+                    connector: DemoMultipathConnector(),
+                    credentials: HostCredentialsProvider(
+                        deviceKeys: DeviceKeyStore(secrets: DemoSecretStore()),
+                        secrets: DemoSecretStore()),
+                    knownHosts: InMemoryKnownHostsStore()),
+                catalog: hosts,
+                seededProbes: probes)
+            return NavigationStack {
+                HostOnboardingView(
+                    host: host,
+                    catalog: hosts,
+                    connectionStatus: pinnedFailed ? .failed(failure!) : nil,
+                    standingFailure: failure,
+                    connectedAddress: pinnedFailed ? nil : "192.168.31.71",
+                    store: HostOnboardingStore(
+                        host: host,
+                        connector: DemoMultipathConnector(),
+                        preferredAddresses: PreferredAddressStore(
+                            defaults: DemoScreenshotFixture.makeDefaults(),
+                            hostID: host.id)),
+                    routeStatusStore: routeStore)
+            }
+        }
+
         private var consoleRoot: some View {
             // The production navigation surface (#A v2): the demo root
             // mounts the AppRootView so captures and UI proofs exercise
@@ -1097,10 +1238,58 @@
         }
     }
 
+        /// Catalog-driven host detail for the v2 route captures: reads
+        /// the CURRENT host from the catalog on every store change and
+        /// re-keys the detail by the host VALUE — the production
+        /// `.id(host)` pattern — so a pin / unpin round-trips through
+        /// the catalog and the surface re-renders from the saved state.
+        private struct DemoCatalogRoutedDetail: View {
+            let catalog: HostStore
+            let hostID: Host.ID
+
+            var body: some View {
+                if let host = catalog.hosts.first(where: { $0.id == hostID }) {
+                    HostOnboardingView(
+                        host: host,
+                        catalog: catalog,
+                        connectedAddress:
+                            host.pinnedRouteAddress == "CMF79KM7YF.local"
+                                ? "CMF79KM7YF.local"
+                                : nil,
+                        store: HostOnboardingStore(
+                            host: host,
+                            connector: DemoMultipathConnector(),
+                            preferredAddresses: PreferredAddressStore(
+                                defaults: DemoScreenshotFixture.makeDefaults(),
+                                hostID: host.id)),
+                        routeStatusStore: HostRouteStatusStore(
+                            host: host,
+                            network: .wifi,
+                            prober: HostRouteProber(
+                                connector: DemoMultipathConnector(),
+                                credentials: HostCredentialsProvider(
+                                    deviceKeys: DeviceKeyStore(secrets: DemoSecretStore()),
+                                    secrets: DemoSecretStore()),
+                                knownHosts: InMemoryKnownHostsStore()),
+                            catalog: catalog))
+                        .id(host)
+                }
+            }
+        }
+
     private struct DemoMultipathConnector: TransportConnector {
         func connect(settings: SSHTransportSettings) async throws -> any Transport {
             throw TransportError.sshUnreachable(detail: "Demo route never dials.")
         }
+    }
+
+    /// Keeps the demo route surface out of the real Keychain (the demo
+    /// never dials, but the prober still resolves credentials).
+    private final class DemoSecretStore: SecretStore {
+        func read(account: String) throws -> Data? { nil }
+        func readAll() throws -> [String: Data] { [:] }
+        func write(_ secret: Data, account: String) throws {}
+        func removeSecret(account: String) throws {}
     }
 
     @MainActor

@@ -42,6 +42,24 @@ struct PreferredAddressStore: @unchecked Sendable {
         defaults?.set([address] + candidates.filter { $0 != address }, forKey: defaultsKey)
     }
 
+    // MARK: Route selection (v2)
+
+    /// The dialing order under the v2 route-selection policy: a manual
+    /// pin wins over everything (the pin is never silently overridden,
+    /// not even by a stored v1 pick); under Automatic the stored pick
+    /// (the v1 semantics, unchanged) leads the saved priority order.
+    /// A pin whose address no longer matches a candidate still dials —
+    /// the pin is honored verbatim; `HostRoutePolicy.manualDialAddress`
+    /// is the enforcement point, this ordering is what Automatic uses.
+    func preferredOrder(
+        forCandidates candidates: [String], pinnedAddress: String?
+    ) -> [String] {
+        guard let pinnedAddress, candidates.contains(pinnedAddress) else {
+            return preferredOrder(for: candidates)
+        }
+        return [pinnedAddress] + candidates.filter { $0 != pinnedAddress }
+    }
+
     /// Drops the stored preference (a Host whose candidates no longer match
     /// keeps dialing from its configured order).
     func clear() {
