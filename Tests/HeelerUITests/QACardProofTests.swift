@@ -100,7 +100,12 @@ final class QACardProofTests: XCTestCase {
 
         // Multi-question answered card: labels + note + free text.
         // (Scroll the transcript up: resolved cards anchor after the
-        // message that posed the question.)
+        // message that posed the question.) Start from the top so the
+        // FIRST swipeUp lands the answered card in the lazy window —
+        // a stale scroll position from launch can leave it
+        // dematerialized (same lazy-window mechanics as
+        // testExpandCollapseFullAnswer's scroll-back).
+        app.swipeDown()
         app.swipeUp()
         XCTAssertTrue(
             element("Answered", in: app).waitForExistence(
