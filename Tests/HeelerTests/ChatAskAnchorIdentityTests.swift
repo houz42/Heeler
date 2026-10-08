@@ -17,7 +17,9 @@ import Testing
 /// IDENTITY (anchorMessageID — the message UUID the store claims at
 /// interaction.opened time), not by repeated question text. The
 /// legacy text anchor remains the fallback for records without an
-/// identity claim (v2 archives, capture-time page lag).
+/// identity claim (v2 archives, capture-time page lag) parks
+/// unattached at the resolution's own position — there is NO text
+/// fallback (the design pane's hardening).
 
 @Suite("Resolved Q/A card identity anchoring (repeated question text)")
 struct ChatAskAnchorIdentityTests {
@@ -175,15 +177,15 @@ struct ChatAskAnchorIdentityTests {
             "one card only — m2 never consumes the identity-anchored ask")
     }
 
-    @Test("LEGACY fallback: a record without an identity claim keeps the text anchor (compat)")
-    func legacyTextAnchorStillWorks() {
+    @Test("NO TEXT FALLBACK: a claim-less record parks unattached, never at a text match")
+    func claimlessRecordParksNotTextMatches() {
         let messages = [
             askTurn(
                 id: "m1", questionID: "q", question: "Unique question?",
                 labels: ["A", "B"]),
             replyTurn(id: "r1", text: "Done."),
         ]
-        let legacy = ResolvedAsk(
+        let claimless = ResolvedAsk(
             id: "req-legacy",
             questions: [
                 ResolvedAskQuestion(
@@ -195,7 +197,7 @@ struct ChatAskAnchorIdentityTests {
             questionText: "Unique question?")
         let rows = ChatFiltering.visibleRows(
             messages: messages, toolResults: [], pending: [],
-            resolvedAsks: [legacy], level: .l0)
+            resolvedAsks: [claimless], level: .l0)
         let order = rows.map { row -> String in
             switch row {
             case .resolvedAsk: return "card"
@@ -203,7 +205,13 @@ struct ChatAskAnchorIdentityTests {
             default: return "other"
             }
         }
-        #expect(order.first == "card", "the legacy text anchor still places the card after its ask")
+        // The card PARKS at the tail — the ask-turn text match never
+        // attaches it (the design pane's hardening: remove the
+        // ambiguous text-scan fallback entirely).
+        #expect(order.last == "card", "a claim-less record parks at the tail, never at a text match")
+        #expect(
+            order.filter { $0 == "card" }.count == 1,
+            "exactly one card")
     }
 
     @Test("a parked identity anchor (its message outside the page) still parks at the tail")

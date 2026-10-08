@@ -1027,18 +1027,27 @@ struct AgentChatResolvedOutcomeGatingTests {
 
 // MARK: - Question-anchored placement (device bug: block after the reply)
 
-/// The device bug: a resolved ask parked at the transcript's tail
-/// rendered AFTER the agent's reply it produced. The fix: the block
-/// anchors to its question's own text — right after the message
-/// containing the question, BEFORE the reply that follows.
+/// The causal anchoring contract (v3 hardening): the answered card
+/// attaches by the ask turn's TRANSCRIPT IDENTITY (anchorMessageID —
+/// the store's causal claim), NEVER by question text. A record with
+/// no claim (legacy archive, ambiguous page) stays UNATTACHED and
+/// parks at the resolution's own position — it never pretends an
+/// older text match is its ask.
 @Suite("Resolved-ask question anchoring")
 struct ChatResolvedAskAnchorTests {
     private func message(_ text: String) -> ChatMessage {
         ChatMessage(role: .assistant, blocks: [.text(text)])
     }
 
-    @Test("the answer card renders between the question and the agent's reply")
-    func anchorPlacesBlockBetweenQuestionAndReply() {
+    @Test("an identity-anchored card renders right after its ask turn, before the reply")
+    func anchorPlacesCardAfterItsAskTurn() {
+        let askTurn = ChatMessage(
+            id: AgentChatMapper.stableID(for: "m-ask"),
+            role: .assistant,
+            blocks: [.text("I need one choice before continuing.")])
+        let reply = ChatMessage(role: .assistant, blocks: [
+            .text("You picked Ship it. Continuing."),
+        ])
         let ask = ResolvedAsk(
             id: "r-1",
             questions: [
@@ -1048,126 +1057,69 @@ struct ChatResolvedAskAnchorTests {
                         .init(id: "o0", label: "Ship it")])
             ],
             outcome: .youAnswered,
-            questionText: "Ship the v2 ask-history slice?")
-        let rows = ChatFiltering.visibleRows(
-            messages: [
-                message("I need one choice before continuing."),
-                message("Ship the v2 ask-history slice? Pick an option."),
-                message("You picked Ship it. Continuing."),
-            ],
-            toolResults: [], pending: [], resolvedAsks: [ask], level: .l0)
-        let order = rows.map { row -> String in
-            switch row {
-            case .text(_, _, _, let text):
-                return "text:\(text.prefix(24))"
-            case .resolvedAsk(let ask): return "ask:\(ask.body)"
-            default: return "other"
-            }
-        }
-        #expect(order == [
-            "text:I need one choice before",
-            "text:Ship the v2 ask-history ",
-            "ask:You answered: Ship it",
-            "text:You picked Ship it. Cont",
-        ])
-    }
-
-    @Test("THE REAL CASE: the question is an ask CARD (tool call), not a text message — the block anchors to the tool call's arguments")
-    func askCardToolCallAnchor() {
-        // The ask as it actually appears in an omp transcript: an
-        // assistant turn whose toolCall block (name 'ask') carries
-        // the question text in its ARGUMENTS. The agent's reply
-        // follows in the next message. The block must render between.
-        let askTurn = ChatMessage(role: .assistant, blocks: [
-            .toolCall(ToolCall(
-                id: "ask_0_bf4e9c07", name: "ask",
-                arguments: .object([
-                    "questions": .array([
-                        .object([
-                            "id": .string("q_proof"),
-                            "question": .string("Ship the v2 ask-history slice?"),
-                            "options": .array([
-                                .object(["label": .string("Ship it")]),
-                                .object(["label": .string("Hold")]),
-                            ]),
-                        ]),
-                    ]),
-                ]))),
-        ])
-        let reply = ChatMessage(role: .assistant, blocks: [
-            .text("You picked Ship it. Continuing."),
-        ])
-        let ask = ResolvedAsk(
-            id: "r-1",
-            questions: [
-                ResolvedAskQuestion(
-                    id: "q_proof",
-                    question: "Ship the v2 ask-history slice?",
-                    selectedOptions: [
-                        .init(id: "o0", label: "Ship it")])
-            ],
-            outcome: .youAnswered,
+            anchorMessageID: askTurn.id,
             questionText: "Ship the v2 ask-history slice?")
         let rows = ChatFiltering.visibleRows(
             messages: [askTurn, reply],
             toolResults: [], pending: [], resolvedAsks: [ask], level: .l0)
         let order = rows.map { row -> String in
             switch row {
-            case .resolvedAsk(let ask): return "ask:\(ask.body)"
-            case .text(_, _, _, let text): return "text:\(text)"
-            default: return "toolcall"
+            case .text(_, _, _, let text):
+                return "text:\(text.prefix(24))"
+            case .resolvedAsk(let ask):
+                return "ask:\(ask.body)"
+            default:
+                return "other"
             }
         }
-        // L0 hides the tool-call row itself, but the ask TURN's
-        // position in the flow still anchors the block: BEFORE the
-        // reply — not parked at the tail.
         #expect(order == [
+            "text:I need one choice before",
             "ask:You answered: Ship it",
-            "text:You picked Ship it. Continuing.",
+            "text:You picked Ship it. Cont",
         ])
     }
 
-    @Test("an unanchored ask (no question text) still parks at the tail")
-    func unanchoredStillParksAtTail() {
-        let anchored = ResolvedAsk(
+    @Test("NO TEXT ANCHOR: repeated question text never steals an identity-claim-less record — it parks unattached")
+    func noTextAnchorClaimlessParks() {
+        // The exact pre-fix failure shape: the ask text appears in the
+        // transcript (the agent echoed the question), but the record
+        // has NO identity claim. The card must NOT attach to the text
+        // match — it parks at the tail, honestly.
+        let claimless = ResolvedAsk(
             id: "r-1",
             questions: [
                 ResolvedAskQuestion(
                     id: "q", question: "Ship it?",
                     selectedOptions: [.init(id: "o0", label: "Ship it")])
             ],
-            outcome: .youAnswered, questionText: "Ship it?")
-        let unanchored = ResolvedAsk(
-            id: "r-2", questions: [], outcome: .cancelled,
-            questionText: nil)
+            outcome: .youAnswered,
+            anchorMessageID: nil,
+            questionText: "Ship it?")
         let rows = ChatFiltering.visibleRows(
             messages: [
                 message("Ship it? Choose now."),
                 message("Done — shipped."),
             ],
-            toolResults: [], pending: [],
-            resolvedAsks: [anchored, unanchored], level: .l0)
+            toolResults: [], pending: [], resolvedAsks: [claimless],
+            level: .l0)
         let order = rows.map { row -> String in
             switch row {
             case .text(_, _, _, let text):
                 return "text:\(text.prefix(12))"
             case .resolvedAsk(let ask):
-                return "ask:\(ask.outcome == .youAnswered ? ask.body : ask.outcome.rawValue)"
+                return "ask:\(ask.body)"
             default:
                 return "other"
             }
         }
-        // The answered card anchors after its question; the
-        // questionless cancelled record parks at the tail.
         #expect(order == [
             "text:Ship it? Cho",
-            "ask:You answered: Ship it",
             "text:Done — shipp",
-            "ask:cancelled",
-        ])
+            "ask:You answered: Ship it",
+        ], "a claim-less record parks at the tail — never the first text match")
     }
 
-    @Test("an ask whose question is outside the visible page parks at the tail")
+    @Test("an identity anchor whose message is outside the visible page parks at the tail")
     func anchorOutsidePageParks() {
         let ask = ResolvedAsk(
             id: "r-1",
@@ -1177,6 +1129,7 @@ struct ChatResolvedAskAnchorTests {
                     selectedOptions: [.init(id: "o0", label: "Ship it")])
             ],
             outcome: .youAnswered,
+            anchorMessageID: AgentChatMapper.stableID(for: "offscreen"),
             questionText: "Question never shown in this page?")
         let rows = ChatFiltering.visibleRows(
             messages: [message("Unrelated later turn.")],

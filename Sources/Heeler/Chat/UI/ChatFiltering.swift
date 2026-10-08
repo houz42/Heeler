@@ -613,46 +613,32 @@ internal enum ChatFiltering {
                 }
             }
 
-            // ANCHOR: after this message, render every ask anchored
-            // to it. IDENTITY FIRST: a resolved ask carrying
+            // ANCHOR — by IDENTITY ONLY: a resolved ask carrying
             // `anchorMessageID` (the specific ask turn the store
-            // claimed at interaction.opened time) renders after THAT
-            // exact message — repeated question text across asks can
-            // never steal the card (the real-session repro: 'Which
-            // one?' at five transcript positions; the answered card
-            // must sit at the ask the user actually answered). The
-            // LEGACY text anchor stays the fallback for records
-            // without an identity claim (v2 archives, capture-time
-            // page lag): the ask is a tool call whose ARGUMENTS carry
-            // the question text, so the match covers text blocks and
-            // toolCall argument string-leaves — JSON quoting never
-            // breaks it. Level-independent: even when the tool-call
-            // rows themselves are hidden (L0), the message's position
-            // in the flow is still the ask's position.
+            // claimed causally: the unique un-resulted `ask` tool
+            // call at interaction.opened time) renders after THAT
+            // exact message — repeated question text/ids across asks
+            // can never steal the card (the real-session repro:
+            // 'Which one?' at five transcript positions). There is NO
+            // text fallback: a record without an identity claim
+            // (legacy archives, an ambiguous page) stays UNATTACHED
+            // and parks at the resolution's own position — it never
+            // pretends an older text match is its ask. Level-
+            // independent: even when the tool-call rows themselves
+            // are hidden (L0), the message's position in the flow is
+            // still the ask's position.
             if !unanchoredAsks.isEmpty {
                 var remaining: [ResolvedAsk] = []
                 for ask in unanchoredAsks {
                     if let anchorID = ask.anchorMessageID {
-                        // IDENTITY: exact message match, one card per
-                        // ask. A message that only partially matches
-                        // (the id is not this message) never consumes.
                         if message.id == anchorID {
                             rows.append(.resolvedAsk(ask))
                         } else {
                             remaining.append(ask)
                         }
-                        continue
-                    }
-                    // LEGACY text anchor (records without an identity
-                    // claim only): first text match consumes — the
-                    // pre-identity behavior, kept for compatibility.
-                    if let anchor = ask.questionText,
-                        !anchor.isEmpty,
-                        Self.messageTextLeaves(message)
-                            .contains { $0.contains(anchor) }
-                    {
-                        rows.append(.resolvedAsk(ask))
                     } else {
+                        // Unattached (no causal claim): never attaches
+                        // by text — parks at the tail, honestly.
                         remaining.append(ask)
                     }
                 }
@@ -739,50 +725,8 @@ internal enum ChatFiltering {
     ///     checklist, which is what L2 is for.
     ///   - `task` rides L3 "Thinking": subagent activity is agent
     ///     internals, same shelf as the agent's own thinking.
-    /// Every string value reachable in a JSON tree (object keys
-    /// excluded, string leaves only — recursion into arrays and
-    /// nested objects). The resolved-ask anchor matches the ask
-    /// tool's arguments against these leaves, so JSON quoting never
-    /// breaks the question-text match.
-    /// One message's anchor-match surface for the LEGACY text anchor:
-    /// text blocks join into one substring-searchable string; ask
-    /// toolCall argument string-leaves join per-block so JSON quoting
-    /// never breaks the match. (The IDENTITY anchor does not use
-    /// this — exact message id.)
-    private static func messageTextLeaves(
-        _ message: ChatMessage
-    ) -> [String] {
-        message.blocks.compactMap { block -> String? in
-            switch block {
-            case .text(let text):
-                return text
-            case .toolCall(let call):
-                return Self.stringLeaves(of: call.arguments)
-                    .joined(separator: "\n")
-            default:
-                return nil
-            }
-        }.map { blockText in
-            // The legacy match was `matchText.contains(anchor)` over
-            // the JOINED blocks; per-block contains preserves every
-            // match that behavior found (anchors are single questions,
-            // never spanning block joins).
-            blockText
-        }
-    }
-
-    static func stringLeaves(of value: JSONValue) -> [String] {
-        switch value {
-        case .string(let string):
-            return [string]
-        case .array(let items):
-            return items.flatMap { stringLeaves(of: $0) }
-        case .object(let fields):
-            return fields.values.flatMap { stringLeaves(of: $0) }
-        case .null, .bool, .number:
-            return []
-        }
-    }
+    /// The ask-anchor NO longer consumes these leaves (the causal
+    /// identity rule replaced text matching); the helper was removed.
 
     /// Level nesting is preserved: L3 ⊇ L2 ⊇ L1 ⊇ L0.
     static func visibilityLevel(for call: ToolCall) -> DetailLevel {
