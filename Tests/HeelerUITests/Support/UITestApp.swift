@@ -41,6 +41,15 @@ enum UITestApp {
         case hostDetailProbing
         /// The Host detail page stopped on the pick between two addresses.
         case hostDetailPick
+        /// The Host detail page with the v2 route surface (Automatic,
+        /// probed statuses).
+        case hostRoutes
+        case hostRoutesPinnedFailed
+        /// The Host detail page with the v2 route surface pinned to a
+        /// HEALTHY route (visible Return-to-automatic, no offer).
+        case hostRoutesPinnedHealthy
+        /// The v2 priority/eligibility editor.
+        case hostRouteEditor
         /// Console + Settings sheet presented on launch.
         case settings
         /// The chat surface with a pending multi-select ask (v2 accent
@@ -109,6 +118,14 @@ enum UITestApp {
                 return ["--demo-screenshots", "--demo-host-detail-probing"]
             case .hostDetailPick:
                 return ["--demo-screenshots", "--demo-host-detail-pick"]
+            case .hostRoutes:
+                return ["--demo-screenshots", "--demo-host-routes"]
+            case .hostRoutesPinnedFailed:
+                return ["--demo-screenshots", "--demo-host-routes-pinned-failed"]
+            case .hostRoutesPinnedHealthy:
+                return ["--demo-screenshots", "--demo-host-routes-pinned-healthy"]
+            case .hostRouteEditor:
+                return ["--demo-screenshots", "--demo-host-route-editor"]
             case .settings:
                 return ["--demo-screenshots", "--demo-screenshots-settings"]
             case .chatPendingAsk:
