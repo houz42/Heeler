@@ -375,6 +375,56 @@ struct ChatScrollCoordinatorTests {
         #expect(reading.position == nil)
     }
 
+    // MARK: Window replacement anchor transaction (the real-path blank trace)
+
+    @Test("a window replacement re-anchors to the surviving row — deterministic, not budgeted")
+    func windowReplacementReanchors() {
+        // The reader is mid-history (reading latched).
+        let (coordinator, _) = makeCoordinator(
+            document: 6000, viewport: 700, contentTop: 4000,
+            intersects: true, following: false)
+        // Burn the repair budget first: the transaction must NOT
+        // depend on it.
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 6000, viewportHeight: 700,
+            contentTop: 7000, rowsIntersectViewport: false))
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 6000, viewportHeight: 700,
+            contentTop: 7100, rowsIntersectViewport: false))
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 6000, viewportHeight: 700,
+            contentTop: 7200, rowsIntersectViewport: false))
+        coordinator.geometryChanged(ChatViewportGeometry(
+            documentHeight: 6000, viewportHeight: 700,
+            contentTop: 7300, rowsIntersectViewport: false))
+
+        // THE TRANSITION: the recent page replaced the window and the
+        // reader's row survived: the re-anchor targets the SURVIVOR,
+        // top-anchored, in the same pass — never a timer, never the
+        // exhausted budget.
+        coordinator.contentWindowReplaced(
+            survivorID: "row-survivor", firstID: "row-a", lastID: "row-z")
+        #expect(
+            coordinator.position?.viewID(type: String.self) == "row-survivor")
+        #expect(coordinator.repairAttempts == 0)
+
+        // No survivor (the reader's row was deleted): the honest
+        // fallback is the window's FIRST row.
+        coordinator.contentWindowReplaced(
+            survivorID: nil, firstID: "row-a2", lastID: "row-z2")
+        #expect(
+            coordinator.position?.viewID(type: String.self) == "row-a2")
+
+        // A FOLLOWING reader takes the last row, bottom-anchored.
+        let (following, _) = makeCoordinator(
+            document: 6000, viewport: 700, contentTop: 0,
+            intersects: true)
+        following.contentWindowReplaced(
+            survivorID: "row-survivor", firstID: "row-a", lastID: "row-z")
+        #expect(
+            following.position?.viewID(type: String.self) == "row-z")
+    }
+
     @Test("user interaction SUSPENDS a live automatic command")
     func userTouchSuspendsAutomatics() {
         let (coordinator, _) = makeCoordinator(

@@ -121,6 +121,7 @@
 		2F46124BDF2DA0AFC14260FA /* AgentListFieldsEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9B369B42301D8ACC286AC50 /* AgentListFieldsEditor.swift */; };
 		31E4ADB22D4D655E7CFDB749 /* TerminalInputControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05AD61D4FA60884234EA856C /* TerminalInputControllerTests.swift */; };
 		3286D6FBB12157F2A19A82CE /* AgentNotificationRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB37CBDC9DE0CE539FC476A0 /* AgentNotificationRenderer.swift */; };
+		32C30266D83BAC9B3652B5AE /* ChatWindowCoverageMergeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 458066AE55446A3F38732DE8 /* ChatWindowCoverageMergeTests.swift */; };
 		33046B4CC05A07D26F088082 /* AgentLiveActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6A9489C21BDCFA7616782BF /* AgentLiveActivityWidget.swift */; };
 		35205050C9CB8E473D8A28C0 /* Base64URL.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32413805C1AA874DBEE37547 /* Base64URL.swift */; };
 		3541FB43C2803B681D7C619F /* AgentRowRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAAD80C58EF11BE6B6F1D7F6 /* AgentRowRenderer.swift */; };
@@ -800,6 +801,7 @@
 		444F11A4450A3CA904B26658 /* SkillsPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillsPickerView.swift; sourceTree = "<group>"; };
 		445441023E94E3A3C8BD4EAA /* MeadowFirstConnectProvisioningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeadowFirstConnectProvisioningTests.swift; sourceTree = "<group>"; };
 		44A21DCE170AA8EF34CF3D27 /* HostRouteEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostRouteEditor.swift; sourceTree = "<group>"; };
+		458066AE55446A3F38732DE8 /* ChatWindowCoverageMergeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatWindowCoverageMergeTests.swift; sourceTree = "<group>"; };
 		4582B5EA42CFA9C8878E6207 /* HeelerSSH */ = {isa = PBXFileReference; lastKnownFileType = folder; name = HeelerSSH; path = Packages/HeelerSSH; sourceTree = SOURCE_ROOT; };
 		45B914D05097A0B0C277102E /* RemoteDirectoryListingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDirectoryListingTests.swift; sourceTree = "<group>"; };
 		45DB60007029322902FD1AFF /* PairingScanStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingScanStore.swift; sourceTree = "<group>"; };
@@ -1355,6 +1357,7 @@
 				9C6790802B275AA9D530F379 /* ChatUITests.swift */,
 				4EE3158E450CEC4A790D3DEC /* ChatUserBubbleSizingTests.swift */,
 				1F6691DC05B46C4AE8D5E4D3 /* ChatViewportMountTests.swift */,
+				458066AE55446A3F38732DE8 /* ChatWindowCoverageMergeTests.swift */,
 				8C2169259F4969FA5CDCB91F /* ChatWritingAssistTests.swift */,
 				414B652A16576BEDEE9AE000 /* ClosePaneStoreTests.swift */,
 				F4616CECA2722086A6B8B490 /* ComposerAttachmentTests.swift */,
@@ -2852,6 +2855,7 @@
 				05B3B715BE5D1509BA3A9A14 /* ChatUITests.swift in Sources */,
 				199CDE377BC18D0878CA7697 /* ChatUserBubbleSizingTests.swift in Sources */,
 				997D100104EC360F99DD53FA /* ChatViewportMountTests.swift in Sources */,
+				32C30266D83BAC9B3652B5AE /* ChatWindowCoverageMergeTests.swift in Sources */,
 				A53993088D8336670D296487 /* ChatWritingAssistTests.swift in Sources */,
 				61F58007C6B81F14D2F6B58B /* ClosePaneStoreTests.swift in Sources */,
 				179292D9C3E605BC46282FE0 /* ComposerAttachmentTests.swift in Sources */,

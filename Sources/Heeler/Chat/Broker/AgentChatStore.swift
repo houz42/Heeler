@@ -164,6 +164,10 @@ final class AgentChatStore {
     private(set) var streamTails: [AgentChatStreamTail] = []
     private(set) var hasOlder = false
     private(set) var isLoadingOlder = false
+    /// Bumped on every recent-page REPLACE (the refresh-coverage
+    /// merge): the view's anchor transaction keys on this so the
+    /// re-anchor runs ONCE per replacement — never a timer.
+    private(set) var windowRevision = 0
     /// Capabilities of the matched registration (granular gating).
     private(set) var capabilities: AgentChatCapabilities?
     /// Pending interactions (only when interactions:true).
@@ -291,8 +295,15 @@ final class AgentChatStore {
         let heldContent = wasRenderable ? content : nil
         streamTails = []
         interactions = []
-        hasOlder = false
-        olderCursor = nil
+        // The loaded window's paging provenance survives WITH the
+        // held content: a reconnect that holds the page (prepends
+        // included) keeps its older cursor — the fresh recent page
+        // merges with the retained prefix, and resetting the cursor
+        // here would orphan it.
+        if heldContent == nil {
+            hasOlder = false
+            olderCursor = nil
+        }
         registration = nil
         capabilities = nil
         bufferedEvents = []
@@ -1588,9 +1599,9 @@ final class AgentChatStore {
     /// sentinel never even mounted); an older page (history.before)
     /// advances it. olderCursor nil = terminal (no more history).
     private func applyPage(_ page: AgentChatPage, replaceRecent: Bool) async {
-        olderCursor = page.olderCursor
-        hasOlder = page.olderCursor != nil
         var messages: [ChatMessage] = []
+        var results: [ToolResult] = AgentChatToolResultCollector.collect(
+            from: page.items)
         for item in page.items {
             var mapped = item
             if case .reference(let id, _, _) = item {
@@ -1607,10 +1618,56 @@ final class AgentChatStore {
                 continue
             }
         }
-        let results = AgentChatToolResultCollector.collect(from: page.items)
         if replaceRecent {
+            // The recent-page refresh COVERAGE MERGE (the real-path
+            // blank-on-send-after-paging trace): a history.changed
+            // refresh used to REPLACE the whole loaded window with the
+            // latest page — deleting every previously-paged older
+            // record the reader was mid-read on, shrinking the
+            // document under the retained offset into a persistent
+            // blank, and substituting an unrelated newer row at the
+            // reader's offset. The refresh reconciles with the loaded
+            // PREFIX instead: keep every OLDER-PAGED record that sits
+            // ABOVE the fresh page's oldest record (by stable id in
+            // the current window's order), merge the fresh page in,
+            // and only TRIM when the merged window exceeds a bound —
+            // the oldest records go, never the reader's row.
+            let freshIDs = Set(messages.map(\.id))
+            let freshOldestIndex = content.messages.firstIndex {
+                freshIDs.contains($0.id)
+            }
+            if let oldest = freshOldestIndex, oldest > 0 {
+                let retainedPrefix = Array(content.messages[..<oldest])
+                // The retained prefix's tool calls keep their paired
+                // results (pairing by toolCallId against the prefix's
+                // blocks — the same pairing ChatFiltering renders by).
+                let prefixCallIDs = Set(retainedPrefix.flatMap {
+                    message in message.blocks.compactMap { block in
+                        if case .toolCall(let call) = block {
+                            return call.id
+                        }
+                        return nil
+                    }
+                })
+                let retainedResults = content.toolResults.filter {
+                    prefixCallIDs.contains($0.toolCallId)
+                }
+                messages.insert(contentsOf: retainedPrefix, at: 0)
+                results.insert(contentsOf: retainedResults, at: 0)
+            }
+            // The older cursor is RETAINED across recent pages (the
+            // pane's finding #2): a recent page always describes the
+            // same oldest history boundary; resetting it every refresh
+            // invalidated the loaded prefix's provenance.
+            olderCursor = olderCursor ?? page.olderCursor
+            hasOlder = olderCursor != nil
             content = ChatContent(messages: messages, toolResults: results)
+            settleOutbox(from: page.items)
+            reconcileOutbox(against: messages)
+            windowRevision &+= 1
         } else {
+            olderCursor = page.olderCursor
+            hasOlder = page.olderCursor != nil
             // Older pages arrive chronologically (the adapter walks
             // newest→oldest and reverses into page order): prepend
             // ABOVE the current window, never append.
@@ -1618,10 +1675,6 @@ final class AgentChatStore {
                 contentsOf: messages, at: 0)
             content.toolResults.insert(
                 contentsOf: results, at: 0)
-        }
-        if replaceRecent {
-            settleOutbox(from: page.items)
-            reconcileOutbox(against: messages)
         }
     }
 

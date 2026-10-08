@@ -207,6 +207,41 @@ final class ChatScrollCoordinator {
         }
     }
 
+    /// The recent-page replacement ANCHOR TRANSACTION (the real-path
+    /// blank-on-send-after-paging trace): a history.changed refresh
+    /// REPLACES the loaded window (older prepends vanish; the recent
+    /// page may be smaller than the paged window), and the scroll
+    /// offset — computed for the LARGER document — lands PAST the
+    /// smaller content: a persistent blank that the budgeted repair
+    /// could miss (exhausted by the transient blanks of the swap).
+    /// The transaction is DETERMINISTIC, not budgeted: re-establish a
+    /// VALID position immediately — the reader's first SURVIVING
+    /// previously-materialized row (reading), the last row
+    /// (following), or the window's first row as the honest fallback.
+    func contentWindowReplaced(
+        survivorID: String?, firstID: String, lastID: String
+    ) {
+        guard !lastID.isEmpty else { return }
+        // A fresh transaction: the budget restarts (the old blanks
+        // belonged to the replaced window).
+        repairAttempts = 0
+        landingCorrections = 0
+        if followsLatest {
+            pendingLandingTargetID = lastID
+            issuePosition(ScrollPosition(id: lastID, anchor: .bottom))
+            ChatViewportLog.shared.record(
+                .anchor, "window replaced → following: last row \(lastID)")
+        } else if let survivor = survivorID, !survivor.isEmpty {
+            issuePosition(ScrollPosition(id: survivor, anchor: .top))
+            ChatViewportLog.shared.record(
+                .anchor, "window replaced → reading: survivor row \(survivor)")
+        } else {
+            issuePosition(ScrollPosition(id: firstID, anchor: .top))
+            ChatViewportLog.shared.record(
+                .anchor, "window replaced → reading: first row \(firstID)")
+        }
+    }
+
     // MARK: Decisions
 
 
