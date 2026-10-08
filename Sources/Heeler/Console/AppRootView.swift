@@ -24,6 +24,11 @@ struct AppRootView: View {
     /// window session — a pushed detail that hides the chrome restores
     /// the same fold on Back (#A).
     @State private var isSidebarCollapsed = false
+    /// Reduce Motion (review item 14): the fold/drawer presentation
+    /// animations below degrade to a plain crossfade-free immediate
+    /// change — the spring slide is the only thing gated, never the
+    /// state itself.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Phone drawer presentation (v2 interactive): the LIVE slide
     /// distance, 0 … 184 pt — every path (trigger, left-edge swipe,
     /// drag-to-close) writes this one value, so the motion is
@@ -214,7 +219,11 @@ struct AppRootView: View {
                     : "Collapse navigation sidebar",
                 accessibilityValue: isSidebarCollapsed ? "Collapsed" : "Expanded",
                 action: {
-                    withAnimation(.snappy) { isSidebarCollapsed.toggle() }
+                    if reduceMotion {
+                        isSidebarCollapsed.toggle()
+                    } else {
+                        withAnimation(.snappy) { isSidebarCollapsed.toggle() }
+                    }
                 })
         }
         return AppNavigationTriggerContext(
@@ -232,14 +241,19 @@ struct AppRootView: View {
     /// Opens the drawer to its resting state (v2) — the trigger's path
     /// and a committed edge swipe. Mounts (if not already tracking)
     /// with the standard move-from-edge transition, then springs the
-    /// reveal full. The exit-settle flag clears: a fresh open cancels
-    /// any still-sliding prior close.
     private func openDrawer() {
         isTrackingDrawer = false
         isSettlingDrawer = false
-        withAnimation(AppDestinationDrawer.presentationSpring) {
+        // Reduce Motion (review item 14): the spring slide degrades to
+        // an immediate reveal; the state and mount logic are identical.
+        if reduceMotion {
             drawerReveal = AppDestinationDrawer.width
             isDrawerOpen = true
+        } else {
+            withAnimation(AppDestinationDrawer.presentationSpring) {
+                drawerReveal = AppDestinationDrawer.width
+                isDrawerOpen = true
+            }
         }
     }
 
@@ -252,8 +266,12 @@ struct AppRootView: View {
     /// into a toolbar item suppresses the item's rendering, verified).
     private func closeDrawer(restoreFocus: Bool) {
         settleClosed()
-        withAnimation(AppDestinationDrawer.presentationSpring) {
+        if reduceMotion {
             isDrawerOpen = false
+        } else {
+            withAnimation(AppDestinationDrawer.presentationSpring) {
+                isDrawerOpen = false
+            }
         }
         isDrawerAXFocused = false
         if restoreFocus {
@@ -290,13 +308,13 @@ struct AppRootView: View {
         }
     }
 
-    /// The snapped-closed settle (v2): the reveal springs to zero; the
-    /// drawer stays MOUNTED through the slide (isSettlingDrawer) and
-    /// unmounts when the spring has died — the exit is a slide, not a
-    /// vanish.
     private func settleClosed() {
-        withAnimation(AppDestinationDrawer.presentationSpring) {
+        if reduceMotion {
             drawerReveal = 0
+        } else {
+            withAnimation(AppDestinationDrawer.presentationSpring) {
+                drawerReveal = 0
+            }
         }
         isTrackingDrawer = false
         isSettlingDrawer = true
