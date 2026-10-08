@@ -61,6 +61,9 @@ export interface MessageLike {
 	isError?: boolean;
 	customType?: string;
 	display?: boolean;
+	/** Origin attribution omp echoes verbatim from sendUserMessage options
+	 * (live-verified on 18.2.6): the send-correlation origin token rides it. */
+	attribution?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +148,10 @@ export const CHUNK_MAX = 64 * 1024;
 const ENVELOPE_RESERVE = 512;
 /** Bounded per-generation item/blob consistency tracking. */
 const CONSISTENCY_MAX = 1024;
+/** Origin-token prefix the adapter stamps on broker-originated sends
+ * (attribution echoed verbatim into the committed user record). Shared wire
+ * knowledge with extension.ts; must stay identical. */
+const SEND_TOKEN_PREFIX = "heeler-chat:send:";
 
 export interface PageMeta {
 	sessionId: string;
@@ -538,11 +545,23 @@ export class HistoryService {
 		}
 	}
 
-	/** Attach the stashed correlation to the correlated user-message item. */
-	private attachCorrelation(entryId: string, items: ChatItem[]): ChatItem[] {
-		const requestKey = this.sendCorrelations.get(entryId);
+	/** Attach the correlation to the correlated user-message item: the
+	 * durable send.confirmed marker when present (the authoritative binding),
+	 * else the record's OWN origin-token attribution (legacy fallback for
+	 * records committed before the marker path existed — the token is causal
+	 * data carried by the record itself, never text/FIFO matching, and
+	 * identical to the key the marker would have bound). */
+	private attachCorrelation(entry: SessionEntryLike, items: ChatItem[]): ChatItem[] {
+		let requestKey = this.sendCorrelations.get(entry.id);
+		if (requestKey === undefined && entry.type === "message" && entry.message?.role === "user") {
+			const attribution = entry.message.attribution;
+			if (typeof attribution === "string" && attribution.startsWith(SEND_TOKEN_PREFIX)) {
+				const derived = attribution.slice(SEND_TOKEN_PREFIX.length);
+				if (derived.length > 0) requestKey = derived;
+			}
+		}
 		if (requestKey === undefined) return items;
-		return items.map(item => (item.kind === "message" && item.id === entryId ? { ...item, metadata: { requestKey } } : item));
+		return items.map(item => (item.kind === "message" && item.id === entry.id ? { ...item, metadata: { requestKey } } : item));
 	}
 
 	private pageFrom(meta: PageMeta, startId: string, limit: number, maxBytes: number): PageResult {
@@ -556,9 +575,8 @@ export class HistoryService {
 
 		while (cursorId !== null && groups.length < limit) {
 			const entry = this.reader.getEntry(cursorId);
-			if (entry === undefined) break; // broken chain: stop at the gap
 			this.stashSendMarker(entry);
-			const items = this.attachCorrelation(entry.id, projectEntry(this.reader, entry));
+			const items = this.attachCorrelation(entry, projectEntry(this.reader, entry));
 			if (items.length > 0) {
 				const groupBytes = sizeOf(items);
 				if (used + groupBytes <= maxBytes) {

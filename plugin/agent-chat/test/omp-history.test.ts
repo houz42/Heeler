@@ -386,3 +386,56 @@ describe("HistoryService chunk reads", () => {
 		assert.ok(chunk.nextOffset! > 0);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Send correlation metadata: durable marker binding + legacy attribution
+// fallback (records committed before the marker path existed carry the
+// origin token in message.attribution; it must surface as metadata.requestKey
+// so the app's settleOutbox can settle legacy Pending entries on refresh).
+// ---------------------------------------------------------------------------
+
+describe("send correlation metadata", () => {
+	it("attaches metadata.requestKey from the durable marker binding", () => {
+		const record = makeEntry({ id: "rec1", message: { role: "user", content: "hello", attribution: "heeler-chat:send:key-1" } });
+		const marker = makeEntry({
+			type: "custom",
+			customType: "heeler-chat.send.confirmed",
+			data: { requestKey: "key-1", recordId: "rec1", timestamp: "2026-10-08T00:00:00.000Z" },
+		});
+		const service = new HistoryService(chain(record, marker));
+		const page = service.openPage(META, {});
+		const item = page.items.find(i => i.id === "rec1") as Extract<ChatItem, { kind: "message" }>;
+		assert.deepEqual(item.metadata, { requestKey: "key-1" });
+	});
+
+	it("derives metadata.requestKey from the record's own origin-token attribution when the marker is absent (legacy)", () => {
+		// Pre-fix reality (live session file, design pane): token-bearing user
+		// record with NO send.confirmed marker anywhere in the tree.
+		const legacy = makeEntry({ id: "1f0c3554", message: { role: "user", content: "design feedback", attribution: "heeler-chat:send:1DDE4D40-8DCD-419D-99D7-3F3995241BCD" } });
+		const service = new HistoryService(chain(legacy));
+		const page = service.openPage(META, {});
+		const item = page.items.find(i => i.id === "1f0c3554") as Extract<ChatItem, { kind: "message" }>;
+		assert.deepEqual(item.metadata, { requestKey: "1DDE4D40-8DCD-419D-99D7-3F3995241BCD" });
+	});
+
+	it("never derives from terminal-typed (tokenless) user records", () => {
+		const terminal = makeEntry({ id: "term1", message: { role: "user", content: "typed at terminal", attribution: "user" } });
+		const service = new HistoryService(chain(terminal));
+		const page = service.openPage(META, {});
+		const item = page.items.find(i => i.id === "term1") as Extract<ChatItem, { kind: "message" }>;
+		assert.equal(item.metadata, undefined);
+	});
+
+	it("marker binding wins over the attribution fallback when both exist and disagree", () => {
+		const record = makeEntry({ id: "rec2", message: { role: "user", content: "hello", attribution: "heeler-chat:send:attr-key" } });
+		const marker = makeEntry({
+			type: "custom",
+			customType: "heeler-chat.send.confirmed",
+			data: { requestKey: "marker-key", recordId: "rec2", timestamp: "2026-10-08T00:00:00.000Z" },
+		});
+		const service = new HistoryService(chain(record, marker));
+		const page = service.openPage(META, {});
+		const item = page.items.find(i => i.id === "rec2") as Extract<ChatItem, { kind: "message" }>;
+		assert.deepEqual(item.metadata, { requestKey: "marker-key" });
+	});
+});
