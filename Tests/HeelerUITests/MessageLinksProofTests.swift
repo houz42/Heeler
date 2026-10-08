@@ -150,6 +150,47 @@ final class MessageLinksProofTests: XCTestCase {
             "Open Here must open the embedded browser (Safari toolbar)")
         captureScreenshot(
             app, "message-links-open-here-embedded", lifetime: .keepAlways)
+
+        // Repeat-open lifecycle (real-sim regression): dismiss via the
+        // Safari toolbar ✕, then the SAME link must open the browser
+        // AGAIN (the router-backed sheet binding clears router.browsing
+        // on every dismissal — no stale equal-URL no-op).
+        app.buttons["Close"].firstMatch.tap()
+        XCTAssertTrue(
+            reload.waitForNonExistence(timeout: UITestTimeouts.standard),
+            "the Safari ✕ must dismiss the embedded browser")
+        externalLink.tap()
+        // The domain's allow is persisted now: no ask sheet, straight
+        // to the embedded browser.
+        XCTAssertTrue(
+            reload.waitForExistence(timeout: UITestTimeouts.launch),
+            "the SAME URL must open the embedded browser again after dismissal")
+
+        // A DIFFERENT URL opens too (the second external link). Its
+        // domain is first-seen in this run, so the ask sheet appears
+        // first — through it, the browser must open.
+        app.buttons["Close"].firstMatch.tap()
+        let otherLink = app.links[
+            "https://notes.studio.example/release/9412"].firstMatch
+        XCTAssertTrue(
+            otherLink.waitForExistence(timeout: UITestTimeouts.standard),
+            "the second external link must be tappable after dismissal")
+        otherLink.tap()
+        let otherAsk = app.buttons["Open Here"].firstMatch
+        XCTAssertTrue(
+            otherAsk.waitForExistence(timeout: UITestTimeouts.standard),
+            "the second link's first-seen domain must present the ask sheet")
+        otherAsk.tap()
+        XCTAssertTrue(
+            app.buttons["ReloadButton"].firstMatch
+                .waitForExistence(timeout: UITestTimeouts.launch),
+            "a DIFFERENT URL must open the embedded browser")
+        // And the transcript state is untouched by the cycle: the
+        // links are still there, position intact.
+        app.buttons["Close"].firstMatch.tap()
+        XCTAssertTrue(
+            externalLink.waitForExistence(timeout: UITestTimeouts.standard),
+            "the transcript must return after the browser cycle, position intact")
     }
 }
 

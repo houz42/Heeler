@@ -993,6 +993,9 @@
                                 The deploy finished. Full run report: \
                                 https://build.studio.example/runs/9412
 
+                                The release notes draft is up too: \
+                                https://notes.studio.example/release/9412
+
                                 The preview also came up on the dev \
                                 box: http://localhost:4173/preview
                                 """),

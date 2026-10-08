@@ -583,6 +583,31 @@ struct OpenRouterCoreTests {
         #expect(router.localNotice != nil)
     }
 
+    @Test func browseDismissalClearsBrowsingForRepeatOpen() throws {
+        // Real-sim repeat-open regression: the Safari sheet's binding
+        // writes nil back through dismissBrowse() on ANY dismissal, so
+        // `router.browsing` is cleared and the SAME URL can open again
+        // (an equal URL left in `browsing` made the next open a no-op).
+        let defaults = try makeDefaults()
+        let store = ChatLinkAllowlistStore(defaults: defaults)
+        store.setAllowsEmbeddedBrowse(true, host: "example.com")
+        let router = OpenRouterCore(allowlist: store)
+
+        // First open presents embedded Safari on the URL.
+        router.open(.url("https://example.com/page"))
+        #expect(router.browsing == URL(string: "https://example.com/page"))
+        // Dismissal (the sheet binding's set(nil)) clears browsing.
+        router.dismissBrowse()
+        #expect(router.browsing == nil)
+        // The SAME URL opens again — not a no-op.
+        router.open(.url("https://example.com/page"))
+        #expect(router.browsing == URL(string: "https://example.com/page"))
+        // And a DIFFERENT URL replaces the presented one.
+        router.dismissBrowse()
+        router.open(.url("https://example.com/other"))
+        #expect(router.browsing == URL(string: "https://example.com/other"))
+    }
+
 
     @Test func dismissingMarkdownCancelsInflightFetch() async throws {
         let fetcher = RecordingFetcher(files: ["/home/me/README.md": Data("x".utf8)])

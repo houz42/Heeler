@@ -21,9 +21,24 @@ struct PresentedLink: Identifiable, Equatable {
 struct OpenersPresenter: ViewModifier {
     @ObservedObject var router: OpenRouterCore
 
-    /// The URL SFSafariViewController is currently showing (set from the
-    /// router's read-only `browsing`; nil dismisses).
-    @State private var safariLink: PresentedLink?
+    /// The embedded-Safari sheet's item binding, router-backed like the
+    /// markdown/local sheets: ANY dismissal (the Safari toolbar ✕,
+    /// swipe-down, interactive pop) writes nil back through
+    /// `router.dismissBrowse()` — clearing `router.browsing` too, so
+    /// the SAME URL can open again. (A plain @State copy plus onChange
+    /// left the equal URL sitting in `router.browsing` after a
+    /// dismiss, and the next open of the same URL was a no-op — the
+    /// real-sim repeat-open regression.)
+    private var safariBinding: Binding<PresentedLink?> {
+        Binding(
+            get: { router.browsing.map { PresentedLink(url: $0) } },
+            set: { newValue in
+                if newValue == nil, router.browsing != nil {
+                    router.dismissBrowse()
+                }
+            }
+        )
+    }
     /// The loopback-link notice lifted from the router for the sheet's
     /// item binding — through a BINDING, not raw state, so ANY
     /// dismissal (Close button, swipe-down, interactive pop) clears
@@ -42,10 +57,7 @@ struct OpenersPresenter: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onChange(of: router.browsing) { _, url in
-                safariLink = url.map { PresentedLink(url: $0) }
-            }
-            .sheet(item: $safariLink) { link in
+            .sheet(item: safariBinding) { link in
                 SafariView(url: link.url)
                     .ignoresSafeArea(edges: .bottom)
             }
