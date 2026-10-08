@@ -1361,7 +1361,9 @@ struct ChatTranscriptImageTile: View {
                         Image(systemName: "photo.badge.exclamationmark")
                             .font(.subheadline)
                         Text("Unavailable")
-                            .font(.system(size: 8))
+                            // Review item 28: fixed 8pt -> scaling
+                            // caption2.
+                            .font(.caption2)
                     }
                     .foregroundStyle(.secondary)
                 } else {

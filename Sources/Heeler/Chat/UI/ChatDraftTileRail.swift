@@ -313,7 +313,10 @@ struct ChatDraftTileRail: View {
                         Image(systemName: "doc")
                             .font(.subheadline)
                         Text(name)
-                            .font(.system(size: 7))
+                            // Review item 28: a fixed 7pt never scales;
+                            // caption2 follows Dynamic Type, kept tight
+                            // by the 40pt width cap + lineLimit(1).
+                            .font(.caption2)
                             .lineLimit(1)
                             .frame(maxWidth: 40)
                     }
@@ -327,7 +330,8 @@ struct ChatDraftTileRail: View {
                         Image(systemName: "text.quote")
                             .font(.subheadline)
                         Text(author)
-                            .font(.system(size: 7))
+                            // Review item 28: fixed 7pt -> scaling caption2.
+                            .font(.caption2)
                             .lineLimit(1)
                             .frame(maxWidth: 40)
                             .foregroundStyle(.secondary)

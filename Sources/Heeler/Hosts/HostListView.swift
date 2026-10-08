@@ -618,7 +618,10 @@ private struct HostCardSection: View {
                                         "host-route-connecting-\(address)")
                             } else {
                                 Image(systemName: "circle.fill")
-                                    .font(.system(size: 7))
+                                    // Review item 28: fixed 7pt -> the
+                                    // scaling caption2 (≈11pt circle),
+                                    // same family as the row's caption.
+                                    .font(.caption2)
                                     .foregroundStyle(
                                         route.usage == .inUse
                                             ? Color.accentColor : Color.secondary)
@@ -754,7 +757,8 @@ private struct HostConnectionIndicator: View {
     var body: some View {
         HStack(spacing: 5) {
             Image(systemName: "circle.fill")
-                .font(.system(size: 7))
+                // Review item 28: fixed 7pt -> scaling caption2.
+                .font(.caption2)
                 .foregroundStyle(tint)
                 .accessibilityHidden(true)
             Text(presentation.title)
