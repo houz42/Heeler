@@ -492,16 +492,22 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
 
     let requestId: String
     let kind: Kind
-    /// The answered ask's FIRST question's own text — the transcript
-    /// anchor. The broker's resolved event carries no position, but
-    /// the ask itself is IN the transcript (the agent's turn that
-    /// posed it); the card renders right after the message containing
-    /// its question text, before the agent's reply that follows —
-    /// never parked at the transcript's tail (that lands it after
-    /// the very reply it produced). Nil (legacy/hand-built records
-    /// or an unknown question) parks after the transcript rows as
-    /// before.
+    /// The answered ask's FIRST question's own text — the LEGACY
+    /// anchor (kept for records captured before identity anchoring,
+    /// and as the fallback when the ask turn was not in the loaded
+    /// page at capture time). Text matching is ambiguous when the
+    /// same question text repeats across asks (the real-session repro:
+    /// 'Which one?' at five transcript positions) — the FIRST text
+    /// match would steal the card. `anchorMessageID` is the identity
+    /// anchor and wins whenever present.
     var questionText: String?
+    /// The ask turn's TRANSCRIPT message identity (the stable UUID
+    /// mapped from the committed item id) — the identity anchor. The
+    /// card renders right after THIS message, before the agent's
+    /// reply, regardless of repeated question text. Claimed at
+    /// capture time (the store resolves the specific ask turn the
+    /// interaction belongs to) and persisted — never re-derived.
+    var anchorMessageID: UUID?
     /// The per-question answer records (`youAnswered` only), in the
     /// interaction's producer order. Empty/nil = this device's
     /// answer data is unavailable (the card renders "Answer details
@@ -517,7 +523,8 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
     private var legacyLabels: [String]?
 
     private enum CodingKeys: String, CodingKey {
-        case requestId, kind, questionText, labels, questionAnswers
+        case requestId, kind, questionText, anchorMessageID, labels,
+            questionAnswers
     }
 
     init(from decoder: any Decoder) throws {
@@ -525,6 +532,7 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
         requestId = try container.decode(String.self, forKey: .requestId)
         kind = try container.decode(Kind.self, forKey: .kind)
         questionText = try container.decodeIfPresent(String.self, forKey: .questionText)
+        anchorMessageID = try container.decodeIfPresent(UUID.self, forKey: .anchorMessageID)
         questionAnswers = try container.decodeIfPresent([QuestionAnswer].self, forKey: .questionAnswers)
         // v2 archives carry `labels` only; keep it readable.
         legacyLabels = try container.decodeIfPresent([String].self, forKey: .labels)
@@ -535,9 +543,11 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
         try container.encode(requestId, forKey: .requestId)
         try container.encode(kind, forKey: .kind)
         try container.encodeIfPresent(questionText, forKey: .questionText)
+        try container.encodeIfPresent(anchorMessageID, forKey: .anchorMessageID)
         // v3 writes never carry the flat legacy form.
         try container.encodeIfPresent(questionAnswers, forKey: .questionAnswers)
     }
+
 
     /// The transcript block's body: the honest one-line record for
     /// surfaces that still render the summary line (search/accessibility).
@@ -654,6 +664,7 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
         self.requestId = requestId
         self.kind = kind
         self.questionText = questionText
+        self.anchorMessageID = nil
         self.questionAnswers = nil
         self.legacyLabels = labels
     }
@@ -667,6 +678,7 @@ struct AgentChatInteractionResolution: Sendable, Equatable, Identifiable, Codabl
         self.requestId = requestId
         self.kind = kind
         self.questionText = questionText
+        self.anchorMessageID = nil
         self.questionAnswers = questionAnswers
         self.legacyLabels = nil
     }

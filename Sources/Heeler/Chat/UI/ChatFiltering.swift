@@ -180,9 +180,15 @@ internal struct ResolvedAsk: Sendable, Equatable, Identifiable {
     var questions: [ResolvedAskQuestion]
     /// The overall outcome (per-question outcomes ride the pairs).
     var outcome: Outcome
-    /// The first question's own text — the anchor: the card renders
-    /// after the message containing this text. (Producer-supplied
-    /// heading/original question, never an AI paraphrase.)
+    /// The ask turn's transcript message identity — the IDENTITY
+    /// anchor: the card renders right after THIS message (the specific
+    /// ask that was answered), regardless of repeated question text
+    /// across asks. Nil (legacy records / the turn outside the loaded
+    /// page at capture time) falls back to `questionText` matching.
+    var anchorMessageID: UUID?
+    /// The first question's own text — the LEGACY text anchor.
+    /// (Producer-supplied heading/original question, never an AI
+    /// paraphrase.)
     var questionText: String?
 
     /// The flat one-line summary ("You answered: …" / the honest
@@ -209,11 +215,13 @@ internal struct ResolvedAsk: Sendable, Equatable, Identifiable {
     /// pair list — the card renders "Answer details unavailable.",
     /// never fabricated choices.
     init(id: String, questions: [ResolvedAskQuestion] = [],
-        outcome: Outcome, questionText: String? = nil
+        outcome: Outcome, anchorMessageID: UUID? = nil,
+        questionText: String? = nil
     ) {
         self.id = id
         self.questions = questions
         self.outcome = outcome
+        self.anchorMessageID = anchorMessageID
         self.questionText = questionText
     }
 }
@@ -263,6 +271,7 @@ extension ResolvedAsk {
             id: resolution.requestId,
             questions: effectivePairs,
             outcome: .init(resolution.kind),
+            anchorMessageID: resolution.anchorMessageID,
             questionText: resolution.questionText)
     }
 }
@@ -605,49 +614,49 @@ internal enum ChatFiltering {
             }
 
             // ANCHOR: after this message, render every ask anchored
-            // to it. The ask is an ask CARD — a tool call whose
-            // ARGUMENTS carry the question text (the ask tool's
-            // parameters), not a plain text message; the anchor
-            // therefore matches BOTH text blocks and toolCall
-            // arguments (JSON), and lands the block at the message
-            // that POSED the question — before the reply that
-            // follows. Level-independent: even when the tool-call
-            // rows themselves are hidden (L0), the message's
-            // position in the flow is still the ask's position, and
-            // a message whose only content was the ask still anchors
-            // (an empty match text only skips, never parks early).
+            // to it. IDENTITY FIRST: a resolved ask carrying
+            // `anchorMessageID` (the specific ask turn the store
+            // claimed at interaction.opened time) renders after THAT
+            // exact message — repeated question text across asks can
+            // never steal the card (the real-session repro: 'Which
+            // one?' at five transcript positions; the answered card
+            // must sit at the ask the user actually answered). The
+            // LEGACY text anchor stays the fallback for records
+            // without an identity claim (v2 archives, capture-time
+            // page lag): the ask is a tool call whose ARGUMENTS carry
+            // the question text, so the match covers text blocks and
+            // toolCall argument string-leaves — JSON quoting never
+            // breaks it. Level-independent: even when the tool-call
+            // rows themselves are hidden (L0), the message's position
+            // in the flow is still the ask's position.
             if !unanchoredAsks.isEmpty {
-                let matchText = message.blocks
-                    .compactMap { block -> String? in
-                        switch block {
-                        case .text(let text):
-                            return text
-                        case .toolCall(let call):
-                            // The ask tool's arguments carry the
-                            // question text as a plain STRING value —
-                            // extract string leaves recursively so
-                            // JSON escaping never breaks the match.
-                            return Self.stringLeaves(of: call.arguments)
-                                .joined(separator: "\n")
-                        default:
-                            return nil
-                        }
-                    }
-                    .joined(separator: "\n")
-                if !matchText.isEmpty {
-                    var remaining: [ResolvedAsk] = []
-                    for ask in unanchoredAsks {
-                        if let anchor = ask.questionText,
-                            !anchor.isEmpty,
-                            matchText.contains(anchor)
-                        {
+                var remaining: [ResolvedAsk] = []
+                for ask in unanchoredAsks {
+                    if let anchorID = ask.anchorMessageID {
+                        // IDENTITY: exact message match, one card per
+                        // ask. A message that only partially matches
+                        // (the id is not this message) never consumes.
+                        if message.id == anchorID {
                             rows.append(.resolvedAsk(ask))
                         } else {
                             remaining.append(ask)
                         }
+                        continue
                     }
-                    unanchoredAsks = remaining
+                    // LEGACY text anchor (records without an identity
+                    // claim only): first text match consumes — the
+                    // pre-identity behavior, kept for compatibility.
+                    if let anchor = ask.questionText,
+                        !anchor.isEmpty,
+                        Self.messageTextLeaves(message)
+                            .contains { $0.contains(anchor) }
+                    {
+                        rows.append(.resolvedAsk(ask))
+                    } else {
+                        remaining.append(ask)
+                    }
                 }
+                unanchoredAsks = remaining
             }
         }
         // Asks whose anchor never matched (unknown/legacy question
@@ -735,6 +744,33 @@ internal enum ChatFiltering {
     /// nested objects). The resolved-ask anchor matches the ask
     /// tool's arguments against these leaves, so JSON quoting never
     /// breaks the question-text match.
+    /// One message's anchor-match surface for the LEGACY text anchor:
+    /// text blocks join into one substring-searchable string; ask
+    /// toolCall argument string-leaves join per-block so JSON quoting
+    /// never breaks the match. (The IDENTITY anchor does not use
+    /// this — exact message id.)
+    private static func messageTextLeaves(
+        _ message: ChatMessage
+    ) -> [String] {
+        message.blocks.compactMap { block -> String? in
+            switch block {
+            case .text(let text):
+                return text
+            case .toolCall(let call):
+                return Self.stringLeaves(of: call.arguments)
+                    .joined(separator: "\n")
+            default:
+                return nil
+            }
+        }.map { blockText in
+            // The legacy match was `matchText.contains(anchor)` over
+            // the JOINED blocks; per-block contains preserves every
+            // match that behavior found (anchors are single questions,
+            // never spanning block joins).
+            blockText
+        }
+    }
+
     static func stringLeaves(of value: JSONValue) -> [String] {
         switch value {
         case .string(let string):

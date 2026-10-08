@@ -546,7 +546,7 @@
                                 want footage, note the exact window.
                                 """),
                         ]),
-                        // (the resolved cards anchor by questionText)
+                        // (the resolved cards anchor by identity or text)
                         ChatMessage(role: .assistant, blocks: [
                             .text(
                                 """
@@ -554,6 +554,60 @@
                                 video and the validation report with your \
                                 ten-second window. Continuing with the \
                                 release prep.
+                                """),
+                        ]),
+                        // THE REPEATED-QUESTION REPRO SHAPE: the SAME
+                        // question text asked twice (the real session
+                        // had 'Which one?' at five positions). The
+                        // answered card must anchor to the SECOND ask
+                        // — by IDENTITY, never the first text match.
+                        ChatMessage(
+                            id: AgentChatMapper.stableID(
+                                for: "demo-ask-earlier"),
+                            role: .assistant,
+                            blocks: [
+                                .toolCall(ToolCall(
+                                    id: "call-earlier", name: "ask",
+                                    arguments: .object([
+                                        "questions": .array([
+                                            .object([
+                                                "id": .string("sizing"),
+                                                "question": .string("Which one?"),
+                                                "options": .array([
+                                                    .object(["label": .string("Small")]),
+                                                    .object(["label": .string("Medium")]),
+                                                    .object(["label": .string("Large")]),
+                                                ]),
+                                            ]),
+                                        ]),
+                                    ]))),
+                            ]),
+                        ChatMessage(
+                            id: AgentChatMapper.stableID(
+                                for: "demo-ask-latest"),
+                            role: .assistant,
+                            blocks: [
+                                .toolCall(ToolCall(
+                                    id: "call-latest", name: "ask",
+                                    arguments: .object([
+                                        "questions": .array([
+                                            .object([
+                                                "id": .string("sizing"),
+                                                "question": .string("Which one?"),
+                                                "options": .array([
+                                                    .object(["label": .string("Small")]),
+                                                    .object(["label": .string("Medium")]),
+                                                    .object(["label": .string("Large")]),
+                                                ]),
+                                            ]),
+                                        ]),
+                                    ]))),
+                            ]),
+                        ChatMessage(role: .assistant, blocks: [
+                            .text(
+                                """
+                                You picked Medium. Continuing with the \
+                                packaging step.
                                 """),
                         ]),
                     ],
@@ -607,6 +661,24 @@
                             outcome: .youAnswered,
                             questionText:
                                 "What should the export include for the review bundle?"),
+                        // THE REPEATED-QUESTION REPRO: the SECOND
+                        // identical ask was answered — the card
+                        // anchors to demo-ask-latest by IDENTITY
+                        // (never the first text match).
+                        ResolvedAsk(
+                            id: "demo-qa-repeated",
+                            questions: [
+                                ResolvedAskQuestion(
+                                    id: "sizing",
+                                    question: "Which one?",
+                                    selectedOptions: [
+                                        .init(id: "idx:1", label: "Medium"),
+                                    ]),
+                            ],
+                            outcome: .youAnswered,
+                            anchorMessageID: AgentChatMapper.stableID(
+                                for: "demo-ask-latest"),
+                            questionText: "Which one?"),
                         // Cancelled: honest outcome, no accepted styling.
                         ResolvedAsk(
                             id: "demo-qa-cancelled",
