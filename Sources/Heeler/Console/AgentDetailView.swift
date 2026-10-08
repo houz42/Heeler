@@ -197,11 +197,18 @@ struct AgentDetailView: View {
         case chat
         case terminal
 
-        /// The surface a detail opens on: Chat when a transcript is
-        /// readable, Terminal otherwise.
+        /// The surface a detail opens on: CHAT. A missing agentSession is
+        /// NOT terminal intent — an agent's bounce/restart (omp /exit →
+        /// resume, a NEW pid + generation) leaves the session transiently
+        /// nil on the remount, and the previous `: .terminal` fallback
+        /// auto-switched the detail to the TUI surface with no terminal-icon
+        /// tap (the same nil-falls-to-terminal class as the eager-attach
+        /// bug, now on the remount path: it also mounted the terminal and
+        /// attached/resized the shared pane). Chat is the default surface
+        /// in every state; the terminal is reached ONLY by the explicit
+        /// icon tap.
         static func initial(agent: ConsoleAgent) -> AgentDetailSurface {
-            agent.agent.agentSession?.kind == AgentSessionRefKind.path
-                ? .chat : .terminal
+            .chat
         }
     }
 

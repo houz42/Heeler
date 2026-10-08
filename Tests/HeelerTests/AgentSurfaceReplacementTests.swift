@@ -1114,3 +1114,73 @@ extension AgentSurfaceReplacementTests {
         #expect(mounted.isEmpty, "the terminal surface mounted on agent-open")
     }
 }
+
+// MARK: - A bounced agent's remount stays on the chat surface
+
+extension AgentSurfaceReplacementTests {
+    /// An agent's bounce/restart (a NEW pid + generation) leaves the
+    /// agentSession transiently NIL on the remount, and the old initial
+    /// defaulted that state to TERMINAL — the detail auto-switched to the
+    /// TUI with no terminal-icon tap (and mounted/attached the terminal).
+    /// The initial surface is CHAT in every state: a missing session is
+    /// not terminal intent; the terminal is ONLY the explicit icon tap.
+    @MainActor
+    @Test(.timeLimit(.minutes(1)))
+    func aBouncedAgentsRemountStaysOnTheChatSurface() async throws {
+        let transport = ScriptedTransport()
+        let composer = AgentComposerStore(target: "w1:p1") { params in
+            try await transport.promptAgent(params)
+        }
+        // An agent with NO session (the transient bounce state).
+        let agent = Self.makeAgent(pane: "w1:p1")
+        let defaults = UserDefaults(suiteName: "bounce-remount-\(UUID())") ?? .standard
+        let console = ConsoleStore(snapshotRetryDelay: .seconds(30)) { _, subscriptions in
+            EventsSession(
+                subscriptions: subscriptions,
+                connect: { throw TransportError.sshUnreachable(detail: "fixture") },
+                reconnectPolicy: .default,
+                keepalive: .default)
+        }
+        let terminalSettings = TerminalSettings(
+            themes: TerminalThemeSettings(defaults: defaults),
+            zoom: TerminalZoomSettings(defaults: defaults),
+            fonts: TerminalFontSettings(defaults: defaults),
+            snippets: SnippetStore(defaults: defaults))
+        let stage = AgentDetailStage(isVisible: { true }, terminalAccess: { .holds })
+        let controller = UIHostingController(
+            rootView: AgentDetailView(
+                agent: agent,
+                console: console,
+                terminal: terminalSettings,
+                inputMode: AgentInputModeSettings(defaults: defaults),
+                hosts: [],
+                activity: AppActivityCoordinator(),
+                keyboardHandoff: TerminalKeyboardHandoff(),
+                keyboardInset: TerminalKeyboardInset(),
+                stage: stage,
+                onSwitch: { _ in },
+                onClosed: {},
+                composerStore: composer,
+                attachStore: Self.makeAttachStore(transport: transport, composer: composer)))
+        let window = Self.makeLocalTestWindow(
+            frame: CGRect(x: 0, y: 0, width: 402, height: 874),
+            rootViewController: controller)
+        defer { window.isHidden = true }
+
+        // Settle well past the fallback's grace: the remounted detail
+        // with a session-less agent renders CHAT, mounts NO terminal
+        // surface, and attaches NOTHING.
+        for _ in 0..<4 {
+            controller.view.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(600))
+        }
+        // The initial surface is CHAT even with NO session (the transient
+        // bounce state) — verified through the detail's rendering: the
+        // chat branch renders, the terminal does NOT (the assertions
+        // below carry the contract; the enum itself is private).
+        let requestCount = await transport.attachRequests.count
+        #expect(requestCount == 0, "the remount attached the terminal")
+        let mounted = Self.terminals(in: controller.view)
+        #expect(mounted.isEmpty, "the remount mounted the terminal surface")
+    }
+}
