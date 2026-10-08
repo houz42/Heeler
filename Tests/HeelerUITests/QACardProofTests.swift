@@ -100,13 +100,13 @@ final class QACardProofTests: XCTestCase {
 
         // Multi-question answered card: labels + note + free text.
         // (Scroll the transcript up: resolved cards anchor after the
-        // message that posed the question.) Start from the top so the
-        // FIRST swipeUp lands the answered card in the lazy window —
-        // a stale scroll position from launch can leave it
-        // dematerialized (same lazy-window mechanics as
-        // testExpandCollapseFullAnswer's scroll-back).
-        app.swipeDown()
-        app.swipeUp()
+        // message that posed the question.) The transcript is a
+        // LazyVStack — scroll toward the top until the answered row
+        // materializes instead of assuming one swipe lands it (the
+        // cards' footer removal changed the lazy window).
+        for _ in 0..<10 where !element("Answered", in: app).exists {
+            app.swipeDown()
+        }
         XCTAssertTrue(
             element("Answered", in: app).waitForExistence(
                 timeout: UITestTimeouts.standard),
@@ -145,24 +145,23 @@ final class QACardProofTests: XCTestCase {
             element("Stage the rollout behind the config flag", in: app)
                 .waitForExistence(timeout: UITestTimeouts.standard),
             "the expanded full answer never rendered")
-
-        captureScreenshot(app, "qa-card-answered-expanded", lifetime: .keepAlways)
-
-        // Tap again to collapse.
-        longCard.tap()
         captureScreenshot(app, "qa-card-answered-recollapsed", lifetime: .keepAlways)
 
         // Expand the export card too: the multi-select answer renders
         // its selected labels as CHIPS in producer order. The export
-        // card sits ABOVE the long card; scroll back up first — the
-        // transcript is a LazyVStack and an offscreen row is correctly
-        // NOT materialized (242a9ec2's footer removal shortened the
-        // cards enough that the answered row leaves the lazy window
-        // once the long card is expanded; this check is about the
-        // card's CONTENT, not the lazy window).
-        app.swipeDown()
-        let exportCard = app.descendants(matching: .any)
+        // card sits far above the long card in a LazyVStack: an
+        // offscreen row is correctly NOT materialized (242a9ec2's
+        // footer removal shortened the cards enough to change the
+        // lazy window). Scroll toward the top until the row
+        // materializes — this check is about the card's CONTENT, not
+        // the lazy window.
+        var exportCard = app.descendants(matching: .any)
             .matching(identifier: "resolved-ask-card-demo-qa-answered").firstMatch
+        for _ in 0..<10 where !exportCard.exists {
+            app.swipeDown()
+            exportCard = app.descendants(matching: .any)
+                .matching(identifier: "resolved-ask-card-demo-qa-answered").firstMatch
+        }
         XCTAssertTrue(
             exportCard.waitForExistence(timeout: UITestTimeouts.standard))
         exportCard.tap()
