@@ -21,7 +21,7 @@ struct ChatRealAskAnchorTests {
         let store: AgentChatStore
         private let broker: Task<Void, Never>
 
-        init(sessionFile: String) async {
+        init(sessionFile: String, initiallySettled: Bool = false) async {
             let pipe = ScriptedChatPipe()
             self.pipe = pipe
             // Two IDENTICAL ask turns in the page (same question id,
@@ -36,9 +36,18 @@ struct ChatRealAskAnchorTests {
             let ask1 = askTurn("msg-ask-1", "ask_0_one")
             let ask1Result = #"{"kind":"message","id":"msg-ask-1-res","author":{"role":"tool"},"createdAt":null,"blocks":[{"type":"tool_result","callId":"ask_0_one","name":"ask","isError":false,"content":[{"type":"text","text":"User selected: Small"}]}]}"#
             let ask2 = askTurn("msg-ask-2", "ask_0_two")
+            // The wire carries the CAUSAL ORIGIN (additive field): the
+            // ask's toolCallId — the SAME id as the ask2 turn's
+            // tool_call block callId (ask_0_two), exactly what the
+            // adapter threads from execute's toolCallId.
             let interactionJSON = #"""
-            {"requestId":"ask-latest","generation":1,"kind":"question","questions":[{"id":"twentyfirst_demo","text":"Which one?","multi":false,"options":[{"id":"idx:0","label":"Small"},{"id":"idx:1","label":"Medium"},{"id":"idx:2","label":"Large"}],"allowCustom":true}]}
+            {"requestId":"ask-latest","generation":1,"kind":"question","toolCallId":"ask_0_two","questions":[{"id":"twentyfirst_demo","text":"Which one?","multi":false,"options":[{"id":"idx:0","label":"Small"},{"id":"idx:1","label":"Medium"},{"id":"idx:2","label":"Large"}],"allowCustom":true}]}
             """#
+            // Whether the ask settled — the history page serves ask2
+            // WITH its tool_result after the answer (the real adapter
+            // commits the native result when the ask settles).
+            let answeredAsk = SettledBox()
+            answeredAsk.value = initiallySettled
             let broker = Task<Void, Never> {
                 await pipe.brokerSend(
                     #"{"type":"welcome","protocol":1,"maxFrameBytes":1048576}"#)
@@ -67,12 +76,14 @@ struct ChatRealAskAnchorTests {
                         await pipe.brokerSend(
                             #"{"type":"event","seq":1,"event":{"type":"interaction.opened","interaction":\#(interactionJSON)}}"#)
                     case "history.open":
+                        let ask2Result = #"{"kind":"message","id":"msg-ask-2-res","author":{"role":"tool"},"createdAt":null,"blocks":[{"type":"tool_result","callId":"ask_0_two","name":"ask","isError":false,"content":[{"type":"text","text":"User selected: Medium"}]}]}"#
                         await pipe.brokerSend(
-                            #"{"type":"response","id":"\#(id)","result":{"sessionId":"s1","generation":1,"revision":"rev-1","throughSeq":1,"items":[\#(ask1),\#(ask1Result),\#(ask2)],"olderCursor":null}}"#)
+                            #"{"type":"response","id":"\#(id)","result":{"sessionId":"s1","generation":1,"revision":"rev-1","throughSeq":1,"items":[\#(ask1),\#(ask1Result),\#(ask2)\#(answeredAsk.value ? "," + ask2Result : "")],"olderCursor":null}}"#)
                     case "interactions.list":
                         await pipe.brokerSend(
                             #"{"type":"response","id":"\#(id)","result":{"pending":[\#(interactionJSON)]}}"#)
                     case "interactions.answer":
+                        answeredAsk.value = true
                         await pipe.brokerSend(
                             #"{"type":"event","seq":2,"event":{"type":"interaction.resolved","requestId":"ask-latest","outcome":"answered","source":"remote"}}"#)
                         await pipe.brokerSend(
@@ -239,7 +250,8 @@ struct ChatRealAskAnchorTests {
         }
         // A NEW store on the SAME session identity (the detail
         // reopen path) reconstructs the archived resolution.
-        let harness2 = await Harness(sessionFile: sessionFile)
+        let harness2 = await Harness(
+            sessionFile: sessionFile, initiallySettled: true)
         defer { await harness2.tearDown() }
         let reopened = harness2.store
         for _ in 0..<50 where reopened.interactionResolutions.isEmpty {
@@ -252,5 +264,91 @@ struct ChatRealAskAnchorTests {
         #expect(
             restored?.anchorMessageID != nil,
             "the anchor persists through the archive — the reopened card renders at the same ask turn")
+    }
+
+    @Test("REGRESSION (design pane's reachable case): a legacy nil-anchor record NEVER binds to the current un-resulted ask")
+    func legacyNilAnchorNeverBindsToCurrentAsk() async throws {
+        // The exact reachable case: a LEGACY answered record with NO
+        // anchor (persisted before identity anchoring) reconstructs
+        // from the archive while a NEW ask is pending (its turn the
+        // unique un-resulted ask in the page). The merged back-fill
+        // swept ALL nil-anchor records and wrongly bound the legacy
+        // record to the CURRENT ask; the fix binds only records whose
+        // OWN interaction has a live claim. The legacy record must
+        // stay UNANCHORED (nil) — it parks at its own position.
+        let sessionFile = "/s/legacy-\(UUID().uuidString)"
+        // Pre-seed the archive with a legacy nil-anchor resolution
+        // for a DIFFERENT (long-closed) ask — the store reconstructs
+        // it on start, BEFORE the current interaction opens.
+        AgentChatResolutionArchiveStore.save(
+            socketPath: "/tmp/chat.sock", sessionFile: sessionFile,
+            resolutions: [
+                AgentChatInteractionResolution(
+                    requestId: "dd19290b-legacy", kind: .youAnswered,
+                    questionText: "Which one?",
+                    questionAnswers: [
+                        .init(
+                            questionId: "twentyfirst_demo",
+                            question: "Which one?",
+                            selections: [
+                                .init(
+                                    optionId: "idx:1", label: "Medium")
+                            ],
+                            customText: nil, note: nil)
+                    ])
+            ])
+        defer {
+            // The seeded archive must not leak into other runs.
+            if let url = AgentChatResolutionArchiveStore.archiveURL(
+                socketPath: "/tmp/chat.sock", sessionFile: sessionFile) {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+
+        let harness = await Harness(sessionFile: sessionFile)
+        defer { await harness.tearDown() }
+        let store = harness.store
+
+        // The archive reconstructed the legacy record.
+        let legacy = store.interactionResolutions.first {
+            $0.requestId == "dd19290b-legacy"
+        }
+        #expect(legacy != nil, "the archived legacy record reconstructs")
+
+        // The current ask is pending (its turn the unique un-resulted
+        // ask). Answer it — recordResolution + back-fills all run.
+        let interaction = try #require(store.interactions.first)
+        try await store.answer(
+            interaction,
+            answers: [
+                AgentChatAnswer(
+                    questionId: "twentyfirst_demo", optionIds: ["idx:1"],
+                    customText: nil, note: nil)
+            ])
+
+        // THE REGRESSION PIN: the legacy record STAYS nil — the
+        // current ask's anchor was never assigned to it.
+        let legacyAfter = store.interactionResolutions.first {
+            $0.requestId == "dd19290b-legacy"
+        }
+        #expect(
+            legacyAfter?.anchorMessageID == nil,
+            "a legacy nil-anchor record must NEVER bind to the current un-resulted ask")
+
+        // The CURRENT ask's resolution DOES carry its own anchor.
+        let current = store.interactionResolutions.first {
+            $0.requestId == "ask-latest"
+        }
+        #expect(
+            current?.anchorMessageID != nil,
+            "the current ask's own resolution keeps its causal anchor")
+    }
+}
+
+/// A reference box the broker task flips when the ask settles (the
+/// harness serves the ask's tool_result on subsequent pages).
+extension ChatRealAskAnchorTests {
+    final class SettledBox: @unchecked Sendable {
+        var value = false
     }
 }
