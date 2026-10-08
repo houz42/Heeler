@@ -1445,13 +1445,15 @@ struct ChatScreen: View {
                     sections: AgentActionMenuPolicy.composerAddSections)
             }
         } label: {
-            // Review item 16 (round-3 correction): a .plain Button
+            // Review item 16 (round-4 correction): a .plain Button
             // hit-tests its LABEL's content shape, so the 44pt target
-            // must live INSIDE the label; and the visible circle
-            // background applies BEFORE the frame so it stays 36pt.
+            // must live INSIDE the label. The visible circle keeps the
+            // base's 36pt diameter: glyph 30pt -> 36pt frame ->
+            // background -> 44pt target frame -> content shape.
             Image(systemName: "plus")
                 .font(.system(size: 17, weight: .semibold))
                 .frame(width: 30, height: 30)
+                .frame(width: 36, height: 36)
                 .background(
                     Color(uiColor: .secondarySystemFill).opacity(0.55),
                     in: Circle())
