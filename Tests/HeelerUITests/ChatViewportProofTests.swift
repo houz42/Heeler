@@ -278,6 +278,19 @@ final class ChatViewportProofTests: XCTestCase {
             window.frame.intersects(reply.frame),
             "the streamed reply is mounted but NOT intersecting the viewport")
 
+        // THE IDENTITY SWAP (trace104): the provisional streaming
+        // placeholder disappears when the stream finishes and the
+        // committed record takes its place (rows shrink then regrow,
+        // window replacement). A following reader must see the SETTLED
+        // reply at the bottom — never landing below the fold until a
+        // manual Latest tap. Wait for the swap to settle and re-check
+        // the committed reply is STILL intersecting the viewport.
+        Thread.sleep(forTimeInterval: 1.5)
+        let settled = message("The demo agent's reply lands here", in: app)
+        XCTAssertTrue(settled.exists)
+        XCTAssertTrue(
+            window.frame.intersects(settled.frame),
+            "the settled reply fell BELOW the fold after the provisional→committed identity swap — the follow did not carry (trace104)")
         captureScreenshot(app, "lifecycle-send-at-bottom-reveals-message")
     }
 
