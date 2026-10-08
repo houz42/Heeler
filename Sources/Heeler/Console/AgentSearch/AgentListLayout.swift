@@ -32,6 +32,19 @@ enum AgentListOrder: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// The compact label for accessibility text sizes, where the
+    /// count bar's compound "Grouping · Order" caption would otherwise
+    /// ellipsize mid-word ("Herdr o…"). Same vocabulary, fewer words.
+    var shortLabel: String {
+        switch self {
+        case .herdr: "Herdr"
+        case .recent: "Recent"
+        case .title: "A–Z"
+        case .attention: "Attention"
+        case .pane: "Panes"
+        }
+    }
+
     var description: String {
         switch self {
         // v3 "Default herdr ordering": the producer's own workspace/tab/
@@ -75,6 +88,19 @@ enum AgentListGrouping: String, CaseIterable, Identifiable, Sendable {
         case .workspace: "Workspace"
         case .tab: "Tab"
         case .state: "Agent state"
+        }
+    }
+
+    /// The compact label for accessibility text sizes (see
+    /// `AgentListOrder.shortLabel`).
+    var shortLabel: String {
+        switch self {
+        case .none: "None"
+        case .host: "Hosts"
+        case .session: "Sessions"
+        case .workspace: "Spaces"
+        case .tab: "Tabs"
+        case .state: "State"
         }
     }
 

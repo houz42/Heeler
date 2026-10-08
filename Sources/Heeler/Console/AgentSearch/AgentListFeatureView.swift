@@ -20,6 +20,7 @@ struct AgentListCountBarView: View {
         var id: String { "view" }
     }
     @State private var viewSheet: ViewSheet?
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         HStack(spacing: 8) {
@@ -39,10 +40,20 @@ struct AgentListCountBarView: View {
                 HStack(spacing: 4) {
                     // The design's .agent-list-viewbar: color var(--accent)
                     // — the accent green, not muted (v2 directive).
-                    Text("\(layoutStore.grouping.label) · \(layoutStore.order.label)")
+                    // At accessibility sizes the two-label compound
+                    // ("None · Herdr order") ellipsized into "Herdr o…";
+                    // the button wraps and, when even that will not fit
+                    // the bar's row, falls back to the leading word pair
+                    // (the a11y value still carries both labels in full).
+                    Text(
+                        dynamicTypeSize.isAccessibilitySize
+                            ? "\(layoutStore.grouping.shortLabel) · \(layoutStore.order.shortLabel)"
+                            : "\(layoutStore.grouping.label) · \(layoutStore.order.label)"
+                    )
                         .font(.caption)
                         .foregroundStyle(Color.accentColor)
                         .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
                     Image(systemName: "chevron.up.chevron.down")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(Color.accentColor)
