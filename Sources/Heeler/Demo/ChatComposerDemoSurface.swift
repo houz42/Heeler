@@ -68,6 +68,8 @@
                         try await model.deliver(
                             text.isEmpty ? "📷 (image-only message)" : text)
                     },
+                    pendingMessages: Self.wantsPendingSeed
+                        ? Self.pendingSeedEntries : [],
                     authorLabel: "Meadow · omp",
                     attachments: attachments)
                 .navigationTitle("ios-polish")
@@ -83,10 +85,20 @@
         /// analog for the writing-assist proofs) instead of clearing
         /// the pane at init.
         static let persistDraftLaunchArgument = "--demo-composer-persist"
-
+        /// The pending-region capture route's launch argument: seeds
+        /// TWO visible outbox entries (one rejected with the honest
+        /// failure copy, one accepted "Awaiting agent") — the
+        /// preview-tap proof's fixture (1-3 entries: each preview
+        /// row is the per-entry detail route).
+        static let pendingSeedLaunchArgument = "--demo-composer-pending"
         /// True when the attachment capture route is active.
         private static var wantsAttachmentSeed: Bool {
             ProcessInfo.processInfo.arguments.contains(attachmentLaunchArgument)
+        }
+
+        /// True when the pending-region capture route is active.
+        private static var wantsPendingSeed: Bool {
+            ProcessInfo.processInfo.arguments.contains(pendingSeedLaunchArgument)
         }
 
         /// True when the persisted draft must SURVIVE the launch —
@@ -94,6 +106,21 @@
         /// back through the real item-18 load path.
         private static var keepsPersistedDraft: Bool {
             ProcessInfo.processInfo.arguments.contains(persistDraftLaunchArgument)
+        }
+
+        /// The seeded pending entries (two: the preview-tap route's
+        /// fixture — a rejected one needing attention, an accepted
+        /// one awaiting the agent).
+        private static var pendingSeedEntries: [ChatPendingEntry] {
+            [
+                ChatPendingEntry(
+                    text: "Ship the checkout fix — run the targeted tests first.",
+                    ordinal: 1, status: .rejected,
+                    failureMessage: "The agent did not answer in time — your message may not have been delivered."),
+                ChatPendingEntry(
+                    text: "Then open the PR and ping me.",
+                    ordinal: 2, status: .accepted),
+            ]
         }
 
         init() {
