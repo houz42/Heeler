@@ -511,9 +511,10 @@ struct ChatScreen: View {
                     }
                 },
                 onNewest: {
-                    if let last = items.last {
+                    let target = conversationLastID
+                    if !target.isEmpty {
                         scrollCoordinator.userJumped(
-                            to: last.id, anchor: .bottom)
+                            to: target, anchor: .bottom)
                     }
                 })
             .padding(.trailing, 8)
@@ -643,11 +644,35 @@ struct ChatScreen: View {
         scrollCoordinator.geometryChanged(geometry)
     }
 
+    /// The newest CONVERSATION content's row id — the follow target.
+    /// Unanchored resolved-ask records PARK after the transcript's
+    /// rows (their question never matched a committed message), so
+    /// the LAST item can be a static legacy history card sitting
+    /// BELOW the newest conversation content: every follow — the
+    /// follow-latest hold, the identity-swap follow, the explicit
+    /// Latest jump — must land on the newest CONVERSATION row, never
+    /// on the parked card (the real-path trace: repeated holds
+    /// targeted `resolved#a387c719…` and the actual reply stayed
+    /// below the fold).
+    private var conversationLastID: String {
+        var last = items.last?.id ?? ""
+        for item in items.reversed() {
+            if case .row(let row) = item, case .resolvedAsk = row {
+                continue  // a parked card: skip to the content below
+            }
+            last = item.id
+            break
+        }
+        return last
+    }
+
     /// The item-bounds pump: the coordinator sees the transcript's
     /// first/last stable ids whenever the mounted content changes.
+    /// The LAST bound is the newest CONVERSATION row (skipping the
+    /// parked cards) — the follow's target identity.
     private func pumpItemsToCoordinator() {
         let first = items.first?.id ?? ""
-        let last = items.last?.id ?? ""
+        let last = conversationLastID
         scrollCoordinator.itemsChanged(first: first, last: last)
     }
 
@@ -668,8 +693,19 @@ struct ChatScreen: View {
         // Only rows the reader actually HAD count as deletions —
         // offscreen rows churn freely under lazy materialization.
         let wasMaterialized = materializedRowIDs.intersection(Set(oldIDs))
-        guard wasMaterialized.contains(where: { !newSet.contains($0) })
-        else { return }
+        let vanished = wasMaterialized.filter { !newSet.contains($0) }
+        guard !vanished.isEmpty else { return }
+        // TRANSIENT vs TRIM classification (the trace104-final2
+        // finding): a provisional tail vanishing into its committed
+        // record (rows 48→47, the suffix churn of the identity swap)
+        // is NOT a window replacement — the transaction's top-anchor
+        // YANKED the reading position (-1649→-1126). A committed-
+        // window coverage trim (the 60→30 case) removes PREFIX rows:
+        // the FIRST id changes and many rows vanish. The anchor
+        // transaction fires ONLY on that actual trim; the identity
+        // swap's own follow handles the suffix churn.
+        let firstChanged = oldIDs.first != newIDs.first
+        guard firstChanged || vanished.count > 2 else { return }
         let survivor = newIDs.first {
             wasMaterialized.contains($0) && newSet.contains($0)
         }
