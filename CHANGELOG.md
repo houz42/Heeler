@@ -132,6 +132,27 @@ Entries reference the issue that motivated them.
     button, since the row tap switches routes. Route address subtitles
     are neutral gray in the host list and host form.
   - Agent List Fields host rows show an icon aligned with the global row.
+  - The chat jump pill no longer overlaps transcript content on iPhone:
+    while the pill is visible, rows reserve its width as a trailing
+    gutter, so long user bubbles and Q/A cards stay clear of the
+    floating control (the pill's "Oldest message"/"Latest message"
+    buttons keep their 44pt targets).
+  - Resolved Q/A cards no longer end in an empty hairline strip, and a
+    resolved multi-question card shows its page position ("1 of 2") in
+    neutral gray without the in-progress segments — the swipe and
+    next/previous accessibility actions still page between questions.
+  - Console host-condition rows and the Agents view control wrap
+    instead of truncating at accessibility text sizes ("Connecting to
+    Offli…" and "None · Herdr o…" are gone; the view control carries a
+    compact label at those sizes).
+  - Console "Pinned" section headers, the pinned glyph and the "Order
+    unavailable" mark use the standard section-header label ink
+    instead of a near-invisible tertiary gray.
+  - The Tasks inspector's state glyphs come from one SF Symbol family
+    (circle shapes: empty, half-filled, checkmark, exclamation, minus,
+    question-mark) instead of a mix of bare squares, dashes and marks.
+  - Host list route rows are tighter: the 44pt inspector button keeps
+    its full hit target, but its frame no longer inflates the row.
 
 ### Fixed
 
