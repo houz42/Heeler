@@ -55,10 +55,14 @@ final class AgentListFieldsProofTests: XCTestCase {
         captureScreenshot(
             app, "agent-list-fields-host-rows", lifetime: .keepAlways)
 
-        // The row pushes its own editing surface.
+        // The row pushes its own editing surface (titled with the
+        // target's display name — a Host's own name, never the list's).
         hostRow.tap()
+        let pushedTitle = app.navigationBars.matching(
+            NSPredicate(format: "identifier != %@", "Agent List Fields")
+        ).firstMatch
         XCTAssertTrue(
-            app.waitForPushedDetail(),
+            pushedTitle.waitForExistence(timeout: UITestTimeouts.standard),
             "the Host row never pushed its field editor")
     }
 
