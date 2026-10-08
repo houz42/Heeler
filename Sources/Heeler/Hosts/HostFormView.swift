@@ -29,6 +29,10 @@ struct HostFormView: View {
     /// behavior contract: dirty drafts are protected).
     @State private var isConfirmingDiscard = false
     @State private var isShowingAdvanced = false
+    /// Gates the Jump Host port's keyboard Done bar on its own focus
+    /// (round-3 review): ungated, it stacks a duplicate Done while
+    /// another field holds the keyboard.
+    @FocusState private var isJumpPortFocused: Bool
     /// The draft as first shown — Cancel's dirty check compares against it.
     @State private var initialDraft: HostDraft = HostDraft()
     @Environment(\.dismiss) private var dismiss
@@ -134,6 +138,7 @@ struct HostFormView: View {
                 // interactive dismiss is disabled while edits exist, so
                 // the guarded Cancel is the only exit (approved behavior
                 // contract; the reviewer's dirty-dismiss residue).
+                .interactiveDismissDisabled(draft != initialDraft)
                 .sheet(item: routeEditorBinding) { route in
                     HostRouteEditView(
                         hostName: routeEditorHostName,
@@ -452,16 +457,20 @@ struct HostFormView: View {
                 TextField("Jump Host address (optional)", text: $draft.jumpAddress)
                     .textContentType(.URL)
                     .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
                 if draft.usesJumpHost {
                     TextField("Jump Host port", text: $draft.jumpPort)
                         .keyboardType(.numberPad)
+                        .focused($isJumpPortFocused)
                         .toolbar {
-                            ToolbarItemGroup(placement: .keyboard) {
-                                Spacer()
-                                Button("Done") {
-                                    UIApplication.shared.sendAction(
-                                        #selector(UIResponder.resignFirstResponder),
-                                        to: nil, from: nil, for: nil)
+                            // Focus-gated like LabeledTextField's Done
+                            // bar (round-3 review): without the gate a
+                            // second keyboard toolbar stacks a duplicate
+                            // Done while another field is focused.
+                            if isJumpPortFocused {
+                                ToolbarItemGroup(placement: .keyboard) {
+                                    Spacer()
+                                    Button("Done") { isJumpPortFocused = false }
                                 }
                             }
                         }
