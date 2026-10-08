@@ -610,10 +610,12 @@ struct ChatInteractionCard: View {
 /// tapping the card expands the full answer and notes (exact source
 /// and whitespace preserved, selection/copy intact), tapping again
 /// collapses. No Show-details button. Swipe still navigates between
-/// questions; single-question cards omit the indicators. The footer
-/// separator carries the neutral "Answered" eyebrow regardless of
-/// origin (local/remote/terminal styling is identical; provenance is
-/// internal, never a user-visible distinction).
+/// questions; single-question cards omit the position indicator, and a
+/// multi-question card's position reads in neutral secondary ink — the
+/// ask is resolved, so nothing on the card reads as still in progress
+/// (no accent step segments). The eyebrow is neutral "Answered" styled
+/// by outcome (local/remote/terminal styling is identical; provenance
+/// is internal, never a user-visible distinction).
 struct ChatResolvedAskCard: View {
     let ask: ResolvedAsk
 
@@ -645,7 +647,6 @@ struct ChatResolvedAskCard: View {
                 header
                 questionView
                 answerView
-                footer
             }
         }
         .modifier(ChatInteractionSwipeModifier(
@@ -694,12 +695,14 @@ struct ChatResolvedAskCard: View {
                 .fixedSize()
             Spacer(minLength: 0)
             if questions.count > 1 {
+                // Page position only — the ask is RESOLVED, so this must
+                // never read as in-progress. Neutral secondary ink, no
+                // progress segments (the pending card owns those); the
+                // swipe and the a11y actions keep paging working.
                 Text("\(min(step, questions.count)) of \(questions.count)")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(accent)
-                ChatInteractionStepSegments(
-                    step: min(step, questions.count),
-                    count: questions.count, accent: accent)
+                    .foregroundStyle(Color.secondary)
+                    .fixedSize()
             }
             // Disclosure cue: the card toggles on tap, so the
             // collapsed one-line A row must say there is more.
@@ -858,16 +861,6 @@ struct ChatResolvedAskCard: View {
                 }
             }
         }
-    }
-
-    /// The footer separator: the card family's shared quiet base line
-    /// (hairline + spacing), carrying n-of-N when multi-question.
-    @ViewBuilder
-    private var footer: some View {
-        Rectangle()
-            .fill(Color.secondary.opacity(0.12))
-            .frame(height: 0.5)
-            .padding(.top, 2)
     }
 
     private func moveStep(_ direction: Int) {
