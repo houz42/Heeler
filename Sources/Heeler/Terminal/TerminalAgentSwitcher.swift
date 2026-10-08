@@ -384,6 +384,10 @@ final class TerminalAgentChip: UIControl {
     private static let maximumWidth: CGFloat = 148
     private static let dotSize: CGFloat = 8
     private static let pulseKey = "herdr.agentChip.pulse"
+    /// The plain filled circle for idle/unknown statuses: the dot view
+    /// is a symbol glyph (review item 32), so the plain state is a
+    /// symbol too.
+    private static let plainDotSymbol = "circle.fill"
 
     let id: ConsoleAgent.ID
     var title: String? { label.text }
@@ -394,10 +398,22 @@ final class TerminalAgentChip: UIControl {
     /// pinned, so an unpinned chip stays a dot and a label.
     var showsPinIndicator: Bool { !pinView.isHidden }
 
-    private let dot = UIView()
+    /// The status indicator (review item 32): a filled circle is
+    /// colour-only, so it is an SF Symbol whose SHAPE distinguishes the
+    /// state — a filled bolt (working), an xmark (blocked), a checkmark
+    /// (done); idle/unknown keeps the plain filled circle. Tinted with
+    /// the status ink either way. It still pulses for Working.
+    private let dot = UIImageView()
     private let label = UILabel()
     private let pinView = UIImageView()
     private var isWorking = false
+    /// The status glyph drawn inside the dot (review item 32).
+    private var statusGlyphName: String? {
+        didSet {
+            guard oldValue != statusGlyphName else { return }
+            dot.image = UIImage(systemName: statusGlyphName ?? Self.plainDotSymbol)
+        }
+    }
 
     override var isHighlighted: Bool {
         didSet { alpha = isHighlighted ? 0.5 : 1 }
@@ -435,6 +451,8 @@ final class TerminalAgentChip: UIControl {
             pinView.isHidden = !item.isPinned
         }
         dot.backgroundColor = item.status.inkUIColor
+        dot.tintColor = item.status.inkUIColor
+        statusGlyphName = Self.statusSymbol(for: item.status)
         backgroundColor = selected ? .tertiarySystemBackground : .clear
         isWorking = item.status == .working
         updatePulse()
@@ -446,17 +464,50 @@ final class TerminalAgentChip: UIControl {
         accessibilityHint = selected ? nil : "Switches to that Agent"
     }
 
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        // The capsule draws at its label height, but the strip is a
+        // 40pt row (review item 23): the target fills the row's
+        // vertical band so the dead zones above/below the 28pt chip
+        // are tappable. Only the vertical is extended — horizontally
+        // neighbours own their own lanes.
+        let hitBounds = bounds.insetBy(dx: 0, dy: -6)
+        return hitBounds.contains(point)
+    }
+
+    /// The status SHAPE cue (review item 32): one symbol per state so
+    /// status is never colour alone. Idle/unknown keeps the plain
+    /// filled circle.
+    private static func statusSymbol(for status: AgentStatus) -> String? {
+        switch status {
+        case .working: "bolt.fill"
+        case .blocked: "xmark.circle.fill"
+        case .done: "checkmark.circle.fill"
+        default: nil
+        }
+    }
+
     private func configureContent() {
         translatesAutoresizingMaskIntoConstraints = false
         layer.cornerRadius = Self.height / 2
         layer.cornerCurve = .continuous
         isAccessibilityElement = true
 
+        // The dot is a scalable symbol glyph (review item 32): shape
+        // carries the state, ink colour reinforces it, and the symbol
+        // configuration tracks the label's Dynamic Type scale so it
+        // grows with the chip at AX sizes (review item 23).
         dot.translatesAutoresizingMaskIntoConstraints = false
-        dot.layer.cornerRadius = Self.dotSize / 2
+        dot.contentMode = .center
+        dot.preferredSymbolConfiguration = UIImage.SymbolConfiguration(
+            font: .preferredFont(forTextStyle: .footnote))
+        dot.isAccessibilityElement = false
 
         label.translatesAutoresizingMaskIntoConstraints = false
         label.font = .preferredFont(forTextStyle: .footnote)
+        // Size from the label (review item 23): the fixed 28pt chip
+        // clipped at AX sizes. The label now follows Dynamic Type and
+        // the chip grows with it.
+        label.adjustsFontForContentSizeCategory = true
         label.lineBreakMode = .byTruncatingTail
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
@@ -480,10 +531,16 @@ final class TerminalAgentChip: UIControl {
         let width = widthAnchor.constraint(lessThanOrEqualToConstant: Self.maximumWidth)
         width.priority = .required
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: Self.height),
+            // Minimum 28pt at standard sizes (review item 23): the
+            // chip grows past it when AX label sizes need more room,
+            // instead of clipping.
+            heightAnchor.constraint(greaterThanOrEqualToConstant: Self.height),
             width,
-            dot.widthAnchor.constraint(equalToConstant: Self.dotSize),
-            dot.heightAnchor.constraint(equalToConstant: Self.dotSize),
+            // The dot hugs its symbol's intrinsic size (8-ish pt at
+            // standard sizes, growing with the label at AX sizes) with
+            // a floor so it never vanishes.
+            dot.widthAnchor.constraint(greaterThanOrEqualToConstant: Self.dotSize),
+            dot.heightAnchor.constraint(greaterThanOrEqualToConstant: Self.dotSize),
             content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             content.centerYAnchor.constraint(equalTo: centerYAnchor),
