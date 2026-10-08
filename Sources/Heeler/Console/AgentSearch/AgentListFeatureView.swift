@@ -157,9 +157,25 @@ struct AgentListGroupHeaderView: View {
 /// the chip trio never overflows the nav bar) plus its selected state.
 /// Kept UI-free so wording stays unit-testable without hosting the bar.
 struct AgentQuickStateChipPresentation: Equatable {
+    /// The short on-screen labels, one per quick-state chip, used at
+    /// accessibility text sizes. Review item 21: "Needs you"/"Working"
+    /// overflowed the nav bar's row; the VoiceOver name keeps the full
+    /// label, so only the VISIBLE text shortens.
+    static let shortLabels: [String: String] = [
+        "All": "All",
+        "Needs you": "Needs",
+        "Working": "Work",
+    ]
+
     let label: String
-    let shortLabel: String
     let isOn: Bool
+
+    /// The label the chip renders: the short twin at accessibility text
+    /// sizes, the full label otherwise.
+    func visibleLabel(isAccessibilitySize: Bool) -> String {
+        isAccessibilitySize
+            ? Self.shortLabels[label] ?? label : label
+    }
 
     var accessibilityLabel: String { "\(label) filter" }
 }
@@ -183,12 +199,6 @@ struct AgentQuickStateChip: View {
     let label: String
     @Bindable var searchStore: AgentSearchBarStore
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-
-    static let shortLabels: [String: String] = [
-        "All": "All",
-        "Needs you": "Needs",
-        "Working": "Work",
-    ]
 
     /// The quick labels map onto the state filter's search values.
     private var activeStateValues: Set<String> {
@@ -222,10 +232,7 @@ struct AgentQuickStateChip: View {
     }
 
     var presentation: AgentQuickStateChipPresentation {
-        AgentQuickStateChipPresentation(
-            label: label,
-            shortLabel: Self.shortLabels[label] ?? label,
-            isOn: isOn)
+        AgentQuickStateChipPresentation(label: label, isOn: isOn)
     }
 
     var body: some View {
@@ -233,8 +240,8 @@ struct AgentQuickStateChip: View {
             setQuickState()
         } label: {
             Text(
-                dynamicTypeSize.isAccessibilitySize
-                    ? presentation.shortLabel : presentation.label)
+                presentation.visibleLabel(
+                    isAccessibilitySize: dynamicTypeSize.isAccessibilitySize))
                 .font(.caption.weight(.medium))
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)

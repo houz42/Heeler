@@ -132,19 +132,27 @@ struct AgentListHeaderSearchLayoutTests {
 struct AgentQuickStateChipPresentationTests {
     @Test func everyChipLabelHasAShortLabel() {
         for label in ["All", "Needs you", "Working"] {
-            let short = AgentQuickStateChip.shortLabels[label]
+            let short = AgentQuickStateChipPresentation.shortLabels[label]
             // Every chip must have a mapped short label (no silent
-            // fall-back to the long one), and every label that can
-            // shorten does shorten — the pair that overflowed the bar.
+            // fall-back to the long one). "All" is already minimal; the
+            // two long labels must shorten — they are the pair that
+            // overflowed the bar.
             #expect(short != nil, "\(label) needs a short label")
-            #expect((short ?? "").count < label.count, "\(label) must shorten")
+            if label != "All" {
+                #expect((short ?? "").count < label.count, "\(label) must shorten")
+            }
         }
     }
 
     @Test func accessibilityNameKeepsTheFullLabel() {
         let presentation = AgentQuickStateChipPresentation(
-            label: "Needs you", shortLabel: "Needs", isOn: true)
+            label: "Needs you", isOn: true)
         #expect(presentation.accessibilityLabel == "Needs you filter")
-        #expect(presentation.shortLabel == "Needs")
+        #expect(
+            presentation.visibleLabel(isAccessibilitySize: false)
+                == "Needs you")
+        #expect(
+            presentation.visibleLabel(isAccessibilitySize: true)
+                == "Needs")
     }
 }
