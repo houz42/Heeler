@@ -122,3 +122,29 @@ struct AgentListHeaderSearchLayoutTests {
             "the chip's hit region is grown by its frame, at the 44pt scale")
     }
 }
+
+/// Review item 21: at AX sizes the chip trio must still fit the nav bar's
+/// row, so every quick-state label has a SHORT on-screen twin while the
+/// VoiceOver name stays the full label. The short label set must cover
+/// every chip the bar renders — a missing entry would fall back to the
+/// full label and reintroduce the overflow.
+@Suite("Agent quick-state chip AX labels")
+struct AgentQuickStateChipPresentationTests {
+    @Test func everyChipLabelHasAShortLabel() {
+        for label in ["All", "Needs you", "Working"] {
+            let short = AgentQuickStateChip.shortLabels[label]
+            // Every chip must have a mapped short label (no silent
+            // fall-back to the long one), and every label that can
+            // shorten does shorten — the pair that overflowed the bar.
+            #expect(short != nil, "\(label) needs a short label")
+            #expect((short ?? "").count < label.count, "\(label) must shorten")
+        }
+    }
+
+    @Test func accessibilityNameKeepsTheFullLabel() {
+        let presentation = AgentQuickStateChipPresentation(
+            label: "Needs you", shortLabel: "Needs", isOn: true)
+        #expect(presentation.accessibilityLabel == "Needs you filter")
+        #expect(presentation.shortLabel == "Needs")
+    }
+}

@@ -152,6 +152,18 @@ struct AgentListGroupHeaderView: View {
     }
 }
 
+/// Pure presentation values for one quick-state chip: the VoiceOver label
+/// pair (full label, and the short one used at accessibility text sizes so
+/// the chip trio never overflows the nav bar) plus its selected state.
+/// Kept UI-free so wording stays unit-testable without hosting the bar.
+struct AgentQuickStateChipPresentation: Equatable {
+    let label: String
+    let shortLabel: String
+    let isOn: Bool
+
+    var accessibilityLabel: String { "\(label) filter" }
+}
+
 /// The approved quick-state chips (user device finding): All / Needs you /
 /// Working, trailing of the count row. A chip is SELECTED iff the search
 /// model holds a state: filter with that value ("All" iff none). Tapping
@@ -163,10 +175,20 @@ struct AgentListGroupHeaderView: View {
 ///
 /// v3 header directive: each chip is its OWN control — never wrapped in
 /// another button — with a 44pt-scale hit region grown by the frame, not
-/// a contentShape enlarging a smaller frame.
+/// a contentShape enlarging a smaller frame. At accessibility text sizes
+/// the chips show a SHORT label (review item 21, consolidating the
+/// batch-1 item-4 wrap rule) so the trio still fits the nav bar's row
+/// instead of overflowing it; the full label stays the VoiceOver name.
 struct AgentQuickStateChip: View {
     let label: String
     @Bindable var searchStore: AgentSearchBarStore
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    static let shortLabels: [String: String] = [
+        "All": "All",
+        "Needs you": "Needs",
+        "Working": "Work",
+    ]
 
     /// The quick labels map onto the state filter's search values.
     private var activeStateValues: Set<String> {
@@ -199,11 +221,20 @@ struct AgentQuickStateChip: View {
         }
     }
 
+    var presentation: AgentQuickStateChipPresentation {
+        AgentQuickStateChipPresentation(
+            label: label,
+            shortLabel: Self.shortLabels[label] ?? label,
+            isOn: isOn)
+    }
+
     var body: some View {
         Button {
             setQuickState()
         } label: {
-            Text(label)
+            Text(
+                dynamicTypeSize.isAccessibilitySize
+                    ? presentation.shortLabel : presentation.label)
                 .font(.caption.weight(.medium))
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
@@ -214,15 +245,15 @@ struct AgentQuickStateChip: View {
                 // the text — no wrap, no clip.
                 .frame(minHeight: 44)
                 .background(
-                    isOn
+                    presentation.isOn
                         ? Color.accentColor.opacity(0.15)
                         : Color(.tertiarySystemFill),
                     in: Capsule())
-                .foregroundStyle(isOn ? Color.primary : Color.secondary)
+                .foregroundStyle(presentation.isOn ? Color.primary : Color.secondary)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(label) filter")
-        .accessibilityAddTraits(isOn ? [.isSelected] : [])
+        .accessibilityLabel(presentation.accessibilityLabel)
+        .accessibilityAddTraits(presentation.isOn ? [.isSelected] : [])
     }
 }
 
