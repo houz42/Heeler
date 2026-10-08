@@ -151,12 +151,20 @@ final class QACardProofTests: XCTestCase {
             "the expanded full answer never rendered")
         captureScreenshot(app, "qa-card-answered-expanded", lifetime: .keepAlways)
 
-        // Tap again to collapse: the full answer folds back to its ONE
-        // ellipsized line, so the mid-sentence marker goes away.
+        // Tap again to collapse: the A row folds back to ONE
+        // ellipsized line. The full text stays in the AX tree (the
+        // collapsed row is the SAME Text with lineLimit(1)), so the
+        // honest collapse signal is the card's own accessibilityValue
+        // flipping back to "Collapsed".
         longCard.tap()
         XCTAssertTrue(
-            !element("Stage the rollout behind the config flag", in: app).exists,
-            "the collapsed card still exposes the full answer")
+            app.descendants(matching: .any)
+                .matching(
+                    NSPredicate(
+                        format: "identifier == %@ AND label CONTAINS %@",
+                        "resolved-ask-card-demo-qa-long", "Collapsed"))
+                .firstMatch.waitForExistence(timeout: UITestTimeouts.standard),
+            "the card never reported itself collapsed after the second tap")
         captureScreenshot(app, "qa-card-answered-recollapsed", lifetime: .keepAlways)
 
         // Expand the export card too: the multi-select answer renders
