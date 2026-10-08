@@ -91,17 +91,20 @@ enum WorkTaskState: String, Sendable, Equatable, CaseIterable {
         }
     }
 
-    /// The left-icon glyph (design: pending square, in-progress
-    /// dash, completed check, blocked exclamation; unknown renders
-    /// the question mark with safe detail).
+    /// The left-icon glyph (review D7: ONE symbol family — the filled
+    /// circle set, so every state reads as the same visual language:
+    /// pending empty circle, in-progress half-filled, completed
+    /// checkmark, blocked exclamation, cancelled slash, unknown
+    /// question mark). Filled variants: the state icon is the row's
+    /// ONLY state carrier, and fill keeps it legible at 14pt.
     var iconSystemName: String {
         switch self {
-        case .pending: "square"
-        case .inProgress: "minus"
-        case .blocked: "exclamationmark"
-        case .completed: "checkmark"
-        case .cancelled: "xmark"
-        case .unknown: "questionmark"
+        case .pending: "circle"
+        case .inProgress: "circle.lefthalf.filled"
+        case .blocked: "exclamationmark.circle.fill"
+        case .completed: "checkmark.circle.fill"
+        case .cancelled: "minus.circle.fill"
+        case .unknown: "questionmark.circle.fill"
         }
     }
 }
@@ -158,18 +161,19 @@ enum WorkSubagentRuntimeState: String, Sendable, Equatable, CaseIterable {
         }
     }
 
-    /// The left rounded-icon glyph (design: clock/running,
-    /// check/completed, exclamation/needs input, cross/failed,
-    /// dash/cancelled, question mark/unknown).
+    /// The left rounded-icon glyph (review D7: the SAME circle family
+    /// as the Tasks tab — running keeps its clock (the live-run
+    /// signal), needs input keeps its bubble; the rest join the filled
+    /// circle set so both tabs share one visual language).
     var iconSystemName: String {
         switch self {
-        case .starting: "hourglass"
+        case .starting: "circle.dotted"
         case .running: "clock"
-        case .needsInput: "exclamationmark.bubble"
-        case .completed: "checkmark"
-        case .failed: "xmark"
-        case .cancelled: "minus"
-        case .unknown: "questionmark"
+        case .needsInput: "exclamationmark.bubble.fill"
+        case .completed: "checkmark.circle.fill"
+        case .failed: "xmark.circle.fill"
+        case .cancelled: "minus.circle.fill"
+        case .unknown: "questionmark.circle.fill"
         }
     }
 }
