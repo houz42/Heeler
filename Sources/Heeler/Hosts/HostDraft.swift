@@ -101,6 +101,18 @@ struct HostDraft: Equatable, Sendable {
         !jumpAddress.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
+    /// The username field's own rule (review item 24): the form-level
+    /// gate already enforced this; this is the per-field check the
+    /// inline messaging reads.
+    var isUsernameValid: Bool {
+        !username.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// The port field's own rule (review item 24).
+    var isPortValid: Bool {
+        portNumber != nil
+    }
+
     var isValid: Bool {
         let trimmedSessionName = sessionName.trimmingCharacters(in: .whitespaces)
         return !address.trimmingCharacters(in: .whitespaces).isEmpty

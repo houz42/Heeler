@@ -33,7 +33,13 @@ enum ChatMarkdownTheme {
     @MainActor
     static let chat = MarkdownUI.Theme.basic
         .text {
-            FontSize(15)
+            // Review item 11: a POINTS size (FontSize(15)) pins scale
+            // to 1 and defeats both Dynamic Type and the app's
+            // reading-size setting. A RELATIVE size rides MarkdownUI's
+            // own ScaledFontSizeModifier (a .body-relative
+            // ScaledMetric): round(17 x 0.88) = 15pt at the default
+            // size, growing with the system/app text size from there.
+            FontSize(.em(0.88))
         }
         .code {
             FontFamilyVariant(.monospaced)
@@ -89,8 +95,10 @@ enum ChatMarkdownTheme {
     /// foreground never reaches the glyphs.
     @MainActor
     static func chatColored(_ color: SwiftUI.Color) -> MarkdownUI.Theme {
+        // Review item 11: no FontSize here — `chat`'s relative .em(0.88)
+        // already carries the scaled body size; restating a points size
+        // would pin scale=1 again.
         chat.text {
-            FontSize(15)
             ForegroundColor(color)
         }
     }
@@ -247,6 +255,12 @@ struct ChatCodeBlock: View {
 /// lives in the theme's `tableCell` style (row 0). This view only frames.
 struct ChatTableBlock<Content: View>: View {
     @ViewBuilder let content: () -> Content
+    @Environment(\.colorScheme) private var colorScheme
+
+    /// Dark mode needs roughly double the opacity: 4.5% white on black
+    /// is indistinguishable from the background, so the zebra rows read
+    /// as detached rather than striped.
+    private var isDark: Bool { colorScheme == .dark }
 
     var body: some View {
         // The table fits the proposed chat width and its cells wrap —
@@ -258,14 +272,14 @@ struct ChatTableBlock<Content: View>: View {
         content()
             .markdownTableBackgroundStyle(
                 .alternatingRows(
-                    Color.primary.opacity(0.045),
+                    Color.primary.opacity(isDark ? 0.09 : 0.05),
                     Color.clear,
-                    header: Color.primary.opacity(0.10))
+                    header: Color.primary.opacity(isDark ? 0.15 : 0.09))
             )
             .markdownTableBorderStyle(
                 TableBorderStyle(
                     .insideHorizontalBorders,
-                    color: Color.primary.opacity(0.10),
+                    color: Color.primary.opacity(isDark ? 0.16 : 0.12),
                     width: 0.5))
             .padding(.bottom, 8)
     }

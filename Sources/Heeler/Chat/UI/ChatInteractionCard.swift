@@ -32,8 +32,10 @@ enum ChatInteractionCardChrome {
     static let segmentThickness: CGFloat = 2
     static let segmentSpacing: CGFloat = 4
 
-    static let border = Color(
-        red: 0xC4 / 255.0, green: 0xD5 / 255.0, blue: 0xCB / 255.0)
+    /// Adaptive (review item 15): the mint-grey hairline was a literal
+    /// RGB that glared in dark mode; the asset carries a dark variant
+    /// at the same quiet contrast.
+    static let border = Color("ChatCardBorder")
 
     /// The card container background + border. Callers lay content
     /// inside; the chrome is identical for both states.
@@ -228,9 +230,9 @@ struct ChatInteractionCard: View {
     private var accent: Color { .accentColor }
     private var accentWash: Color { Color("AccentWash") }
     private var onAccentInk: Color { ChatAccentInk.color }
-    private var optionBorder: Color {
-        Color(red: 0xCA / 255.0, green: 0xD5 / 255.0, blue: 0xCD / 255.0)
-    }
+    /// Adaptive (review item 15): literal mint-grey RGB -> asset with a
+    /// dark variant.
+    private var optionBorder: Color { Color("ChatOptionBorder") }
 
     private var isMultiSelect: Bool { currentQuestion?.multi ?? false }
 
@@ -242,8 +244,8 @@ struct ChatInteractionCard: View {
                     .font(.subheadline.weight(.semibold))
                     .fixedSize(horizontal: false, vertical: true)
                 if isMultiSelect {
-                    Text("Select one or more, then confirm.")
-                        .font(.caption2)
+                    Text("Select all that apply.")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 optionsView
@@ -304,12 +306,16 @@ struct ChatInteractionCard: View {
             Label("Your input needed", systemImage: "questionmark.circle")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(accent)
-                .fixedSize()
+                // Wraps rather than starving the step count: a fixed-size
+                // label squeezed "1 of 2" into a letter-per-line column at
+                // accessibility sizes, blowing the header up vertically.
+                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
             if questions.count > 1 {
                 Text("\(step) of \(questions.count)")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(accent)
+                    .fixedSize()
                 ChatInteractionStepSegments(
                     step: step, count: questions.count, accent: accent)
             }
@@ -346,9 +352,19 @@ struct ChatInteractionCard: View {
                 } label: {
                     Text("Cancel")
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        // Fixed label colour: hierarchical .secondary
+                        // picks up the green tint inside a borderless
+                        // button and loses contrast.
+                        .foregroundStyle(Color(uiColor: .secondaryLabel))
+                        .frame(minWidth: 44, minHeight: 44)
                 }
+                .buttonStyle(.borderless)
                 .accessibilityLabel("Cancel this question")
+                // The 44pt hit frame would add ~24pt of dead space around a
+                // footnote row. Padding outside the Button shrinks only the
+                // row's layout footprint; the button keeps its full frame
+                // for hit-testing, overlapping the card padding.
+                .padding(.vertical, -12)
             }
         }
     }
@@ -382,9 +398,24 @@ struct ChatInteractionCard: View {
         return Button {
             choose(option.id)
         } label: {
-            Text(option.label)
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                // Multi-select shows its state as a checkbox glyph so the
+                // selection never rests on fill colour alone (HIG); a
+                // chosen single-select option gains a checkmark.
+                if isMultiSelect {
+                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(selected ? accent : Color.secondary)
+                        .accessibilityHidden(true)
+                } else if selected {
+                    Image(systemName: "checkmark")
+                        .fontWeight(.semibold)
+                        .foregroundStyle(accent)
+                        .accessibilityHidden(true)
+                }
+                Text(option.label)
+                    .multilineTextAlignment(.leading)
+            }
                 .font(.subheadline)
-                .multilineTextAlignment(.leading)
                 .padding(.horizontal, 11)
                 .frame(
                     maxWidth: fullWidth ? .infinity : nil,
@@ -402,6 +433,7 @@ struct ChatInteractionCard: View {
         .disabled(submitting)
         .accessibilityLabel(
             "\(isMultiSelect ? "Toggle" : "Answer"): \(option.label)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func choose(_ optionId: String) {
@@ -481,7 +513,7 @@ struct ChatInteractionCard: View {
         } else {
             Text(
                 "\(missing) question\(missing == 1 ? "" : "s") left to answer")
-                .font(.caption2)
+                .font(.footnote)
                 .foregroundStyle(.secondary)
         }
     }
@@ -580,10 +612,12 @@ struct ChatInteractionCard: View {
 /// tapping the card expands the full answer and notes (exact source
 /// and whitespace preserved, selection/copy intact), tapping again
 /// collapses. No Show-details button. Swipe still navigates between
-/// questions; single-question cards omit the indicators. The footer
-/// separator carries the neutral "Answered" eyebrow regardless of
-/// origin (local/remote/terminal styling is identical; provenance is
-/// internal, never a user-visible distinction).
+/// questions; single-question cards omit the position indicator, and a
+/// multi-question card's position reads in neutral secondary ink — the
+/// ask is resolved, so nothing on the card reads as still in progress
+/// (no accent step segments). The eyebrow is neutral "Answered" styled
+/// by outcome (local/remote/terminal styling is identical; provenance
+/// is internal, never a user-visible distinction).
 struct ChatResolvedAskCard: View {
     let ask: ResolvedAsk
 
@@ -615,7 +649,6 @@ struct ChatResolvedAskCard: View {
                 header
                 questionView
                 answerView
-                footer
             }
         }
         .modifier(ChatInteractionSwipeModifier(
@@ -658,17 +691,29 @@ struct ChatResolvedAskCard: View {
                 systemImage: isAnswered
                     ? "checkmark.circle" : outcomeIcon)
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(accent)
+                // Cancelled/expired/settled are not successes: only an
+                // accepted answer wears the accent (HIG semantic colour).
+                .foregroundStyle(isAnswered ? accent : Color.secondary)
                 .fixedSize()
             Spacer(minLength: 0)
             if questions.count > 1 {
+                // Page position only — the ask is RESOLVED, so this must
+                // never read as in-progress. Neutral secondary ink, no
+                // progress segments (the pending card owns those); the
+                // swipe and the a11y actions keep paging working.
                 Text("\(min(step, questions.count)) of \(questions.count)")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(accent)
-                ChatInteractionStepSegments(
-                    step: min(step, questions.count),
-                    count: questions.count, accent: accent)
+                    .foregroundStyle(Color.secondary)
+                    .fixedSize()
             }
+            // Disclosure cue: the card toggles on tap, so the
+            // collapsed one-line A row must say there is more.
+            Image(systemName: "chevron.down")
+                .padding(.leading, 4)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .rotationEffect(.degrees(expanded ? 180 : 0))
+                .accessibilityHidden(true)
         }
     }
 
@@ -818,16 +863,6 @@ struct ChatResolvedAskCard: View {
                 }
             }
         }
-    }
-
-    /// The footer separator: the card family's shared quiet base line
-    /// (hairline + spacing), carrying n-of-N when multi-question.
-    @ViewBuilder
-    private var footer: some View {
-        Rectangle()
-            .fill(Color.secondary.opacity(0.12))
-            .frame(height: 0.5)
-            .padding(.top, 2)
     }
 
     private func moveStep(_ direction: Int) {

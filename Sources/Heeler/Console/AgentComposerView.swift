@@ -190,10 +190,15 @@ struct AgentComposerView: View {
                                 onComposerPress: composerPressHandler,
                                 onNewline: composerNewlineHandler)
                             if store.draft.isEmpty {
+                                // The editor's own AX label already names the
+                                // field; a visible placeholder that VoiceOver
+                                // ALSO reads doubles the announcement. The
+                                // placeholder is visual-only (review item 38).
                                 Text("Message Agent")
                                     .foregroundStyle(.tertiary)
                                     .padding(.top, 8)
                                     .allowsHitTesting(false)
+                                    .accessibilityHidden(true)
                             }
                         }
                         .frame(minHeight: 36, alignment: .topLeading)

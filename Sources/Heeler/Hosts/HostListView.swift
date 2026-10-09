@@ -592,7 +592,7 @@ private struct HostCardSection: View {
             // directive): tapping makes it the Host's active route and
             // reconnects through it — the card and the detail read the
             // SAME active-route source, so the marks always agree. The
-            // CHEVRON is the inspector.
+            // trailing detail (info) button is the inspector.
             ForEach(host.candidateAddresses, id: \.self) { address in
                 let route = HostRoutePresentation(
                     host: host, address: address, connectedAddress: connectedAddress)
@@ -618,7 +618,10 @@ private struct HostCardSection: View {
                                         "host-route-connecting-\(address)")
                             } else {
                                 Image(systemName: "circle.fill")
-                                    .font(.system(size: 7))
+                                    // Review item 28: fixed 7pt -> the
+                                    // scaling caption2 (≈11pt circle),
+                                    // same family as the row's caption.
+                                    .font(.caption2)
                                     .foregroundStyle(
                                         route.usage == .inUse
                                             ? Color.accentColor : Color.secondary)
@@ -631,7 +634,10 @@ private struct HostCardSection: View {
                                 Text("\(route.address):\(String(host.port))")
                                     .font(.caption)
                                     .monospaced()
-                                    .foregroundStyle(.secondary)
+                                    // Fixed label colour: hierarchical
+                                    // .secondary takes the accent tint
+                                    // inside this borderless button.
+                                    .foregroundStyle(Color(uiColor: .secondaryLabel))
                                     .lineLimit(1)
                                     .truncationMode(.middle)
                             }
@@ -656,15 +662,24 @@ private struct HostCardSection: View {
                         "Sets this route as the preferred dial path for "
                             + host.displayAliasName)
                     .accessibilityIdentifier("host-route-\(route.address)")
-                    // The chevron: the row's second action — inspect.
+                    // The detail button: the row's second action —
+                    // inspect. A row whose primary tap does something
+                    // other than navigate takes the HIG detail-disclosure
+                    // glyph (info.circle), not a chevron, which promises
+                    // the whole row pushes. The 44pt hit frame stays;
+                    // padding OUTSIDE it shrinks only the row's layout
+                    // footprint (the same trick as the pending card's
+                    // Cancel), so the row height is not inflated.
                     Button {
                         openRouteInspector(address)
                     } label: {
-                        Image(systemName: "chevron.right")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
+                        Image(systemName: "info.circle")
+                            .font(.body)
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.borderless)
+                    .padding(.vertical, -12)
                     .accessibilityLabel(
                         "Show route details for \(route.name)")
                     .accessibilityIdentifier(
@@ -742,7 +757,8 @@ private struct HostConnectionIndicator: View {
     var body: some View {
         HStack(spacing: 5) {
             Image(systemName: "circle.fill")
-                .font(.system(size: 7))
+                // Review item 28: fixed 7pt -> scaling caption2.
+                .font(.caption2)
                 .foregroundStyle(tint)
                 .accessibilityHidden(true)
             Text(presentation.title)

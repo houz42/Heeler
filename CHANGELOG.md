@@ -134,6 +134,99 @@ Entries reference the issue that motivated them.
 
 - Make the remote directory browser more compact, with full-row folder navigation,
   native filtering, empty states, and retry for failed navigation. (PR #305)
+- UI polish toward the iOS HIG:
+  - Q/A cards: multi-select options show checkbox glyphs, and the chosen
+    single-select option shows a checkmark, so selection no longer rests
+    on fill colour alone. Cancel has a 44pt tap target in neutral gray.
+    Cancelled or expired outcomes read gray rather than success-green.
+    Collapsed answered cards carry an expand chevron. At accessibility
+    sizes the pending card's step count stays readable.
+  - Chat tables keep their zebra, header and border contrast in dark mode.
+  - Agent card subtitles wrap to two lines at accessibility text sizes.
+  - The chat jump control's buttons are 44pt.
+  - On iPad, chat transcript rows (assistant text, Q/A cards) cap at a
+    readable column width instead of running edge to edge.
+  - Host route rows open their inspector from an `info.circle` detail
+    button, since the row tap switches routes. Route address subtitles
+    are neutral gray in the host list and host form.
+  - Agent List Fields host rows show an icon aligned with the global row.
+  - The chat jump pill no longer overlaps transcript content on iPhone:
+    while the pill is visible, rows reserve its width as a trailing
+    gutter, so long user bubbles and Q/A cards stay clear of the
+    floating control (the pill's "Oldest message"/"Latest message"
+    buttons keep their 44pt targets).
+  - Resolved Q/A cards no longer end in an empty hairline strip, and a
+    resolved multi-question card shows its page position ("1 of 2") in
+    neutral gray without the in-progress segments — the swipe and
+    next/previous accessibility actions still page between questions.
+  - Console host-condition rows and the Agents view control wrap
+    instead of truncating at accessibility text sizes ("Connecting to
+    Offli…" and "None · Herdr o…" are gone; the view control carries a
+    compact label at those sizes).
+  - Console "Pinned" section headers, the pinned glyph and the "Order
+    unavailable" mark use the standard section-header label ink
+    instead of a near-invisible tertiary gray.
+  - The Tasks inspector's state glyphs come from one SF Symbol family
+    (circle shapes: empty, half-filled, checkmark, exclamation, minus,
+    question-mark) instead of a mix of bare squares, dashes and marks.
+  - Host list route rows are tighter: the 44pt inspector button keeps
+    its full hit target, but its frame no longer inflates the row.
+  - The chat jump pill is transient like the system scroll indicator:
+    hidden at rest, shown while scrolling (plus a brief settle
+    linger), so phone rows only reserve their trailing gutter
+    mid-scroll — reading width is never permanently lost, and the
+    pill's Oldest button can no longer show while the true top is on
+    screen (the top sentinel now always mounts).
+  - The Agents view control's compound label truly wraps at
+    accessibility sizes (the previous fix claimed wrapping but kept a
+    one-line limit).
+  - Keyboard toggle keys (Shift/Ctrl/Alt/Fn/#+=) show press feedback,
+    and hold-to-repeat backspace buzzes once per press instead of
+    every 75ms repeat.
+  - The navigation drawer and the wide sidebar fold honor Reduce
+    Motion: state changes land immediately instead of springing.
+  - The agent switcher chip follows Dynamic Type (no more clipping at
+    AX sizes), fills the strip's vertical band with its hit area, and
+    its status dot carries a shape cue (bolt/xmark/checkmark) so
+    status is never colour alone.
+  - The search bar's magnifier and clear buttons reach 44pt hit
+    targets.
+  - Pending-entry actions (Retry/Send again/Edit/Copy/Hide) and the
+    draft tile's remove button reach 44pt hit targets.
+  - The host form explains why Save is disabled (empty username, port
+    outside 1–65535) inline; the route editor disables Save on an
+    empty address and confirms before removing a route; number-pad
+    port fields get a keyboard Done bar.
+  - First-connection Trust prompts list "Don't Trust" as the default
+    action with "Trust" as the deliberate second step.
+  - On iPad, the Host form and the Settings stack cap at a readable
+    column width instead of running edge to edge.
+  - The nav bar's quick-state chips (All / Needs you / Working) show a
+    compact label at accessibility text sizes, so the chip trio no
+    longer overflows the bar's row; VoiceOver still reads the full
+    label ("Needs you filter").
+  - Pairing ceremony step rows announce their status to VoiceOver
+    ("Reach the Host, Completed") instead of showing it by glyph
+    colour alone.
+  - The detail-level switcher's menu rows carry the selected trait, so
+    VoiceOver announces the current level, not just its accent tint.
+  - The composer's placeholder is hidden from VoiceOver: the field
+    already carries "Message the Agent" as its label, so the
+    placeholder text is no longer read twice.
+  - Chat markdown body text scales with Dynamic Type and the in-app
+    reading-size setting instead of a fixed 15pt.
+  - The terminal's edge-back swipe works in the iPad split view: the
+    gesture measures in the pane's own coordinates and routes to the
+    owner's close path instead of a no-op dismiss.
+  - Q/A card borders adapt to dark mode instead of glaring as literal
+    light-only mint-grey.
+  - The composer's Send and + controls reach 44pt hit targets while
+    keeping their compact visual circles.
+  - Fixed 7-8pt micro-labels (draft-tile captions, host route and
+    connection dots, the image "Unavailable" mark) and the terminal
+    key-cap fonts follow Dynamic Type instead of fixed point sizes.
+  - Under Reduce Motion the navigation drawer unmounts immediately on
+    settle instead of lingering out its animation window.
 
 ### Fixed
 

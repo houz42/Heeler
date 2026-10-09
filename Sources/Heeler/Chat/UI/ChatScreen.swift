@@ -247,6 +247,49 @@ struct ChatScreen: View {
     /// newest-end button.
     @State private var bottomSentinelVisible = false
 
+    /// Whether the user's finger is actively driving the transcript
+    /// (the same phase source the scroll coordinator consumes).
+    /// Review D5 rework: the pill is transient chrome — visible only
+    /// while the user is actually scrolling (plus a brief settle
+    /// linger), like the system scroll indicator. At rest it is fully
+    /// hidden, so no permanent gutter and no reading-width loss.
+    @State private var isUserScrolling = false
+    /// The pill's linger window after a scroll settles (the reader's
+    /// finger leaves but they may still want the jump).
+    @State private var jumpControlLingersUntil = Date.distantPast
+    /// The one-shot tick that hides the pill when its linger lapses
+    /// (a deadline alone never re-renders).
+    @State private var jumpControlDismissTask: Task<Void, Never>?
+
+    /// The pill renders only while the user is scrolling (or in the
+    /// brief linger after a settle), AND one of its ends is actually
+    /// offscreen. `showsJumpControl` gates the ROW GUTTER with the
+    /// same is-scrolling condition, so the reflow only ever happens
+    /// mid-gesture, when the coordinator has already suspended every
+    /// automatic position decision (the user's drag outranks layout).
+    private var showsJumpControl: Bool {
+        (isUserScrolling || Date() < jumpControlLingersUntil)
+            && showsOldestOrNewest
+    }
+
+    /// Whether either jump target is offscreen — the pill's two buttons
+    /// keep their original show conditions (the top sentinel's
+    /// visibility no longer depends on `hasOlder`).
+    private var showsOldestOrNewest: Bool {
+        (!topSentinelVisible && !rows.isEmpty) || !bottomSentinelVisible
+    }
+
+    /// The trailing gutter a phone row reserves while the pill rides
+    /// the edge: the pill's 44pt width + the 8pt edge inset + 8pt
+    /// clearance. Applied only mid-scroll, never at rest.
+    static let jumpControlGutter: CGFloat = 60
+    /// How long the pill (and its gutter) linger after a scroll
+    /// settles — enough to read the position and decide to jump
+    /// (and for assistive tech's async tree to surface the buttons).
+    static let jumpControlLinger: TimeInterval = 2.5
+
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
     /// The shared reading-size choice (#A settings revision, review
     /// finding 4): applied to the TRANSCRIPT content only — reading
     /// text, never the chrome (status strip, composer, nav bar keep
@@ -388,6 +431,11 @@ struct ChatScreen: View {
         }
     }
 
+    /// Max width of one transcript row, padding included — close to
+    /// UIKit's readable content width at the default text size. 720pt
+    /// measured ~100 characters a line on iPad; 640 lands near 85.
+    static let readingColumnWidth: CGFloat = 640
+
     /// The transcript's scroll region (blank-viewport slice): the ONE
     /// scroll surface, its geometry probes, and the coordinator's
     /// position channel. Split out of `body` to keep each expression
@@ -408,6 +456,26 @@ struct ChatScreen: View {
                         // points into the old, larger document).
                         .onAppear { materializedRowIDs.insert(item.id) }
                         .onDisappear { materializedRowIDs.remove(item.id) }
+                        // The jump pill's trailing gutter (review D5):
+                        // on phones the floating pill overlapped the
+                        // trailing glyphs of long user bubbles and the
+                        // right border of Q/A cards. While the pill is
+                        // visible, rows reserve its width plus clearance
+                        // as a trailing inset instead of letting content
+                        // slide under it. iPads never pay it — the
+                        // reading column already sits clear of the edge.
+                        .padding(
+                            .trailing,
+                            horizontalSizeClass == .compact && showsJumpControl
+                                ? Self.jumpControlGutter : 0)
+                        // Readable-width column (HIG): on wide iPad
+                        // layouts assistant prose and Q/A cards otherwise
+                        // run edge-to-edge at ~140 characters a line.
+                        // Wider than any phone, so phones are unaffected;
+                        // the 560pt user-bubble cap derives from this row
+                        // width and still applies inside the column.
+                        .frame(maxWidth: Self.readingColumnWidth, alignment: .leading)
+                        .frame(maxWidth: .infinity)
                 }
                 bottomSentinel
                 // The v3 live-work spark: the transcript's LAST
@@ -466,6 +534,28 @@ struct ChatScreen: View {
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .onScrollPhaseChange { _, newPhase in
             scrollCoordinator.scrollPhaseChanged(newPhase)
+            // The jump pill's transient window (review D5 rework):
+            // visible while the finger drives the scroll, plus a
+            // short linger after it settles; fully hidden at rest.
+            let scrolling = newPhase.isScrolling
+            isUserScrolling = scrolling
+            if scrolling {
+                // A new scroll refreshes the window and cancels any
+                // pending hiding tick.
+                jumpControlDismissTask?.cancel()
+                jumpControlLingersUntil = Date().addingTimeInterval(
+                    Self.jumpControlLinger)
+            } else {
+                // The linger is a deadline, not a re-render trigger:
+                // schedule the hiding tick that re-evaluates the pill
+                // once the window lapses.
+                jumpControlDismissTask?.cancel()
+                jumpControlDismissTask = Task {
+                    try? await Task.sleep(for: .seconds(Self.jumpControlLinger))
+                    guard !Task.isCancelled else { return }
+                    jumpControlLingersUntil = .distantPast
+                }
+            }
         }
         // A transcript that parsed to zero rows (metadata-only session
         // file, or a resumed session writing elsewhere) must not
@@ -492,18 +582,28 @@ struct ChatScreen: View {
                 fetch: fetch ?? { _ in throw CocoaError(.fileNoSuchFile) }))
         // Outside-tap dismisses the open message-actions rail (taps
         // on a message row win the gesture over this — they toggle
-        // the rail instead).
+        // the rail instead). LOST in the jump-pill rework (7b65fd35)
+        // and restored per review.
         .onTapGesture { dismissActions() }
         // The terminal Attach surface's jump chrome, adapted: one
         // floating pill on the trailing edge, up = oldest loaded,
-        // down = latest. Each appears only when its end is offscreen.
+        // down = latest. Review D5 rework: the pill is TRANSIENT —
+        // visible only while the user is scrolling (plus the settle
+        // linger), never at rest, so it can never cover a resting
+        // card's controls or steal reading width permanently. Each
+        // button appears only when its end is offscreen; on phones
+        // the rows reserve `jumpControlGutter` for exactly the same
+        // transient window (`showsJumpControl`), so content never
+        // renders beneath the pill mid-scroll, and at rest the
+        // transcript keeps its full width with no pill at all.
         // Routed through the scroll coordinator (the single
         // scroll-command owner) so a jump can never interleave with a
         // viewport repair.
         .overlay(alignment: .trailing) {
             ChatJumpControl(
-                showsOldest: !topSentinelVisible && !rows.isEmpty,
-                showsNewest: !scrollCoordinator.atBottomEdge,
+                showsOldest: showsJumpControl
+                    && !topSentinelVisible && !rows.isEmpty,
+                showsNewest: showsJumpControl && !scrollCoordinator.atBottomEdge,
                 onOldest: {
                     if let first = items.first {
                         scrollCoordinator.userJumped(
@@ -522,34 +622,42 @@ struct ChatScreen: View {
     }
 
     /// The zero-height row above the transcript: presence reports "the user
-    /// has reached the top", and the loading affordance rides it.
-    @ViewBuilder
+    /// has reached the top", and the loading affordance rides it. Review
+    /// D5 rework: the sentinel row ALWAYS renders (visibility tracked via
+    /// onScrollVisibilityChange like the bottom sentinel), so "top of
+    /// transcript" no longer depends on `hasOlder` — previously the row
+    /// vanished with no older pages, leaving `topSentinelVisible` stuck
+    /// false and the jump pill's Oldest button showing at the true top.
     private var topSentinel: some View {
         Group {
-            if hasOlder || isLoadingOlder {
-                if isLoadingOlder {
-                    HStack(spacing: 6) {
-                        ProgressView()
-                            .controlSize(.mini)
-                        Text("Loading older…")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 2)
+            if isLoadingOlder {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.mini)
+                    Text("Loading older…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                Color.clear
-                    .frame(height: 0)
-                    .onAppear {
-                        topSentinelVisible = true
-                        scrollCoordinator.topSentinelVisibleChanged(true)
-                    }
-                    .onDisappear {
-                        topSentinelVisible = false
-                        scrollCoordinator.topSentinelVisibleChanged(false)
-                    }
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 12)
+                .padding(.top, 2)
             }
+            Color.clear
+                .frame(height: 0)
+                // Appear/disappear (not onScrollVisibilityChange): a
+                // zero-height row's scroll-visibility can be flaky at
+                // the very top edge, while the LazyVStack's row
+                // materialization events are exact — and always
+                // rendering the row keeps them firing whether or not
+                // older pages exist (review D5 rework).
+                .onAppear {
+                    topSentinelVisible = true
+                    scrollCoordinator.topSentinelVisibleChanged(true)
+                }
+                .onDisappear {
+                    topSentinelVisible = false
+                    scrollCoordinator.topSentinelVisibleChanged(false)
+                }
         }
     }
 
@@ -1421,16 +1529,22 @@ struct ChatScreen: View {
                     sections: AgentActionMenuPolicy.composerAddSections)
             }
         } label: {
+            // Review item 16 (round-4 correction): a .plain Button
+            // hit-tests its LABEL's content shape, so the 44pt target
+            // must live INSIDE the label. The visible circle keeps the
+            // base's 36pt diameter: glyph 30pt -> 36pt frame ->
+            // background -> 44pt target frame -> content shape.
             Image(systemName: "plus")
                 .font(.system(size: 17, weight: .semibold))
                 .frame(width: 30, height: 30)
-                .contentShape(Circle())
+                .frame(width: 36, height: 36)
+                .background(
+                    Color(uiColor: .secondarySystemFill).opacity(0.55),
+                    in: Circle())
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .frame(width: 36, height: 36)
-        .background(
-            Color(uiColor: .secondarySystemFill).opacity(0.55),
-            in: Circle())
         .accessibilityLabel("Add")
         .accessibilityHint(
             "Commands, filters, mentions, or an image or file for the draft")
@@ -1445,6 +1559,9 @@ struct ChatScreen: View {
         Button {
             sendDraft()
         } label: {
+            // Review item 16 (round-3 correction): the 44pt hit target
+            // lives INSIDE the label (a .plain Button hit-tests the
+            // label's content shape); the visual circle stays 28pt.
             Image(systemName: "arrow.up")
                 .font(.system(size: 14, weight: .bold))
                 .foregroundStyle(
@@ -1456,6 +1573,8 @@ struct ChatScreen: View {
                         ? Color.accentColor
                         : Color(uiColor: .secondarySystemFill),
                     in: Circle())
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .disabled(!canSend || isSending)
@@ -2008,7 +2127,7 @@ struct ChatJumpControl: View {
         } label: {
             Image(systemName: systemImage)
                 .font(.system(size: 15, weight: .semibold))
-                .frame(width: 40, height: 40)
+                .frame(width: 44, height: 44)
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)

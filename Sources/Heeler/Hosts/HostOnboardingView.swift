@@ -33,6 +33,7 @@ struct HostOnboardingView: View {
     @State private var routeError: String?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isShowingBrokerProvisioning = false
 
 
@@ -123,8 +124,12 @@ struct HostOnboardingView: View {
                     isPresented: fingerprintAlertPresented,
                     presenting: store.pendingFingerprint
                 ) { _ in
-                    Button("Trust") { store.confirmFingerprint(trusted: true) }
+                    // Safe choice default (HIG review item 26): "Don't
+                    // Trust" is the emphasized/cancel action; "Trust" is
+                    // the deliberate step. Button order + roles are the
+                    // levers the alert API gives.
                     Button("Don't Trust", role: .cancel) { store.confirmFingerprint(trusted: false) }
+                    Button("Trust") { store.confirmFingerprint(trusted: true) }
                 } message: { candidate in
                     Text(fingerprintMessageLine(candidate))
                 }
@@ -337,7 +342,12 @@ struct HostOnboardingView: View {
                     if let footerMessage = connectionPresentation.footerMessage {
                         Text(footerMessage)
                             .foregroundStyle(.red)
-                            .transition(.opacity.combined(with: .move(edge: .top)))
+                            // Reduce Motion (review item 34): a plain
+                            // fade instead of the slide-from-top.
+                            .transition(
+                                reduceMotion
+                                    ? .opacity
+                                    : .opacity.combined(with: .move(edge: .top)))
                     }
                 }
                 .animation(
@@ -386,6 +396,7 @@ struct HostOnboardingView: View {
                 }
             }
         }
+
     }
 
     /// Presentation tracks the pending candidate; dismissal is decided by

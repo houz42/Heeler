@@ -188,21 +188,50 @@ struct ChatDraftTile<Content: View>: View {
                         lineWidth: failed ? 1.5 : 0.5))
             .overlay(alignment: .topTrailing) {
                 if let remove {
-                    // Fully INSIDE the tile's corner (the old +6/-6
-                    // offset extended past the bounds and clipped at
-                    // the rail's edge on device — the × was half
-                    // hidden). 3pt padding keeps the whole hit target
-                    // visible at every tile size.
+                    // Review item 18 (round-3 fix): 44pt cannot fit a
+                    // 48pt tile — a 44pt target covered ~92% of it and
+                    // the tap-to-preview became an accidental remove.
+                    // The corner target is deliberately small (26pt,
+                    // still well above the 17pt glyph); the FULL-SIZE
+                    // remove path rides a named accessibility action
+                    // (and the collection sheet) instead.
                     Button(action: remove) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .background(Circle().fill(.bar))
                             .padding(3)
+                            .frame(width: 26, height: 26)
+                            .contentShape(.rect)
                     }
                     .accessibilityLabel("Remove draft item")
                 }
             }
+            // The full-size remove path for assistive tech and anyone
+            // who cannot hit the small corner target. Attached ONLY
+            // when there is a remove closure (round-4): a nil-remove
+            // tile must not expose a dead VoiceOver action.
+            .modifier(
+                ConditionalRemoveAction(remove: remove))
+    }
+}
+
+/// Applies the full-size "Remove draft item" accessibility action only
+/// when a remove closure exists — a plain `if let` cannot wrap a
+/// ViewModifier's `.accessibilityAction`, and an unconditional action
+/// would expose a dead control on nil-remove tiles (round-4 review).
+private struct ConditionalRemoveAction: ViewModifier {
+    let remove: (() -> Void)?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let remove {
+            content.accessibilityAction(named: Text("Remove draft item")) {
+                remove()
+            }
+        } else {
+            content
+        }
     }
 }
 
@@ -308,7 +337,10 @@ struct ChatDraftTileRail: View {
                         Image(systemName: "doc")
                             .font(.subheadline)
                         Text(name)
-                            .font(.system(size: 7))
+                            // Review item 28: a fixed 7pt never scales;
+                            // caption2 follows Dynamic Type, kept tight
+                            // by the 40pt width cap + lineLimit(1).
+                            .font(.caption2)
                             .lineLimit(1)
                             .frame(maxWidth: 40)
                     }
@@ -322,7 +354,8 @@ struct ChatDraftTileRail: View {
                         Image(systemName: "text.quote")
                             .font(.subheadline)
                         Text(author)
-                            .font(.system(size: 7))
+                            // Review item 28: fixed 7pt -> scaling caption2.
+                            .font(.caption2)
                             .lineLimit(1)
                             .frame(maxWidth: 40)
                             .foregroundStyle(.secondary)

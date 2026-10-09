@@ -535,12 +535,13 @@ struct WorkInspectorStateNamingTests {
             #expect(!state.accessibilityName.isEmpty)
             #expect(!state.iconSystemName.isEmpty)
         }
-        // The design's four glyphs: pending square, in-progress
-        // dash, completed check, blocked exclamation.
-        #expect(WorkTaskState.pending.iconSystemName == "square")
-        #expect(WorkTaskState.inProgress.iconSystemName == "minus")
-        #expect(WorkTaskState.completed.iconSystemName == "checkmark")
-        #expect(WorkTaskState.blocked.iconSystemName == "exclamationmark")
+        // The unified circle family (review D7): pending empty circle,
+        // in-progress half-filled, completed check, blocked
+        // exclamation — one symbol family, no bare dash/square.
+        #expect(WorkTaskState.pending.iconSystemName == "circle")
+        #expect(WorkTaskState.inProgress.iconSystemName == "circle.lefthalf.filled")
+        #expect(WorkTaskState.completed.iconSystemName == "checkmark.circle.fill")
+        #expect(WorkTaskState.blocked.iconSystemName == "exclamationmark.circle.fill")
     }
 
     @Test func everySubagentRuntimeStateAndVerdictNamesItself() {
@@ -551,15 +552,15 @@ struct WorkInspectorStateNamingTests {
         for verdict in WorkResultVerdict.allCases {
             #expect(!verdict.accessibilityName.isEmpty)
         }
-        // The design's subagent glyphs: clock/running, check/
-        // completed, exclamation/needs input, cross/failed, dash/
-        // cancelled, question mark/unknown.
+        // The circle family (review D7): clock/running stays (live-run
+        // signal); the rest are filled circles so both tabs share one
+        // visual language.
         #expect(WorkSubagentRuntimeState.running.iconSystemName == "clock")
-        #expect(WorkSubagentRuntimeState.completed.iconSystemName == "checkmark")
-        #expect(WorkSubagentRuntimeState.needsInput.iconSystemName == "exclamationmark.bubble")
-        #expect(WorkSubagentRuntimeState.failed.iconSystemName == "xmark")
-        #expect(WorkSubagentRuntimeState.cancelled.iconSystemName == "minus")
-        #expect(WorkSubagentRuntimeState.unknown.iconSystemName == "questionmark")
+        #expect(WorkSubagentRuntimeState.completed.iconSystemName == "checkmark.circle.fill")
+        #expect(WorkSubagentRuntimeState.needsInput.iconSystemName == "exclamationmark.bubble.fill")
+        #expect(WorkSubagentRuntimeState.failed.iconSystemName == "xmark.circle.fill")
+        #expect(WorkSubagentRuntimeState.cancelled.iconSystemName == "minus.circle.fill")
+        #expect(WorkSubagentRuntimeState.unknown.iconSystemName == "questionmark.circle.fill")
     }
 }
 

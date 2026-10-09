@@ -344,7 +344,8 @@ private struct AgentQuickKeyPad: View {
                         .minimumScaleFactor(0.7)
                 }
             }
-            .font(.system(size: 13, weight: .medium))
+            // Review item 31: fixed 13pt -> scaling caption style.
+            .font(.system(.caption, design: .default).weight(.medium))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .buttonStyle(TerminalKeyboardButtonStyle())

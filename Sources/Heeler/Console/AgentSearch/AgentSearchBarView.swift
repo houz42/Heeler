@@ -100,9 +100,11 @@ struct AgentSearchBarView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                    // A real hit target, not a 20pt glyph: the row's
-                    // height, so the toggle is tappable at thumb scale.
-                    .frame(minWidth: 32, minHeight: 32)
+                    // A real hit target, not a 20pt glyph: 44pt
+                    // minimum (review item 22), padded so the glyph
+                    // keeps its size and the bar's row grows only to
+                    // the target's need.
+                    .frame(minWidth: 44, minHeight: 44)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -146,6 +148,10 @@ struct AgentSearchBarView: View {
                     Image(systemName: "xmark.circle.fill")
                         .font(.subheadline)
                         .foregroundStyle(.tertiary)
+                        // 44pt minimum hit target (review item 22):
+                        // the glyph had no frame at all.
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Clear search text")

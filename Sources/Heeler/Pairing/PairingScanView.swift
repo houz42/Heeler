@@ -308,11 +308,25 @@ private struct PairingCeremonyView: View {
     let store: PairingScanStore
     @State private var attempt = 0
 
-    private enum StepStatus {
+    /// The four step statuses, with the VoiceOver wording that keeps the
+    /// status from being colour-only information (review item 27). This
+    /// type is the pure, UI-free half of `status(for:)`'s classification,
+    /// so the wording stays unit-testable.
+    enum StepStatus: Equatable {
         case pending
         case active
         case done
         case failed
+
+        /// What VoiceOver reads for this status.
+        var accessibilityLabel: String {
+            switch self {
+            case .pending: "Pending"
+            case .active: "In progress"
+            case .done: "Completed"
+            case .failed: "Failed"
+            }
+        }
     }
 
     var body: some View {
@@ -381,17 +395,41 @@ private struct PairingCeremonyView: View {
             Spacer()
             switch status(for: step) {
             case .pending:
-                Image(systemName: "circle")
-                    .foregroundStyle(.tertiary)
+                stepStatusGlyph(
+                    "circle", tint: AnyShapeStyle(.tertiary), label: "Pending")
             case .active:
-                ProgressView()
+                stepStatusGlyph(nil, tint: nil, label: "In progress")
             case .done:
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
+                stepStatusGlyph(
+                    "checkmark.circle.fill", tint: AnyShapeStyle(.green),
+                    label: "Completed")
             case .failed:
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundStyle(.red)
+                stepStatusGlyph(
+                    "xmark.circle.fill", tint: AnyShapeStyle(.red),
+                    label: "Failed")
             }
+        }
+        // The row reads as ONE element: "Reach the Host, Completed" —
+        // the status is never colour-only information (review item 27).
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title(for: step)), \(status(for: step).accessibilityLabel)")
+    }
+
+    /// The status glyph with its own accessible name, so the row's
+    /// `.accessibilityElement(children: .ignore)` merge still carries it.
+    /// Tint is an AnyShapeStyle because the pending state uses the
+    /// hierarchical `.tertiary` style, not a Color.
+    @ViewBuilder
+    private func stepStatusGlyph(
+        _ systemImage: String?, tint: AnyShapeStyle?, label: String
+    ) -> some View {
+        if let systemImage {
+            Image(systemName: systemImage)
+                .foregroundStyle(tint ?? AnyShapeStyle(.primary))
+                .accessibilityLabel(label)
+        } else {
+            ProgressView()
+                .accessibilityLabel(label)
         }
     }
 

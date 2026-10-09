@@ -73,6 +73,7 @@ struct ConsoleView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.openWindow) private var openWindow
     @Environment(\.supportsMultipleWindows) private var supportsMultipleWindows
     /// The window-aware entry into navigation; nil outside a scene root.
@@ -603,9 +604,16 @@ struct ConsoleView: View {
                                 agentRow(agent)
                             }
                         } header: {
+                            // Standard section-header styling (review D6):
+                            // fixed secondaryLabel ink rather than the
+                            // previous hierarchical .tertiary, which was
+                            // near-invisible in dark mode. (Plain
+                            // .secondary resolves to secondaryLabel too —
+                            // the defect was the .tertiary level, not
+                            // hierarchical vs fixed styling.)
                             Text("Pinned")
                                 .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Color(uiColor: .secondaryLabel))
                         }
                     }
                     ForEach(canonicalSectionAgents) { agent in
@@ -924,7 +932,10 @@ struct ConsoleView: View {
             Text(issue.message)
                 .font(.footnote)
                 .foregroundStyle(issue.isCritical ? Color.red : Color.secondary)
-                .lineLimit(1)
+                // Accessibility sizes wrap instead of ellipsizing the
+                // whole condition ("Connecting to Offli…").
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
             if showsChevron {
                 Image(systemName: "chevron.right")

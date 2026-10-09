@@ -100,8 +100,17 @@ final class QACardProofTests: XCTestCase {
 
         // Multi-question answered card: labels + note + free text.
         // (Scroll the transcript up: resolved cards anchor after the
-        // message that posed the question.)
-        app.swipeUp()
+        // message that posed the question.) The transcript is a
+        // LazyVStack and ANY card's "Answered" eyebrow satisfies a
+        // loose check — loop-scroll until the EXPORT card's chip row
+        // itself materializes.
+        let exportChips = element("Validation report", in: app)
+        for _ in 0..<10 where !exportChips.exists {
+            app.swipeDown()
+        }
+        XCTAssertTrue(
+            exportChips.waitForExistence(timeout: UITestTimeouts.standard),
+            "the selected-option label never rendered")
         XCTAssertTrue(
             element("Answered", in: app).waitForExistence(
                 timeout: UITestTimeouts.standard),
@@ -134,23 +143,52 @@ final class QACardProofTests: XCTestCase {
             longCard.waitForExistence(timeout: UITestTimeouts.standard))
         longCard.tap()
 
-        // Expanded: the full answer renders (the optional note is
-        // removed from the product — no Note row).
+        // Expanded: the card's own accessibilityValue must actually
+        // FLIP — the card starts Collapsed, and the full text stays
+        // in the AX tree either way (the collapsed row is the same
+        // Text under lineLimit(1)), so only the value proves the tap
+        // expanded it.
         XCTAssertTrue(
-            element("Stage the rollout behind the config flag", in: app)
-                .waitForExistence(timeout: UITestTimeouts.standard),
-            "the expanded full answer never rendered")
-
+            app.descendants(matching: .any)
+                .matching(
+                    NSPredicate(
+                        format: "identifier == %@ AND value == %@",
+                        "resolved-ask-card-demo-qa-long", "Expanded"))
+                .firstMatch.waitForExistence(timeout: UITestTimeouts.standard),
+            "the card never reported itself expanded after the first tap")
         captureScreenshot(app, "qa-card-answered-expanded", lifetime: .keepAlways)
 
-        // Tap again to collapse.
+        // Tap again to collapse: the A row folds back to ONE
+        // ellipsized line. The full text stays in the AX tree (the
+        // collapsed row is the SAME Text with lineLimit(1)), so the
+        // honest collapse signal is the card's own accessibilityValue
+        // flipping back to "Collapsed".
         longCard.tap()
+        XCTAssertTrue(
+            app.descendants(matching: .any)
+                .matching(
+                    NSPredicate(
+                        format: "identifier == %@ AND value == %@",
+                        "resolved-ask-card-demo-qa-long", "Collapsed"))
+                .firstMatch.waitForExistence(timeout: UITestTimeouts.standard),
+            "the card never reported itself collapsed after the second tap")
         captureScreenshot(app, "qa-card-answered-recollapsed", lifetime: .keepAlways)
 
         // Expand the export card too: the multi-select answer renders
-        // its selected labels as CHIPS in producer order.
-        let exportCard = app.descendants(matching: .any)
+        // its selected labels as CHIPS in producer order. The export
+        // card sits far above the long card in a LazyVStack: an
+        // offscreen row is correctly NOT materialized (242a9ec2's
+        // footer removal shortened the cards enough to change the
+        // lazy window). Scroll toward the top until the row
+        // materializes — this check is about the card's CONTENT, not
+        // the lazy window.
+        var exportCard = app.descendants(matching: .any)
             .matching(identifier: "resolved-ask-card-demo-qa-answered").firstMatch
+        for _ in 0..<10 where !exportCard.exists {
+            app.swipeDown()
+            exportCard = app.descendants(matching: .any)
+                .matching(identifier: "resolved-ask-card-demo-qa-answered").firstMatch
+        }
         XCTAssertTrue(
             exportCard.waitForExistence(timeout: UITestTimeouts.standard))
         exportCard.tap()
